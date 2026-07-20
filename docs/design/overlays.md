@@ -26,6 +26,59 @@ started - no blocker, just no demand yet
 >   `public/<login>` playback paths (§4.1's proposal) - no per-account token
 >   was added.
 
+> **v2 addendum - after actually reading CacheStream's code (not just its
+> READMEs) for its scene-switch and music mechanics:**
+> - **Critical finding**: CacheStream doesn't use OBS at all. It replaces
+>   OBS with its own headless-browser capture worker (Puppeteer/Electron)
+>   that navigates between scene URLs and captures the frames itself via
+>   FFmpeg - that's the actual mechanism behind "switch scenes without
+>   touching OBS." Porting that literally would mean this project stops
+>   being an OBS/console restream tool and becomes its own compositor -
+>   explicitly out of scope, contradicts the whole point of the project.
+> - What *is* portable, and was ported: a **server-authoritative "current
+>   scene" state pushed live to whatever's rendering it**. Since we don't
+>   own the browser tab (OBS does, unlike CacheStream), the mechanism is
+>   adapted rather than copied: one stable **master overlay**
+>   (`/overlay/:login/master`) is added ONCE as a Browser Source; switching
+>   scenes (`POST /api/scenes/current`) updates `account.currentScene` and
+>   pushes the newly-rendered fragment over **Server-Sent Events**
+>   (`/overlay/:login/events`, `dashboard/events.js` - a scaled-down version
+>   of CacheStream's `lib/bus.ts`+`lib/sse.ts`), and the already-loaded page
+>   swaps its content in place - no navigation, no OBS reconfiguration, no
+>   stream restart. Individual scene routes (`/starting-soon` etc.) are
+>   unchanged and still work standalone.
+> - **Music went from "independent per-page playback" to a real shared
+>   engine** (`dashboard/music-engine.js`), directly mirroring CacheStream's
+>   single `MusicEngine` instance (`apps/web/src/lib/music.ts`): one
+>   authoritative "what's playing and how far into it" per account, timer-
+>   driven server-side advance (needs each track's duration, probed via
+>   `ffprobe` on upload - already bundled with `ffmpeg` in the Docker image),
+>   exposed at `/overlay/:login/music/now.json`. What's deliberately NOT
+>   ported is CacheStream's FFmpeg→FIFO audio-mixing pipeline into a
+>   compositor - this project has no compositor to feed (see the original
+>   note above), so actual playback still happens client-side via each
+>   overlay's own `<audio>` element; it just joins the server's timeline
+>   (seeks to the current position) instead of picking independently. This
+>   is what makes multiple overlays (a dedicated Music-player overlay AND a
+>   Now Playing widget on a different scene) agree.
+> - Added a **Now Playing mini-widget**, layerable onto any scene via
+>   `account.overlayConfig.nowPlaying` - the one CacheStream
+>   `OverlayConfigCard` widget this project ported so far (§4.2's proposal,
+>   finally implemented). `withWidgets()` in `dashboard/overlays.js` is the
+>   shared-wrapper equivalent of CacheStream's `SceneFrame.tsx`.
+> - Volume/shuffle/loop moved from per-overlay `config` to account-level
+>   `account.musicSettings` - there's one shared engine, so one set of
+>   playback settings, matching CacheStream's own model (its Music admin tab
+>   configures the one engine, not each scene individually).
+> - **Not built**: OBS-websocket integration. It's the "correct" way to get
+>   literal OBS scene/source control (OBS 28+ ships a websocket server
+>   precisely for this), and would be a legitimate alternative/complement to
+>   the master-switcher approach for OBS-mode users specifically - but it's
+>   a separate, sizable integration (protocol handshake, per-user
+>   host/port/password config) that doesn't help console-mode users at all.
+>   Worth a future TODO if there's demand for controlling OBS's own scene
+>   collection directly rather than adding one master Browser Source.
+
 ## 1. Goal
 
 Let people drop overlays (lower-thirds, alerts, a "now playing" music card,

@@ -33,6 +33,62 @@ function page({ title, body, bodyCss = "", transparent = true }) {
 <body>${body}</body></html>`;
 }
 
+// ---------------------------------------------------------------------------
+// "Now Playing" mini-widget - layerable onto ANY scene fragment, the same
+// way CacheStream's OverlayConfigCard toggles it onto every one of its scene
+// templates via a shared wrapper (SceneFrame.tsx). Reads the same
+// server-authoritative music engine state as the dedicated music overlay.
+
+const CORNER_CSS = {
+  br: "bottom:24px; right:24px;", bl: "bottom:24px; left:24px;",
+  tr: "top:24px; right:24px;", tl: "top:24px; left:24px;",
+};
+
+function nowPlayingWidget(login, corner) {
+  const pos = CORNER_CSS[corner] || CORNER_CSS.br;
+  return `
+    <aside id="cs-now-playing" style="position:fixed; ${pos} display:none; gap:12px; align-items:center; background:rgba(10,10,14,.65); padding:10px 14px; border-radius:10px; color:#fff; max-width:280px; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="font-size:22px;">&#9835;</div>
+      <div>
+        <div style="font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#9aa0ac;">Now playing</div>
+        <div id="cs-np-title" style="font-weight:700; font-size:13px;">&mdash;</div>
+        <div id="cs-np-artist" style="font-size:11px; color:#c8c8d0;"></div>
+      </div>
+    </aside>
+    <script>
+      (function () {
+        function poll() {
+          fetch(${JSON.stringify(`/overlay/${encodeURIComponent(login)}/music/now.json`)}, { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(function (now) {
+              var el = document.getElementById("cs-now-playing");
+              if (!now || now.mode !== "playing" || !now.track) { el.style.display = "none"; return; }
+              el.style.display = "flex";
+              document.getElementById("cs-np-title").textContent = now.track.title || "Untitled";
+              document.getElementById("cs-np-artist").textContent = now.track.artist || "";
+            })
+            .catch(function () {});
+        }
+        poll();
+        setInterval(poll, 2000);
+      })();
+    </script>`;
+}
+
+// Applies the account's global overlay-widget toggles to any scene
+// fragment - the same "layer these on every scene" concept as
+// OverlayConfigCard, just with one widget ported so far (now-playing).
+function withWidgets(fragment, overlayConfig, login) {
+  const np = overlayConfig?.nowPlaying;
+  if (!np?.enabled) return fragment;
+  return fragment + nowPlayingWidget(login, np.corner);
+}
+
+// ---------------------------------------------------------------------------
+// Standby scenes (Starting Soon / BRB / Ending) - each has a "Fragment"
+// (inner HTML only, used by both the standalone route AND the master
+// scene-switcher) and a full page wrapper (for the standalone route).
+
 function countdownBlock(countdownAt, countdownLabel) {
   if (!countdownAt) return "";
   const iso = new Date(countdownAt).toISOString();
@@ -55,30 +111,30 @@ function countdownBlock(countdownAt, countdownLabel) {
     </script>`;
 }
 
-function standbyScene({ title, subtitle, accent, backgroundUrl, extra }) {
+function standbySceneFragment({ title, subtitle, accent, backgroundUrl, extra }) {
   const bg = backgroundUrl
     ? `background: linear-gradient(rgba(2,3,6,.55), rgba(2,3,6,.55)), url('${escapeHtml(backgroundUrl)}') center/cover no-repeat, #05060a;`
     : `background: radial-gradient(circle at 50% 42%, ${escapeHtml(accent)}22, #05060a 70%);`;
-  const body = `
+  return `
     <div style="${bg} width:100vw; height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff; text-align:center;">
       <div style="font-size:64px; font-weight:800; letter-spacing:.02em; text-shadow:0 0 30px ${escapeHtml(accent)}aa;">${escapeHtml(title)}</div>
       ${subtitle ? `<div style="margin-top:14px; font-size:24px; color:#c8ccd6;">${escapeHtml(subtitle)}</div>` : ""}
       ${extra || ""}
     </div>`;
-  return page({ title, body, transparent: false });
 }
 
-function startingSoonPage(cfg, query) {
-  const title = query.title || cfg.title || "Starting Soon";
-  const subtitle = query.subtitle || cfg.subtitle || "";
-  const accent = query.accent || cfg.accent || "#7c5cff";
-  const backgroundUrl = query.background || cfg.backgroundUrl || "";
-  const extra = countdownBlock(query.at || cfg.countdownAt, cfg.countdownLabel);
-  return standbyScene({ title, subtitle, accent, backgroundUrl, extra });
+function startingSoonFragment(cfg, query = {}) {
+  return standbySceneFragment({
+    title: query.title || cfg.title || "Starting Soon",
+    subtitle: query.subtitle || cfg.subtitle || "",
+    accent: query.accent || cfg.accent || "#7c5cff",
+    backgroundUrl: query.background || cfg.backgroundUrl || "",
+    extra: countdownBlock(query.at || cfg.countdownAt, cfg.countdownLabel),
+  });
 }
 
-function brbPage(cfg, query) {
-  return standbyScene({
+function brbFragment(cfg, query = {}) {
+  return standbySceneFragment({
     title: query.title || cfg.title || "BRB",
     subtitle: query.subtitle || cfg.subtitle || "Be right back",
     accent: query.accent || cfg.accent || "#8a2bff",
@@ -86,7 +142,7 @@ function brbPage(cfg, query) {
   });
 }
 
-function endingPage(cfg, query) {
+function endingFragment(cfg, query = {}) {
   const handles = [
     ["Twitch", query.twitch || cfg.twitch],
     ["YouTube", query.youtube || cfg.youtube],
@@ -98,7 +154,7 @@ function endingPage(cfg, query) {
         handles.map(([label, v]) => `<span>${escapeHtml(label)}: ${escapeHtml(v)}</span>`).join("")
       }</div>`
     : "";
-  return standbyScene({
+  return standbySceneFragment({
     title: query.title || cfg.title || "Thanks for watching",
     subtitle: query.subtitle || cfg.subtitle || "Stream over",
     accent: query.accent || cfg.accent || "#ff2bd6",
@@ -130,33 +186,25 @@ function liveBadgePage(login, cfg) {
   return page({ title: cfg.title || "Live", body });
 }
 
-function textOverlayPage(overlay) {
+function textOverlayFragment(overlay) {
   const cfg = overlay.config || {};
-  const body = `
+  return `
     <div style="position:fixed; inset:0; display:flex; align-items:center; justify-content:center;">
       <div style="font-size:${Number(cfg.fontSize) || 48}px; color:${escapeHtml(cfg.color || "#ffffff")}; text-align:center; text-shadow:0 2px 12px rgba(0,0,0,.6); white-space:pre-wrap;">${escapeHtml(cfg.text || "")}</div>
     </div>`;
-  return page({ title: overlay.name, body });
 }
 
-function htmlOverlayPage(overlay) {
+function htmlOverlayFragment(overlay) {
   const cfg = overlay.config || {};
   // Deliberately NOT escaped - this is the explicit "raw HTML" escape hatch,
   // same tradeoff CacheStream's raw_html template accepts: you're trusted
   // with your own overlay, but a typo here breaks the broadcast, not anyone
-  // else's.
-  return page({ title: overlay.name, body: cfg.html || "", bodyCss: cfg.css || "" });
+  // else's. Its own <style> (cfg.css) is appended inline since fragments
+  // (unlike full pages via page()) have no <head> to put a <style> tag in.
+  return `${cfg.css ? `<style>${cfg.css}</style>` : ""}${cfg.html || ""}`;
 }
 
-function musicOverlayPage(login, overlay, tracks) {
-  const cfg = overlay.config || {};
-  const playlist = tracks.map((t) => ({
-    id: t.id,
-    title: t.title || "Untitled",
-    artist: t.artist || "",
-    url: `/overlay/${encodeURIComponent(login)}/music/file/${t.id}`,
-  }));
-  const volume = Math.min(1, Math.max(0, Number(cfg.volume) || 0.7));
+function musicOverlayPage(login) {
   const body = `
     <aside id="card" style="position:fixed; bottom:24px; left:24px; display:flex; gap:12px; align-items:center; background:rgba(10,10,14,.65); padding:12px 16px; border-radius:10px; color:#fff; max-width:320px; opacity:0; transition:opacity .3s;">
       <div style="font-size:28px;">&#9835;</div>
@@ -169,38 +217,96 @@ function musicOverlayPage(login, overlay, tracks) {
     <audio id="player"></audio>
     <script>
       (function () {
-        var list = ${JSON.stringify(playlist)};
-        if (!list.length) return;
-        var order = list.map(function (_, i) { return i; });
-        ${cfg.shuffle ? "order.sort(function () { return Math.random() - 0.5; });" : ""}
-        var idx = 0;
+        var loadedTrackId = null;
         var audio = document.getElementById("player");
         var card = document.getElementById("card");
-        audio.volume = ${volume};
-        function playCurrent() {
-          var track = list[order[idx]];
-          audio.src = track.url;
-          audio.play().catch(function () {});
-          document.getElementById("t").textContent = track.title;
-          document.getElementById("a").textContent = track.artist;
+        function apply(now) {
+          if (!now || now.mode !== "playing" || !now.track) { card.style.opacity = "0"; return; }
           card.style.opacity = "1";
+          document.getElementById("t").textContent = now.track.title || "Untitled";
+          document.getElementById("a").textContent = now.track.artist || "";
+          audio.volume = Math.min(1, Math.max(0, Number(now.volume) || 0.7));
+          if (now.track.id !== loadedTrackId) {
+            // A different track than what's currently loaded (either a real
+            // track change, or this page just (re)loaded mid-song) - join
+            // the server's authoritative timeline instead of starting over,
+            // so every overlay instance stays in sync.
+            loadedTrackId = now.track.id;
+            audio.src = ${JSON.stringify(`/overlay/${encodeURIComponent(login)}/music/file/`)} + now.track.id;
+            audio.currentTime = now.positionS || 0;
+            audio.play().catch(function () {});
+          }
         }
-        audio.addEventListener("ended", function () {
-          idx = (idx + 1) % order.length;
-          playCurrent();
-        });
-        playCurrent();
+        function poll() {
+          fetch(${JSON.stringify(`/overlay/${encodeURIComponent(login)}/music/now.json`)}, { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(apply)
+            .catch(function () {});
+        }
+        poll();
+        setInterval(poll, 1000);
       })();
     </script>`;
-  return page({ title: overlay.name, body });
+  return page({ title: "Music", body });
+}
+
+// ---------------------------------------------------------------------------
+// Master scene switcher - the ONE stable Browser Source URL an operator adds
+// once. The dashboard's scene-switch action updates server-side state and
+// pushes an SSE event here; this page swaps its own content in place with no
+// navigation, so nothing in OBS ever needs to be touched to "switch scenes."
+// This is the adapted equivalent of CacheStream's mechanism (see
+// docs/design/overlays.md's implementation-notes callout): CacheStream
+// achieves the same "no manual OBS reconfiguration" outcome by navigating a
+// headless browser IT owns; we don't own the browser tab (OBS does), so we
+// push a live update into the same already-loaded page instead.
+
+function resolveSceneFragment(scene, account) {
+  const cfg = account.overlayConfig || {};
+  if (!scene || scene.kind === "none") return "";
+  if (scene.kind === "builtin") {
+    if (scene.name === "startingSoon") return startingSoonFragment(cfg.startingSoon || {});
+    if (scene.name === "brb") return brbFragment(cfg.brb || {});
+    if (scene.name === "ending") return endingFragment(cfg.ending || {});
+    return "";
+  }
+  if (scene.kind === "custom") {
+    const overlay = (account.overlays || []).find((o) => o.id === scene.overlayId);
+    if (!overlay) return "";
+    if (overlay.type === "text") return textOverlayFragment(overlay);
+    if (overlay.type === "html") return htmlOverlayFragment(overlay);
+  }
+  return "";
+}
+
+function masterPage(login, initialFragment) {
+  const body = `
+    <div id="scene-root">${initialFragment}</div>
+    <script>
+      (function () {
+        var root = document.getElementById("scene-root");
+        var es = new EventSource(${JSON.stringify(`/overlay/${encodeURIComponent(login)}/events`)});
+        es.onmessage = function (e) {
+          try {
+            var msg = JSON.parse(e.data);
+            if (msg.type === "scene") root.innerHTML = msg.html;
+          } catch (err) {}
+        };
+        // EventSource auto-reconnects on its own if the connection drops -
+        // nothing else to do here.
+      })();
+    </script>`;
+  return page({ title: "Live scene", body, transparent: true });
 }
 
 /**
  * @param {object} deps
  * @param {(login: string) => object | undefined} deps.getAccountByLogin
  * @param {string} deps.musicDir - directory audio files are stored under, per account subfolder
+ * @param {(accountId: string, req: any, res: any) => void} deps.subscribeEvents
+ * @param {(account: object) => object} deps.getMusicNow
  */
-function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn }) {
+function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn, subscribeEvents, getMusicNow }) {
   const router = express.Router();
 
   function accountOr404(req, res) {
@@ -212,19 +318,25 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn }) {
   router.get("/:login/starting-soon", (req, res) => {
     const account = accountOr404(req, res);
     if (!account) return;
-    res.send(startingSoonPage(account.overlayConfig?.startingSoon || {}, req.query));
+    const cfg = account.overlayConfig?.startingSoon || {};
+    const fragment = withWidgets(startingSoonFragment(cfg, req.query), account.overlayConfig, req.params.login);
+    res.send(page({ title: req.query.title || cfg.title || "Starting Soon", body: fragment, transparent: false }));
   });
 
   router.get("/:login/brb", (req, res) => {
     const account = accountOr404(req, res);
     if (!account) return;
-    res.send(brbPage(account.overlayConfig?.brb || {}, req.query));
+    const cfg = account.overlayConfig?.brb || {};
+    const fragment = withWidgets(brbFragment(cfg, req.query), account.overlayConfig, req.params.login);
+    res.send(page({ title: req.query.title || cfg.title || "BRB", body: fragment, transparent: false }));
   });
 
   router.get("/:login/ending", (req, res) => {
     const account = accountOr404(req, res);
     if (!account) return;
-    res.send(endingPage(account.overlayConfig?.ending || {}, req.query));
+    const cfg = account.overlayConfig?.ending || {};
+    const fragment = withWidgets(endingFragment(cfg, req.query), account.overlayConfig, req.params.login);
+    res.send(page({ title: req.query.title || cfg.title || "Thanks for watching", body: fragment, transparent: false }));
   });
 
   router.get("/:login/live", (req, res) => {
@@ -239,18 +351,41 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn }) {
     res.json({ live: isLiveFn(account) });
   });
 
+  router.get("/:login/master", (req, res) => {
+    const account = accountOr404(req, res);
+    if (!account) return;
+    const fragment = withWidgets(resolveSceneFragment(account.currentScene, account), account.overlayConfig, req.params.login);
+    res.send(masterPage(req.params.login, fragment));
+  });
+
+  // SSE stream the master page (and, in principle, any future live widget)
+  // subscribes to - see subscribeEvents in server.js for what publishes to it.
+  router.get("/:login/events", (req, res) => {
+    const account = accountOr404(req, res);
+    if (!account) return;
+    subscribeEvents(account.twitchUserId, req, res);
+  });
+
   router.get("/:login/custom/:slug", (req, res) => {
     const account = accountOr404(req, res);
     if (!account) return;
     const overlay = (account.overlays || []).find((o) => o.slug === req.params.slug);
     if (!overlay) return res.status(404).send("not found");
 
-    if (overlay.type === "text") return res.send(textOverlayPage(overlay));
-    if (overlay.type === "html") return res.send(htmlOverlayPage(overlay));
-    if (overlay.type === "music") {
-      return res.send(musicOverlayPage(req.params.login, overlay, account.musicTracks || []));
+    if (overlay.type === "text") {
+      return res.send(page({ title: overlay.name, body: withWidgets(textOverlayFragment(overlay), account.overlayConfig, req.params.login) }));
     }
+    if (overlay.type === "html") {
+      return res.send(page({ title: overlay.name, body: withWidgets(htmlOverlayFragment(overlay), account.overlayConfig, req.params.login) }));
+    }
+    if (overlay.type === "music") return res.send(musicOverlayPage(req.params.login));
     res.status(400).send("unknown overlay type");
+  });
+
+  router.get("/:login/music/now.json", (req, res) => {
+    const account = accountOr404(req, res);
+    if (!account) return;
+    res.json(getMusicNow(account));
   });
 
   router.get("/:login/music/file/:trackId", (req, res) => {
@@ -268,4 +403,4 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn }) {
   return router;
 }
 
-module.exports = { createOverlayRouter, escapeHtml };
+module.exports = { createOverlayRouter, escapeHtml, resolveSceneFragment, withWidgets };

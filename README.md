@@ -234,7 +234,21 @@ else's.
 The dashboard's **"Overlays & scenes"** panel serves browser-source pages
 you add as an OBS Browser Source (or any scene software with the same
 concept) - independent of console/PC ingest, so this works no matter which
-mode you're using:
+mode you're using.
+
+### Switch scenes live, without touching OBS
+
+Add the **master scene switcher** URL as a single Browser Source and leave
+it there. Buttons in the dashboard ("None" / Starting Soon / BRB / Ending /
+any custom Text or HTML overlay) change what it shows **instantly** - no
+editing OBS's Browser Source config, no restarting the stream. Under the
+hood: the dashboard holds one authoritative "what's showing right now" per
+account, and pushes the update to that one already-loaded page over
+Server-Sent Events, which swaps its own content in place. (Individual scene
+URLs like `/starting-soon`/`/brb`/`/ending` still work too, unchanged, for
+anyone who'd rather add each as its own Browser Source and toggle visibility
+manually in OBS - the master switcher is an additional, easier option, not a
+replacement.)
 
 - **Built-in scenes** - Starting Soon (with an optional countdown), BRB,
   and Ending, each with editable title/subtitle/accent color/background
@@ -246,12 +260,21 @@ mode you're using:
   - **HTML** - raw HTML/CSS passthrough for anything the built-ins don't
     cover (same "you're trusted, typos break the overlay" tradeoff as any
     raw-HTML tool).
-  - **Music player** - upload audio in the **Music library** below it; a
-    Music-player overlay autoplays through your whole library (in upload
-    order, or shuffled) and shows a small "Now playing" card. It's a single
-    Browser Source that both plays the audio *and* shows the card - add it
-    once, get both. Autoplay-with-sound works in OBS's Browser Source; a
-    regular browser tab may block it until you click into the page.
+  - **Music player** - see below.
+
+### Music - one shared, synced playlist
+
+Upload tracks in the **Music library** section; volume/shuffle/loop are set
+once for the whole library (not per-overlay). The dashboard runs a small
+server-side engine that's the single authority on which track is playing
+and how far into it - so every Music-player overlay, and the optional **Now
+Playing widget** (layered onto any scene above, master switcher included),
+all agree, in sync, no matter which page loaded or reloaded when. Autoplay-
+with-sound works in OBS's Browser Source; a regular browser tab may block it
+until you click into the page. (The audio itself still plays from whichever
+overlay page has it - there's no server-side audio mixing pipeline, since
+that would need a compositor this project deliberately doesn't have; see
+`docs/design/overlays.md` for the reasoning.)
 
 Every scene/overlay has **Copy URL** / **Open** so you can paste it straight
 into OBS's Browser Source URL field. These pages are unauthenticated (OBS

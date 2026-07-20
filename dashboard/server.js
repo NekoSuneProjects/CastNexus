@@ -6,7 +6,9 @@ const express = require("express");
 const session = require("express-session");
 const multer = require("multer");
 const { createProxyMiddleware } = require("http-proxy-middleware");
-const { createOverlayRouter } = require("./overlays");
+const { createOverlayRouter, resolveSceneFragment, withWidgets } = require("./overlays");
+const events = require("./events");
+const musicEngine = require("./music-engine");
 
 const PORT = Number(process.env.DASHBOARD_PORT || 8090);
 const MEDIAMTX_API = process.env.MEDIAMTX_API || "http://127.0.0.1:9997";
@@ -79,7 +81,15 @@ function defaultOverlayConfig() {
     brb: { title: "BRB", subtitle: "Be right back", accent: "#8a2bff" },
     ending: { title: "Thanks for watching", subtitle: "Stream over", accent: "#ff2bd6" },
     live: { title: "LIVE", accent: "#35d07f" },
+    // Layered on top of every scene (starting soon/BRB/ending/master/custom
+    // text&html) when enabled - mirrors CacheStream's OverlayConfigCard
+    // widget toggles, ported down to the one widget this project has so far.
+    nowPlaying: { enabled: false, corner: "br" },
   };
+}
+
+function defaultMusicSettings() {
+  return { shuffle: false, loop: true, volume: 0.7 };
 }
 
 function getAccount(id) {
@@ -91,8 +101,11 @@ function getAccount(id) {
   let dirty = false;
   if (!account.pcKey) { account.pcKey = generatePcKey(); dirty = true; }
   if (!account.overlayConfig) { account.overlayConfig = defaultOverlayConfig(); dirty = true; }
+  if (!account.overlayConfig.nowPlaying) { account.overlayConfig.nowPlaying = { enabled: false, corner: "br" }; dirty = true; }
   if (!account.overlays) { account.overlays = []; dirty = true; }
   if (!account.musicTracks) { account.musicTracks = []; dirty = true; }
+  if (!account.musicSettings) { account.musicSettings = defaultMusicSettings(); dirty = true; }
+  if (account.currentScene === undefined) { account.currentScene = null; dirty = true; }
   if (dirty) saveState(state);
   return account;
 }
@@ -403,6 +416,8 @@ app.use("/overlay", createOverlayRouter({
   getAccountByLogin,
   musicDir: MUSIC_DIR,
   isLiveFn: account => !!activeSourceFor(account.twitchUserId),
+  subscribeEvents: events.subscribe,
+  getMusicNow,
 }));
 
 app.use(express.json());
@@ -493,6 +508,8 @@ app.get("/auth/twitch/callback", async (req, res) => {
         overlayConfig: defaultOverlayConfig(),
         overlays: [], // custom overlays: html / text / music, see POST /api/overlays
         musicTracks: [], // uploaded audio for the "music" overlay type
+        musicSettings: defaultMusicSettings(),
+        currentScene: null, // { kind: "builtin", name } | { kind: "custom", overlayId } | null - see /api/scenes/current
         createdAt: new Date().toISOString(),
       };
       state.accounts[twitchUser.id] = account;
@@ -561,7 +578,7 @@ app.get("/api/overlays/config", requireAuth, (req, res) => {
 app.post("/api/overlays/config", requireAuth, (req, res) => {
   const body = req.body || {};
   const cfg = req.account.overlayConfig;
-  for (const key of ["startingSoon", "brb", "ending", "live"]) {
+  for (const key of ["startingSoon", "brb", "ending", "live", "nowPlaying"]) {
     if (body[key] && typeof body[key] === "object") cfg[key] = { ...cfg[key], ...body[key] };
   }
   saveState(state);
@@ -628,7 +645,26 @@ app.delete("/api/overlays/:id", requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- Music library (backs the "music" overlay type) ------------------------
+// ---- Music library + engine (backs the "music" overlay type and the
+// layerable "Now Playing" widget) --------------------------------------------
+
+// One shared now-playing state per account, advanced server-side - see
+// dashboard/music-engine.js for why (ported from CacheStream's single
+// MusicEngine, minus the audio-mixing pipeline this project has no
+// compositor to feed). onAdvance pushes the new state to any open overlay
+// SSE connections so a "Now Playing" widget could update instantly rather
+// than waiting for its own poll tick, if one's ever added.
+function musicEngineFor(accountId) {
+  return musicEngine.engineFor(accountId, () => getAccount(accountId), (now) => {
+    events.publish(accountId, { type: "music", now });
+  });
+}
+
+function getMusicNow(account) {
+  const engine = musicEngineFor(account.twitchUserId);
+  engine.ensureRunning();
+  return engine.getNow();
+}
 
 const musicUpload = multer({
   storage: multer.diskStorage({
@@ -650,19 +686,23 @@ app.get("/api/music/tracks", requireAuth, (req, res) => {
 });
 
 app.post("/api/music/tracks", requireAuth, (req, res) => {
-  musicUpload.single("file")(req, res, (err) => {
+  musicUpload.single("file")(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message || "upload failed" });
     if (!req.file) return res.status(400).json({ error: "an audio file is required" });
+    const filePath = path.join(MUSIC_DIR, req.account.twitchUserId, req.file.filename);
+    const durationS = await musicEngine.probeDurationSeconds(filePath);
     const track = {
       id: crypto.randomUUID(),
       title: path.basename(req.file.originalname, path.extname(req.file.originalname)),
       artist: "",
       filename: req.file.filename,
       sizeBytes: req.file.size,
+      durationS, // null if ffprobe isn't available - the engine falls back to a fixed guess
       addedAt: new Date().toISOString(),
     };
     req.account.musicTracks.push(track);
     saveState(state);
+    musicEngineFor(req.account.twitchUserId).ensureRunning();
     res.json({ ok: true, track });
   });
 });
@@ -683,7 +723,62 @@ app.delete("/api/music/tracks/:id", requireAuth, (req, res) => {
   req.account.musicTracks = req.account.musicTracks.filter(t => t.id !== req.params.id);
   saveState(state);
   fs.unlink(path.join(MUSIC_DIR, req.account.twitchUserId, track.filename), () => {}); // best-effort
+  musicEngineFor(req.account.twitchUserId).refresh();
   res.json({ ok: true });
+});
+
+// Account-wide playback settings (not per-overlay) - every "music" overlay
+// and the Now Playing widget all read the one shared engine, so there's one
+// volume/shuffle/loop, not one per overlay - matches CacheStream's own
+// single-engine settings (apps/web MusicTab), not a per-scene config.
+app.get("/api/music/settings", requireAuth, (req, res) => {
+  res.json(req.account.musicSettings);
+});
+
+app.post("/api/music/settings", requireAuth, (req, res) => {
+  const { shuffle, loop, volume } = req.body || {};
+  if (shuffle !== undefined) req.account.musicSettings.shuffle = Boolean(shuffle);
+  if (loop !== undefined) req.account.musicSettings.loop = Boolean(loop);
+  if (volume !== undefined) {
+    const v = Number(volume);
+    if (!Number.isFinite(v) || v < 0 || v > 1) return res.status(400).json({ error: "volume must be between 0 and 1" });
+    req.account.musicSettings.volume = v;
+  }
+  saveState(state);
+  res.json({ ok: true, musicSettings: req.account.musicSettings });
+});
+
+// ---- Scene switching: the master overlay's live "what's showing" state -----
+// Instant, no stream restart - see the master route / SSE bus in
+// dashboard/overlays.js and dashboard/events.js.
+
+const SCENE_KINDS = ["none", "builtin", "custom"];
+const BUILTIN_SCENE_NAMES = ["startingSoon", "brb", "ending"];
+
+app.get("/api/scenes/current", requireAuth, (req, res) => {
+  res.json({ currentScene: req.account.currentScene });
+});
+
+app.post("/api/scenes/current", requireAuth, (req, res) => {
+  const { kind, name, overlayId } = req.body || {};
+  if (!SCENE_KINDS.includes(kind)) return res.status(400).json({ error: `kind must be one of ${SCENE_KINDS.join(", ")}` });
+
+  let scene = null;
+  if (kind === "builtin") {
+    if (!BUILTIN_SCENE_NAMES.includes(name)) return res.status(400).json({ error: `name must be one of ${BUILTIN_SCENE_NAMES.join(", ")}` });
+    scene = { kind, name };
+  } else if (kind === "custom") {
+    const overlay = req.account.overlays.find(o => o.id === overlayId && (o.type === "text" || o.type === "html"));
+    if (!overlay) return res.status(404).json({ error: "unknown overlay (must be a text or html overlay)" });
+    scene = { kind, overlayId };
+  }
+
+  req.account.currentScene = scene;
+  saveState(state);
+
+  const html = withWidgets(resolveSceneFragment(scene, req.account), req.account.overlayConfig, req.account.twitchLogin);
+  events.publish(req.account.twitchUserId, { type: "scene", html });
+  res.json({ ok: true, currentScene: scene });
 });
 
 function playbackUrlsFor(req, account) {

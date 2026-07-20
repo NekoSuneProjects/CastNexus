@@ -223,6 +223,12 @@
   .overlay-card-fields input { font-size: 0.82rem; padding: 7px 10px; }
   .overlay-card-fields input[type="color"] { width: 100%; height: 32px; padding: 2px; cursor: pointer; }
   .sm-btn { padding: 5px 10px; font-size: 0.75rem; margin: 0; width: auto; }
+  .scene-switch-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .scene-switch-btn {
+    width: auto; margin: 0; padding: 8px 14px; font-size: 0.82rem; font-weight: 600;
+    background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 8px; cursor: pointer;
+  }
+  .scene-switch-btn.active { background: var(--accent); border-color: var(--accent); color: white; }
   .input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: #0b0d11; color: var(--text); font-size: 0.9rem; font-family: inherit; }
   textarea.input { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; }
 </style>
@@ -379,6 +385,44 @@
       setup directly.
     </p>
 
+    <div class="overlay-card" style="margin-bottom:16px;">
+      <div class="overlay-card-head">
+        <span class="overlay-card-name">Master scene switcher</span>
+        <div style="display:flex; gap:6px;">
+          <button type="button" class="secondary sm-btn" id="master-copy-btn">Copy URL</button>
+          <button type="button" class="secondary sm-btn" id="master-open-btn">Open</button>
+        </div>
+      </div>
+      <p class="hint" style="margin-top:0;">
+        Add this ONE Browser Source in OBS and leave it there. Buttons below
+        switch what it shows <strong>instantly</strong>, live - no OBS
+        reconfiguration, no restarting the stream.
+      </p>
+      <div class="scene-switch-row" id="scene-switch-row"></div>
+    </div>
+
+    <div class="overlay-card" style="margin-bottom:16px;">
+      <div class="overlay-card-head">
+        <span class="overlay-card-name">Now Playing widget</span>
+      </div>
+      <p class="hint" style="margin-top:0;">
+        Layer the current track onto every scene above (including the master
+        switcher) - not just the dedicated Music player overlay.
+      </p>
+      <div class="row" style="display:flex; align-items:center; gap:14px;">
+        <label class="switch" style="flex-shrink:0;">
+          <input type="checkbox" id="nowplaying-enabled-input">
+          <span class="slider"></span>
+        </label>
+        <select id="nowplaying-corner-select" class="input" style="max-width:160px;">
+          <option value="br">Bottom right</option>
+          <option value="bl">Bottom left</option>
+          <option value="tr">Top right</option>
+          <option value="tl">Top left</option>
+        </select>
+      </div>
+    </div>
+
     <div class="overlay-builtins" id="overlay-builtins"></div>
 
     <h3 class="subhead">Custom overlays</h3>
@@ -402,11 +446,25 @@
 
     <h3 class="subhead">Music library</h3>
     <p class="hint">
-      Uploaded tracks play through any "Music player" overlay above, in
-      upload order (or shuffled, per-overlay). Autoplay-with-sound works in
-      OBS's Browser Source - a regular browser tab may block it until you
-      click into the page.
+      One shared playlist per account - every "Music player" overlay and the
+      Now Playing widget all show the exact same track, in sync, whichever
+      page loads them (the server tracks what's playing and how far in, the
+      same way multiple viewers of a synced radio would). Autoplay-with-sound
+      works in OBS's Browser Source - a regular browser tab may block it
+      until you click into the page.
     </p>
+    <div class="row" style="display:flex; align-items:center; gap:18px; flex-wrap:wrap; margin-bottom:14px;">
+      <label style="display:flex; align-items:center; gap:8px; margin:0;">
+        <input type="checkbox" id="music-shuffle-input" style="width:auto;"> Shuffle
+      </label>
+      <label style="display:flex; align-items:center; gap:8px; margin:0;">
+        <input type="checkbox" id="music-loop-input" style="width:auto;"> Loop playlist
+      </label>
+      <label style="display:flex; align-items:center; gap:8px; margin:0;">
+        Volume
+        <input type="range" id="music-volume-input" min="0" max="1" step="0.05" style="width:120px;">
+      </label>
+    </div>
     <input type="file" id="music-upload-input" accept="audio/*" class="hidden">
     <button class="secondary" type="button" id="music-upload-btn" style="width:auto; margin-top:0;">+ Upload track</button>
     <div id="music-track-list" style="margin-top:12px;"></div>
@@ -505,20 +563,118 @@ function isoFromLocal(local) {
   return Number.isNaN(d.getTime()) ? "" : d.toISOString();
 }
 
+let lastOverlayConfig = null;
+
 async function loadOverlaysSection() {
   try {
-    const [cfg, overlaysRes, tracksRes] = await Promise.all([
+    const [cfg, overlaysRes, tracksRes, sceneRes, musicSettings] = await Promise.all([
       api("/api/overlays/config"),
       api("/api/overlays"),
       api("/api/music/tracks"),
+      api("/api/scenes/current"),
+      api("/api/music/settings"),
     ]);
+    lastOverlayConfig = cfg;
     renderBuiltins(cfg);
     renderCustomOverlays(overlaysRes.overlays);
     renderMusicTracks(tracksRes.tracks);
+    renderSceneSwitcher(sceneRes.currentScene, overlaysRes.overlays);
+    renderNowPlayingToggle(cfg.nowPlaying);
+    renderMusicSettings(musicSettings);
   } catch (e) {
     console.error("failed to load overlays section:", e.message);
   }
 }
+
+// ---- Master scene switcher ----
+
+el("master-copy-btn").addEventListener("click", () => copyText(overlayUrl("master"), el("master-copy-btn")));
+el("master-open-btn").addEventListener("click", () => window.open(overlayUrl("master"), "_blank"));
+
+const SCENE_SWITCH_DEFS = [
+  { label: "None", scene: { kind: "none" } },
+  { label: "Starting Soon", scene: { kind: "builtin", name: "startingSoon" } },
+  { label: "BRB", scene: { kind: "builtin", name: "brb" } },
+  { label: "Ending", scene: { kind: "builtin", name: "ending" } },
+];
+
+function sceneKey(scene) {
+  if (!scene || scene.kind === "none") return "none";
+  if (scene.kind === "builtin") return `builtin:${scene.name}`;
+  return `custom:${scene.overlayId}`;
+}
+
+function renderSceneSwitcher(currentScene, overlays) {
+  const row = el("scene-switch-row");
+  row.innerHTML = "";
+  const currentKey = sceneKey(currentScene);
+
+  const defs = [
+    ...SCENE_SWITCH_DEFS,
+    ...overlays.filter(o => o.type === "text" || o.type === "html").map(o => ({
+      label: o.name, scene: { kind: "custom", overlayId: o.id },
+    })),
+  ];
+
+  for (const def of defs) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "scene-switch-btn" + (sceneKey(def.scene) === currentKey ? " active" : "");
+    btn.textContent = def.label;
+    btn.addEventListener("click", async () => {
+      try {
+        await api("/api/scenes/current", { method: "POST", body: JSON.stringify(def.scene) });
+        loadOverlaysSection();
+      } catch (e) { alert(e.message); }
+    });
+    row.append(btn);
+  }
+}
+
+// ---- Now Playing widget toggle (layered on every scene) ----
+
+el("nowplaying-enabled-input").addEventListener("change", saveNowPlayingConfig);
+el("nowplaying-corner-select").addEventListener("change", saveNowPlayingConfig);
+
+function renderNowPlayingToggle(cfg) {
+  el("nowplaying-enabled-input").checked = !!cfg?.enabled;
+  el("nowplaying-corner-select").value = cfg?.corner || "br";
+}
+
+async function saveNowPlayingConfig() {
+  try {
+    await api("/api/overlays/config", {
+      method: "POST",
+      body: JSON.stringify({
+        nowPlaying: { enabled: el("nowplaying-enabled-input").checked, corner: el("nowplaying-corner-select").value },
+      }),
+    });
+  } catch (e) { alert(e.message); }
+}
+
+// ---- Music engine settings (shared across the whole music library) ----
+
+function renderMusicSettings(settings) {
+  el("music-shuffle-input").checked = !!settings.shuffle;
+  el("music-loop-input").checked = !!settings.loop;
+  el("music-volume-input").value = settings.volume ?? 0.7;
+}
+
+async function saveMusicSettings() {
+  try {
+    await api("/api/music/settings", {
+      method: "POST",
+      body: JSON.stringify({
+        shuffle: el("music-shuffle-input").checked,
+        loop: el("music-loop-input").checked,
+        volume: Number(el("music-volume-input").value),
+      }),
+    });
+  } catch (e) { alert(e.message); }
+}
+el("music-shuffle-input").addEventListener("change", saveMusicSettings);
+el("music-loop-input").addEventListener("change", saveMusicSettings);
+el("music-volume-input").addEventListener("change", saveMusicSettings);
 
 const BUILTIN_DEFS = [
   { key: "startingSoon", label: "Starting Soon", path: "starting-soon", fields: ["title", "subtitle", "accent", "backgroundUrl", "countdownAt", "countdownLabel"] },
@@ -694,19 +850,9 @@ function renderOverlayEditor(o) {
     warn.textContent = "Heads up: raw HTML/CSS is inlined as-is - you're trusted, but typos break the overlay.";
     wrap.append(warn);
   } else if (o.type === "music") {
-    addField("volume", "Volume (0-1)", { type: "number", step: "0.05", default: 0.7 });
-    const shuffleLbl = document.createElement("label");
-    shuffleLbl.style.cssText = "display:flex; align-items:center; gap:8px;";
-    const shuffleInput = document.createElement("input");
-    shuffleInput.type = "checkbox";
-    shuffleInput.style.width = "auto";
-    shuffleInput.checked = !!o.config.shuffle;
-    fieldInputs.shuffle = shuffleInput;
-    shuffleLbl.append(shuffleInput, document.createTextNode(" Shuffle playlist"));
-    wrap.append(shuffleLbl);
     const note = document.createElement("p");
     note.className = "hint";
-    note.textContent = "Plays every track in your music library below, in upload order (or shuffled).";
+    note.textContent = "No per-overlay settings - plays your one shared music library, in sync with every other music/now-playing overlay. Volume/shuffle/loop are set once for the whole library, below.";
     wrap.append(note);
   }
 
