@@ -180,8 +180,8 @@
   .hint { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
 
   .add-toggle { margin-top: 18px; }
-  #add-form { display: none; margin-top: 18px; padding-top: 18px; border-top: 1px dashed var(--border); }
-  #add-form.open { display: block; }
+  #add-form, #overlay-add-form { display: none; margin-top: 18px; padding-top: 18px; border-top: 1px dashed var(--border); }
+  #add-form.open, #overlay-add-form.open { display: block; }
 
   .logout { color: var(--muted); font-size: 0.8rem; background: none; border: none; cursor: pointer; width: auto; margin: 0; padding: 0; text-decoration: underline; flex-shrink: 0; }
 
@@ -212,6 +212,19 @@
   }
   .live-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
   .live-dot.standby { background: #e6b800; box-shadow: 0 0 6px #e6b800; }
+
+  .subhead { font-size: 0.8rem; margin: 22px 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .overlay-builtins { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .overlay-card { background: rgba(0,0,0,.18); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .overlay-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 8px; }
+  .overlay-card-name { font-weight: 600; font-size: 0.9rem; }
+  .overlay-card-fields { display: flex; flex-direction: column; gap: 8px; }
+  .overlay-card-fields label { margin: 0; }
+  .overlay-card-fields input { font-size: 0.82rem; padding: 7px 10px; }
+  .overlay-card-fields input[type="color"] { width: 100%; height: 32px; padding: 2px; cursor: pointer; }
+  .sm-btn { padding: 5px 10px; font-size: 0.75rem; margin: 0; width: auto; }
+  .input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: #0b0d11; color: var(--text); font-size: 0.9rem; font-family: inherit; }
+  textarea.input { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; }
 </style>
 </head>
 <body id="body">
@@ -224,11 +237,31 @@
   </a>
 </div>
 
+<div id="sourcemode-view" class="card hidden">
+  <h1>How will you stream?</h1>
+  <p class="sub">
+    Pick console, PC streaming software, or both - you can change this
+    anytime from the dashboard. PC software gets a unique key we generate
+    for you, so your real Twitch stream key is never needed for it. Console
+    capture needs your Twitch stream key next, since that's the only way to
+    match its broadcast to your account.
+  </p>
+  <form id="sourcemode-form">
+    <div class="mode-options">
+      <label class="mode-option"><input type="radio" name="sourcemode-mode" value="console"> Console (PS5) - DNS hijack + intercept, needs your Twitch stream key</label>
+      <label class="mode-option"><input type="radio" name="sourcemode-mode" value="pc" checked> PC streaming software (OBS, etc.) - no Twitch key needed</label>
+      <label class="mode-option"><input type="radio" name="sourcemode-mode" value="both"> Both - detected independently, whichever is live drives the outputs</label>
+    </div>
+    <button type="submit">Continue</button>
+    <div class="error" id="sourcemode-error"></div>
+  </form>
+</div>
+
 <div id="streamkey-view" class="card hidden">
   <h1>One more step</h1>
   <p class="sub">
-    Paste your Twitch stream key so we can match a broadcast to your
-    account, and tell us how you'll be streaming.
+    Paste your Twitch stream key so we can match your console's broadcast
+    to your account.
   </p>
   <form id="streamkey-form">
     <label>Stream key</label>
@@ -241,30 +274,8 @@
       (under "Primary Stream key" - click "Copy"). We never display it back
       to you or anyone else once saved.
     </p>
-
-    <label>How will you stream?</label>
-    <div class="mode-options">
-      <label class="mode-option"><input type="radio" name="streamkey-mode" value="console"> Console (PS5) - DNS hijack + intercept</label>
-      <label class="mode-option"><input type="radio" name="streamkey-mode" value="pc"> PC streaming software (OBS, etc.)</label>
-      <label class="mode-option"><input type="radio" name="streamkey-mode" value="both" checked> Both - detected independently, whichever is live drives the outputs</label>
-    </div>
-
     <button type="submit">Save</button>
     <div class="error" id="streamkey-error"></div>
-  </form>
-</div>
-
-<div id="sourcemode-view" class="card hidden">
-  <h1>How will you stream?</h1>
-  <p class="sub">Pick console (PS5), PC streaming software, or both. You can change this anytime from the dashboard.</p>
-  <form id="sourcemode-form">
-    <div class="mode-options">
-      <label class="mode-option"><input type="radio" name="sourcemode-mode" value="console"> Console (PS5) - DNS hijack + intercept</label>
-      <label class="mode-option"><input type="radio" name="sourcemode-mode" value="pc"> PC streaming software (OBS, etc.)</label>
-      <label class="mode-option"><input type="radio" name="sourcemode-mode" value="both" checked> Both - detected independently, whichever is live drives the outputs</label>
-    </div>
-    <button type="submit">Continue</button>
-    <div class="error" id="sourcemode-error"></div>
   </form>
 </div>
 
@@ -315,16 +326,14 @@
     <div class="source-pane hidden" id="source-pane-pc">
       <p class="hint" style="margin-top:12px;">
         Push straight from OBS (or any RTMP-capable software) - no DNS or
-        network changes needed.
+        network changes needed. This key is generated just for PC/software
+        use - it's never your real Twitch stream key, so there's no risk to
+        your Twitch account if it ever leaks, and it can be rotated anytime.
       </p>
       <div class="url-row"><label>Server</label><input type="text" id="url-pc-server" readonly><button class="copy-btn secondary" data-copy="url-pc-server">Copy</button></div>
-      <label>Stream key</label>
-      <p class="hint">
-        Use the same Twitch stream key you saved on this dashboard - get it
-        again anytime from
-        <a href="https://dashboard.twitch.tv/settings/stream" target="_blank" style="color:var(--accent);">dashboard.twitch.tv/settings/stream</a>.
-        It's never shown back here.
-      </p>
+      <div class="url-row"><label>Stream key</label><input type="text" id="url-pc-key" readonly><button class="copy-btn secondary" data-copy="url-pc-key">Copy</button></div>
+      <button type="button" class="secondary" id="pc-key-regenerate-btn" style="width:auto; margin-top:6px;">Regenerate key</button>
+      <p class="hint">Regenerating invalidates the old key immediately - update OBS's Stream Key field afterward.</p>
     </div>
     <div class="source-pane hidden" id="source-pane-console">
       <p class="hint" style="margin-top:12px;">
@@ -359,11 +368,54 @@
       <div class="error" id="add-error"></div>
     </form>
   </div>
+
+  <div class="panel full-width">
+    <h2>Overlays &amp; scenes</h2>
+    <p class="hint">
+      Browser-source pages for OBS (or any scene software) - Starting Soon,
+      BRB, and Ending scenes, a "Live" badge that shows itself automatically,
+      and custom text / HTML / music overlays. Add any of these as a Browser
+      Source in your own OBS scenes - this project doesn't touch your OBS
+      setup directly.
+    </p>
+
+    <div class="overlay-builtins" id="overlay-builtins"></div>
+
+    <h3 class="subhead">Custom overlays</h3>
+    <div id="custom-overlay-list"></div>
+    <button class="secondary add-toggle" id="overlay-add-toggle-btn" type="button">+ Add overlay</button>
+    <form id="overlay-add-form">
+      <label>Name</label>
+      <input type="text" id="overlay-add-name" placeholder="e.g. Lower third" required>
+      <label>Type</label>
+      <select id="overlay-add-type" class="input">
+        <option value="text">Text</option>
+        <option value="html">HTML</option>
+        <option value="music">Music player</option>
+      </select>
+      <div class="row" style="display:flex; gap:10px;">
+        <button type="submit">Add</button>
+        <button type="button" class="secondary" id="overlay-add-cancel-btn">Cancel</button>
+      </div>
+      <div class="error" id="overlay-add-error"></div>
+    </form>
+
+    <h3 class="subhead">Music library</h3>
+    <p class="hint">
+      Uploaded tracks play through any "Music player" overlay above, in
+      upload order (or shuffled, per-overlay). Autoplay-with-sound works in
+      OBS's Browser Source - a regular browser tab may block it until you
+      click into the page.
+    </p>
+    <input type="file" id="music-upload-input" accept="audio/*" class="hidden">
+    <button class="secondary" type="button" id="music-upload-btn" style="width:auto; margin-top:0;">+ Upload track</button>
+    <div id="music-track-list" style="margin-top:12px;"></div>
+  </div>
 </div>
 
 <script>
 const el = id => document.getElementById(id);
-const views = ["login-view", "streamkey-view", "sourcemode-view", "dashboard-view"];
+const views = ["login-view", "sourcemode-view", "streamkey-view", "dashboard-view"];
 function show(id) {
   views.forEach(v => el(v).classList.toggle("hidden", v !== id));
   document.body.classList.toggle("centered", id !== "dashboard-view");
@@ -373,6 +425,9 @@ let pollTimer = null;
 let editingId = null;
 let lastStatus = null;
 let currentSourceTab = null; // "console" | "pc" - which pane is showing in "Connect a source"
+let overlaysSectionLoaded = false;
+let editingOverlayId = null;
+let lastOverlays = [];
 
 async function api(path, opts) {
   const res = await fetch(path, {
@@ -388,12 +443,12 @@ async function api(path, opts) {
 async function refreshStatus() {
   try {
     const s = await api("/api/status");
-    if (s.needsStreamKey) {
-      show("streamkey-view");
-      return;
-    }
     if (s.needsSourceMode) {
       show("sourcemode-view");
+      return;
+    }
+    if (s.needsStreamKey) {
+      show("streamkey-view");
       return;
     }
     show("dashboard-view");
@@ -414,7 +469,352 @@ function render(s) {
   renderVideo(s);
   renderDestinations(s);
   renderSourceInfo(s);
+
+  // Overlays/music rarely change and have their own heavier fetches -
+  // loaded once per session instead of on every 2s status poll.
+  if (!overlaysSectionLoaded) {
+    overlaysSectionLoaded = true;
+    loadOverlaysSection();
+  }
 }
+
+// ---------------- Overlays & scenes ----------------
+
+function overlayUrl(pathSeg) {
+  return `${location.origin}/overlay/${encodeURIComponent(lastStatus.twitchLogin)}/${pathSeg}`;
+}
+
+function copyText(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    const original = btn.textContent;
+    btn.textContent = "Copied!";
+    setTimeout(() => { btn.textContent = original; }, 1200);
+  });
+}
+
+function localFromIso(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function isoFromLocal(local) {
+  if (!local) return "";
+  const d = new Date(local);
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+}
+
+async function loadOverlaysSection() {
+  try {
+    const [cfg, overlaysRes, tracksRes] = await Promise.all([
+      api("/api/overlays/config"),
+      api("/api/overlays"),
+      api("/api/music/tracks"),
+    ]);
+    renderBuiltins(cfg);
+    renderCustomOverlays(overlaysRes.overlays);
+    renderMusicTracks(tracksRes.tracks);
+  } catch (e) {
+    console.error("failed to load overlays section:", e.message);
+  }
+}
+
+const BUILTIN_DEFS = [
+  { key: "startingSoon", label: "Starting Soon", path: "starting-soon", fields: ["title", "subtitle", "accent", "backgroundUrl", "countdownAt", "countdownLabel"] },
+  { key: "brb", label: "BRB", path: "brb", fields: ["title", "subtitle", "accent", "backgroundUrl"] },
+  { key: "ending", label: "Ending", path: "ending", fields: ["title", "subtitle", "accent", "backgroundUrl", "twitch", "youtube", "twitter", "discord"] },
+  { key: "live", label: "Live badge", path: "live", fields: ["title", "accent"] },
+];
+const FIELD_LABELS = {
+  title: "Title", subtitle: "Subtitle", accent: "Accent color", backgroundUrl: "Background image URL",
+  countdownAt: "Countdown target", countdownLabel: "Countdown label",
+  twitch: "Twitch handle", youtube: "YouTube handle", twitter: "X handle", discord: "Discord invite",
+};
+
+function renderBuiltins(cfg) {
+  const wrap = el("overlay-builtins");
+  wrap.innerHTML = "";
+  for (const def of BUILTIN_DEFS) wrap.append(renderBuiltinCard(def, cfg[def.key] || {}));
+}
+
+function renderBuiltinCard(def, values) {
+  const card = document.createElement("div");
+  card.className = "overlay-card";
+
+  const head = document.createElement("div");
+  head.className = "overlay-card-head";
+  const name = document.createElement("span");
+  name.className = "overlay-card-name";
+  name.textContent = def.label;
+  const actions = document.createElement("div");
+  actions.style.cssText = "display:flex; gap:6px;";
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button"; copyBtn.className = "secondary sm-btn"; copyBtn.textContent = "Copy URL";
+  copyBtn.addEventListener("click", () => copyText(overlayUrl(def.path), copyBtn));
+  const openBtn = document.createElement("button");
+  openBtn.type = "button"; openBtn.className = "secondary sm-btn"; openBtn.textContent = "Open";
+  openBtn.addEventListener("click", () => window.open(overlayUrl(def.path), "_blank"));
+  actions.append(copyBtn, openBtn);
+  head.append(name, actions);
+  card.append(head);
+
+  const fields = document.createElement("div");
+  fields.className = "overlay-card-fields";
+  const inputs = {};
+  for (const key of def.fields) {
+    const fieldWrap = document.createElement("div");
+    const lbl = document.createElement("label");
+    lbl.textContent = FIELD_LABELS[key] || key;
+    let input;
+    if (key === "accent") {
+      input = document.createElement("input");
+      input.type = "color";
+      input.value = values[key] || "#7c5cff";
+    } else if (key === "countdownAt") {
+      input = document.createElement("input");
+      input.type = "datetime-local";
+      input.value = localFromIso(values[key] || "");
+    } else {
+      input = document.createElement("input");
+      input.type = "text";
+      input.value = values[key] || "";
+    }
+    inputs[key] = input;
+    fieldWrap.append(lbl, input);
+    fields.append(fieldWrap);
+  }
+  card.append(fields);
+
+  const saveRow = document.createElement("div");
+  saveRow.style.marginTop = "10px";
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button"; saveBtn.textContent = "Save"; saveBtn.className = "sm-btn";
+  saveBtn.style.background = "var(--accent)"; saveBtn.style.color = "white"; saveBtn.style.borderRadius = "8px"; saveBtn.style.padding = "7px 14px";
+  const err = document.createElement("div");
+  err.className = "error";
+  saveBtn.addEventListener("click", async () => {
+    const patch = {};
+    for (const [key, input] of Object.entries(inputs)) {
+      patch[key] = key === "countdownAt" ? isoFromLocal(input.value) : input.value;
+    }
+    try {
+      await api("/api/overlays/config", { method: "POST", body: JSON.stringify({ [def.key]: patch }) });
+      err.textContent = "";
+    } catch (e) { err.textContent = e.message; }
+  });
+  saveRow.append(saveBtn);
+  card.append(saveRow, err);
+  return card;
+}
+
+function renderCustomOverlays(overlays) {
+  lastOverlays = overlays;
+  const list = el("custom-overlay-list");
+  list.innerHTML = "";
+  if (overlays.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "platform-note";
+    empty.style.padding = "8px 4px";
+    empty.textContent = "No custom overlays yet. Add one below.";
+    list.append(empty);
+    return;
+  }
+  for (const o of overlays) {
+    list.append(editingOverlayId === o.id ? renderOverlayEditor(o) : renderOverlayRow(o));
+  }
+}
+
+function renderOverlayRow(o) {
+  const row = document.createElement("div");
+  row.className = "platform";
+  const info = document.createElement("div");
+  const title = document.createElement("div");
+  title.className = "platform-name";
+  title.textContent = o.name;
+  const note = document.createElement("div");
+  note.className = "platform-note";
+  note.textContent = `${o.type} · custom/${o.slug}`;
+  info.append(title, note);
+
+  const actions = document.createElement("div");
+  actions.className = "platform-actions";
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "icon-btn"; copyBtn.type = "button"; copyBtn.textContent = "🔗"; copyBtn.title = "Copy URL";
+  copyBtn.addEventListener("click", () => copyText(overlayUrl(`custom/${o.slug}`), copyBtn));
+  const editBtn = document.createElement("button");
+  editBtn.className = "icon-btn"; editBtn.type = "button"; editBtn.textContent = "✎"; editBtn.title = "Edit";
+  editBtn.addEventListener("click", () => { editingOverlayId = o.id; renderCustomOverlays(lastOverlays); });
+  const delBtn = document.createElement("button");
+  delBtn.className = "icon-btn"; delBtn.type = "button"; delBtn.textContent = "🗑"; delBtn.title = "Remove";
+  delBtn.addEventListener("click", () => removeOverlay(o.id, o.name));
+  actions.append(copyBtn, editBtn, delBtn);
+  row.append(info, actions);
+  return row;
+}
+
+async function removeOverlay(id, name) {
+  if (!confirm(`Remove "${name}"?`)) return;
+  try { await api(`/api/overlays/${id}`, { method: "DELETE" }); } catch (e) { alert(e.message); }
+  loadOverlaysSection();
+}
+
+function renderOverlayEditor(o) {
+  const wrap = document.createElement("div");
+  wrap.className = "edit-form";
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "Name";
+  const nameInput = document.createElement("input");
+  nameInput.value = o.name;
+  wrap.append(nameLabel, nameInput);
+
+  const fieldInputs = {};
+  const addField = (key, label, opts = {}) => {
+    const lbl = document.createElement("label");
+    lbl.textContent = label;
+    const input = document.createElement(opts.textarea ? "textarea" : "input");
+    input.className = "input";
+    if (opts.textarea) { input.rows = opts.rows || 6; }
+    else if (opts.type) { input.type = opts.type; if (opts.step) input.step = opts.step; }
+    if (opts.type === "checkbox") input.checked = !!o.config[key];
+    else input.value = o.config[key] ?? opts.default ?? "";
+    fieldInputs[key] = input;
+    wrap.append(lbl, input);
+  };
+
+  if (o.type === "text") {
+    addField("text", "Text", { textarea: true, rows: 3 });
+    addField("fontSize", "Font size (px)", { default: 48 });
+    addField("color", "Color", { default: "#ffffff" });
+  } else if (o.type === "html") {
+    addField("html", "HTML", { textarea: true, rows: 8 });
+    addField("css", "CSS (optional)", { textarea: true, rows: 4 });
+    const warn = document.createElement("p");
+    warn.className = "hint";
+    warn.textContent = "Heads up: raw HTML/CSS is inlined as-is - you're trusted, but typos break the overlay.";
+    wrap.append(warn);
+  } else if (o.type === "music") {
+    addField("volume", "Volume (0-1)", { type: "number", step: "0.05", default: 0.7 });
+    const shuffleLbl = document.createElement("label");
+    shuffleLbl.style.cssText = "display:flex; align-items:center; gap:8px;";
+    const shuffleInput = document.createElement("input");
+    shuffleInput.type = "checkbox";
+    shuffleInput.style.width = "auto";
+    shuffleInput.checked = !!o.config.shuffle;
+    fieldInputs.shuffle = shuffleInput;
+    shuffleLbl.append(shuffleInput, document.createTextNode(" Shuffle playlist"));
+    wrap.append(shuffleLbl);
+    const note = document.createElement("p");
+    note.className = "hint";
+    note.textContent = "Plays every track in your music library below, in upload order (or shuffled).";
+    wrap.append(note);
+  }
+
+  const row = document.createElement("div");
+  row.className = "row";
+  const saveBtn = document.createElement("button"); saveBtn.type = "button"; saveBtn.textContent = "Save";
+  const cancelBtn = document.createElement("button"); cancelBtn.type = "button"; cancelBtn.className = "secondary"; cancelBtn.textContent = "Cancel";
+  row.append(saveBtn, cancelBtn);
+  const error = document.createElement("div"); error.className = "error";
+
+  saveBtn.addEventListener("click", async () => {
+    const config = {};
+    for (const [key, input] of Object.entries(fieldInputs)) {
+      config[key] = input.type === "checkbox" ? input.checked : input.value;
+    }
+    try {
+      await api(`/api/overlays/${o.id}`, { method: "PUT", body: JSON.stringify({ name: nameInput.value, config }) });
+      editingOverlayId = null;
+      loadOverlaysSection();
+    } catch (e) { error.textContent = e.message; }
+  });
+  cancelBtn.addEventListener("click", () => { editingOverlayId = null; renderCustomOverlays(lastOverlays); });
+
+  wrap.append(row, error);
+  return wrap;
+}
+
+function renderMusicTracks(tracks) {
+  const list = el("music-track-list");
+  list.innerHTML = "";
+  if (tracks.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "platform-note";
+    empty.textContent = "No tracks uploaded yet.";
+    list.append(empty);
+    return;
+  }
+  for (const t of tracks) {
+    const row = document.createElement("div");
+    row.className = "platform";
+    const info = document.createElement("div");
+    const title = document.createElement("div");
+    title.className = "platform-name";
+    title.textContent = t.title;
+    const note = document.createElement("div");
+    note.className = "platform-note";
+    note.textContent = t.artist || "—";
+    info.append(title, note);
+
+    const actions = document.createElement("div");
+    actions.className = "platform-actions";
+    const delBtn = document.createElement("button");
+    delBtn.className = "icon-btn"; delBtn.type = "button"; delBtn.textContent = "🗑"; delBtn.title = "Remove";
+    delBtn.addEventListener("click", async () => {
+      if (!confirm(`Remove "${t.title}"?`)) return;
+      try { await api(`/api/music/tracks/${t.id}`, { method: "DELETE" }); } catch (e) { alert(e.message); }
+      loadOverlaysSection();
+    });
+    actions.append(delBtn);
+    row.append(info, actions);
+    list.append(row);
+  }
+}
+
+el("overlay-add-toggle-btn").addEventListener("click", () => {
+  el("overlay-add-form").classList.add("open");
+  el("overlay-add-toggle-btn").classList.add("hidden");
+});
+el("overlay-add-cancel-btn").addEventListener("click", () => {
+  el("overlay-add-form").classList.remove("open");
+  el("overlay-add-toggle-btn").classList.remove("hidden");
+  el("overlay-add-error").textContent = "";
+  el("overlay-add-form").reset();
+});
+el("overlay-add-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  el("overlay-add-error").textContent = "";
+  try {
+    await api("/api/overlays", {
+      method: "POST",
+      body: JSON.stringify({ name: el("overlay-add-name").value, type: el("overlay-add-type").value, config: {} }),
+    });
+    el("overlay-add-form").reset();
+    el("overlay-add-form").classList.remove("open");
+    el("overlay-add-toggle-btn").classList.remove("hidden");
+    loadOverlaysSection();
+  } catch (err) {
+    el("overlay-add-error").textContent = err.message;
+  }
+});
+
+el("music-upload-btn").addEventListener("click", () => el("music-upload-input").click());
+el("music-upload-input").addEventListener("change", async () => {
+  const file = el("music-upload-input").files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    const res = await fetch("/api/music/tracks", { method: "POST", body: formData });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || "upload failed");
+    loadOverlaysSection();
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    el("music-upload-input").value = "";
+  }
+});
 
 function setSourceTab(tab) {
   currentSourceTab = tab;
@@ -437,8 +837,19 @@ el("sourcemode-select").addEventListener("change", async e => {
   }
 });
 
+el("pc-key-regenerate-btn").addEventListener("click", async () => {
+  if (!confirm("Regenerate the PC stream key? The old one will stop working immediately.")) return;
+  try {
+    await api("/api/pckey/regenerate", { method: "POST" });
+    refreshStatus();
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
 function renderSourceInfo(s) {
   el("url-pc-server").value = s.pcServer || "";
+  el("url-pc-key").value = s.pcKey || "";
   el("url-console-dns").value = s.mediaHost || "";
   el("sourcemode-select").value = s.sourceMode;
 
@@ -666,10 +1077,9 @@ el("streamkey-form").addEventListener("submit", async e => {
   e.preventDefault();
   el("streamkey-error").textContent = "";
   try {
-    const sourceMode = document.querySelector('input[name="streamkey-mode"]:checked').value;
     await api("/api/streamkey", {
       method: "POST",
-      body: JSON.stringify({ streamKey: el("streamkey-input").value, sourceMode }),
+      body: JSON.stringify({ streamKey: el("streamkey-input").value }),
     });
     el("streamkey-input").value = "";
     refreshStatus();
@@ -730,14 +1140,15 @@ document.querySelectorAll(".copy-btn").forEach(btn => {
 
 el("logout-btn").addEventListener("click", async () => {
   stopPolling();
+  overlaysSectionLoaded = false;
   await api("/api/logout", { method: "POST" });
   show("login-view");
 });
 
 // on load, probe status to see if a session already exists
 api("/api/status").then(s => {
-  if (s.needsStreamKey) { show("streamkey-view"); }
-  else if (s.needsSourceMode) { show("sourcemode-view"); }
+  if (s.needsSourceMode) { show("sourcemode-view"); }
+  else if (s.needsStreamKey) { show("streamkey-view"); }
   else { show("dashboard-view"); startPolling(); }
 }).catch(() => show("login-view"));
 </script>

@@ -7,8 +7,10 @@ account picks which one(s) it uses right after signing in - **console**, **PC
 streaming software**, or **both**:
 
 - **PC streaming software** - point OBS (or any RTMP-capable software) at
-  this box like any normal RTMP target: a server URL + your stream key. No
-  DNS or network tricks involved at all.
+  this box like any normal RTMP target: a server URL + a stream key
+  **the dashboard generates for you** - never your real Twitch stream key,
+  so there's nothing Twitch-related to expose to third-party software, and
+  it can be rotated anytime without touching your Twitch account at all.
 - **Console** (e.g. PS5) - the console's own **Create -> Broadcast ->
   Twitch** button, transparently captured via DNS hijack + ARP-spoof
   intercept, since a console can't be pointed at a custom RTMP server the
@@ -60,21 +62,29 @@ what's running.
 1. **Install and start the stack** (see below) - `TARGET_IPS` can be blank
    if you have no console to capture.
 2. **Open the dashboard** at `http://<Pi LAN IP>:8090` and sign in with
-   Twitch. On first login, paste your Twitch stream key (from
-   `dashboard.twitch.tv/settings/stream`) and pick **PC streaming software**
-   (or **Both**) as how you'll stream.
+   Twitch. On first login, pick **PC streaming software** (or **Both**) as
+   how you'll stream - no Twitch stream key needed for this.
 3. **Add at least one destination** (the "+ Add destination" button) - a
-   full `rtmp://` or `srt://` URL including the stream key, and turn it on.
+   full `rtmp://` or `srt://` URL including that destination's own stream
+   key, and turn it on. (Want to restream to your own Twitch channel too?
+   Add it here as a normal destination using your real Twitch key - that's
+   completely separate from the account-level matching key below.)
 4. In the dashboard's **"Connect a source" -> "PC / software"** tab, copy
-   the server URL (`rtmp://<Pi LAN IP>:1935/live`). In OBS: Settings ->
-   Stream -> Service: Custom -> Server: that URL -> Stream Key: your Twitch
-   stream key (the same one from step 2).
+   the server URL (`rtmp://<Pi LAN IP>:1935/live`) and the **stream key
+   shown there** (a key the dashboard generated just for this - never your
+   Twitch key). In OBS: Settings -> Stream -> Service: Custom -> Server:
+   that URL -> Stream Key: that generated key.
 5. **Start streaming in OBS.** Watch the dashboard - the status badge should
    flip to "Live (PC)", the preview player should start playing, and your
    enabled destination(s) should show "Pushing now".
 6. Stopping the stream in OBS automatically stops every destination -
    nothing to clean up (unless Console is also live for this account, in
    which case outputs fail over to it).
+
+If that generated key ever leaks, hit **Regenerate key** in the same tab -
+it takes effect immediately (just update OBS's Stream Key field afterward).
+It's ours to rotate freely since it isn't tied to your Twitch account at
+all.
 
 ## Getting your console (e.g. PS5) connected - step by step
 
@@ -89,10 +99,10 @@ what's running.
    ```
    Save, and let it reconnect to the network.
 3. **Open the dashboard** at `http://<Pi LAN IP>:8090` and sign in with
-   Twitch. On first login, paste your Twitch stream key (from
-   `dashboard.twitch.tv/settings/stream`) and pick **Console** (or **Both**)
-   as how you'll stream - this is how an incoming broadcast gets matched to
-   your account.
+   Twitch. On first login, pick **Console** (or **Both**) as how you'll
+   stream, then paste your Twitch stream key (from
+   `dashboard.twitch.tv/settings/stream`) when asked - this is the only way
+   an incoming console broadcast can be matched to your account.
 4. **Add at least one destination** (the "+ Add destination" button) - a
    full `rtmp://` or `srt://` URL including the stream key, and turn it on.
 5. **On the console:** Create -> Broadcast -> Twitch. Wait for the live
@@ -152,14 +162,24 @@ else's.
 
 ### How accounts and matching work
 
-- Sign in with Twitch. On first login you're asked to paste your Twitch
-  stream key (Twitch's API never exposes this - `dashboard.twitch.tv/settings/stream`
-  is the only place to get it) and pick how you'll stream - **console**,
-  **PC streaming software**, or **both**. This is how the dashboard
-  recognizes which registered account an incoming broadcast belongs to: the
-  RTMP path a source publishes under is literally the real stream key, so
-  it's matched directly against each account's registered key. Change your
-  choice anytime from the "Connect a source" panel.
+- Sign in with Twitch. On first login you pick how you'll stream -
+  **console**, **PC streaming software**, or **both** - before anything
+  else. Change your choice anytime from the "Connect a source" panel.
+- **Two separate matching keys, never mixed up:**
+  - **Console** is matched by your real Twitch stream key (Twitch's API
+    never exposes this - `dashboard.twitch.tv/settings/stream` is the only
+    place to get it), asked for right after picking console/both - it's the
+    only way an incoming console broadcast can be matched to your account,
+    since the RTMP path a console publishes under is literally that key.
+  - **PC streaming software** is matched by a key **the dashboard generates
+    for you** instead - shown in full in "Connect a source" -> "PC /
+    software" (with a "Regenerate key" button), and never your real Twitch
+    key. This means your Twitch stream key is never typed into OBS or any
+    third-party software, and the PC key can be rotated anytime with zero
+    effect on your Twitch account. Want to restream to your own Twitch
+    channel from a PC-mode source? Add it as a normal destination with your
+    real Twitch key, same as Kick or any custom RTMP target - that's
+    unrelated to this account-level matching key.
 - **Console and PC are detected independently** by which RTMP app name the
   path was published under (`app/<key>` for console, mirroring Twitch's own
   ingest scheme; `live/<key>` for PC software, this project's own
@@ -208,6 +228,42 @@ else's.
     hostname you're viewing the dashboard from, but ports `8554`/`8890`
     still need to be reachable directly at that host (forwarded/exposed
     as their own ports, not through NPM).
+
+## Overlays & scenes
+
+The dashboard's **"Overlays & scenes"** panel serves browser-source pages
+you add as an OBS Browser Source (or any scene software with the same
+concept) - independent of console/PC ingest, so this works no matter which
+mode you're using:
+
+- **Built-in scenes** - Starting Soon (with an optional countdown), BRB,
+  and Ending, each with editable title/subtitle/accent color/background
+  image, plus a **Live badge** that shows itself automatically only while
+  that account is actually live (polls its own small status endpoint - no
+  manual scene switching needed for that one).
+- **Custom overlays** - add as many as you want, three types:
+  - **Text** - a styled text block (size/color configurable).
+  - **HTML** - raw HTML/CSS passthrough for anything the built-ins don't
+    cover (same "you're trusted, typos break the overlay" tradeoff as any
+    raw-HTML tool).
+  - **Music player** - upload audio in the **Music library** below it; a
+    Music-player overlay autoplays through your whole library (in upload
+    order, or shuffled) and shows a small "Now playing" card. It's a single
+    Browser Source that both plays the audio *and* shows the card - add it
+    once, get both. Autoplay-with-sound works in OBS's Browser Source; a
+    regular browser tab may block it until you click into the page.
+
+Every scene/overlay has **Copy URL** / **Open** so you can paste it straight
+into OBS's Browser Source URL field. These pages are unauthenticated (OBS
+can't log in) but scoped to your account's login, the same trust model
+already used for the direct-playback URLs above.
+
+Not yet supported: burning overlays directly into a **console** capture's
+video (that pipeline is zero-cost passthrough today, with no compositor at
+all) - overlays work great layered in your own OBS scenes regardless of
+which source you're using, just not baked into the raw console feed itself.
+See [`docs/design/overlays.md`](docs/design/overlays.md) for the full design
+and what's left.
 
 ## Console DNS
 

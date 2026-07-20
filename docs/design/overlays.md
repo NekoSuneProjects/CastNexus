@@ -1,6 +1,30 @@
 # Design: Overlays, text & music widgets
 
-Status: **TODO / not started** · Depends on: nothing blocking - can start anytime
+Status: **Phases 1-3 shipped** (see §6) · Phase 4 (PS5-mode compositor) not
+started - no blocker, just no demand yet
+
+> Implementation notes vs. the original design below, kept for history:
+> - Built-ins ended up as **Starting Soon / BRB / Ending / a self-hiding Live
+>   badge** (`/overlay/:login/live` + `/overlay/:login/live-status.json`,
+>   polling this project's own live-detection state instead of a generic
+>   "stream stats" widget).
+>   Config lives on the account (`account.overlayConfig`), edited via
+>   `GET/POST /api/overlays/config` - same shape as §4.2 proposed.
+> - Custom scenes narrowed to exactly the three types requested - **`html`
+>   (raw passthrough, unescaped by design), `text` (escaped), and `music`**
+>   - CRUD'd via `/api/overlays` (`{ id, name, slug, type, config }`), no
+>     `raw_html`/`generic`/templated split like CacheStream's five types.
+> - Music went with the **simpler of the two options floated in §4.4**: no
+>   `/api/music/now` polling contract or separate now-playing widget:
+>   the `music` overlay type is a single self-contained page (`<audio>` +
+>   its own now-playing card) that IS the OBS Browser Source, autoplaying
+>   through the account's whole uploaded library (`account.musicTracks`,
+>   `POST /api/music/tracks` with `multer`). One library per account, not
+>   per-overlay playlists - if that's ever needed, `config.trackIds` on the
+>   overlay is the extension point.
+> - Overlay URLs are unauthenticated by the same trust model as the
+>   `public/<login>` playback paths (§4.1's proposal) - no per-account token
+>   was added.
 
 ## 1. Goal
 
@@ -164,13 +188,15 @@ need a **new opt-in transcode path** instead of today's `-c copy`:
 
 ## 6. Staged rollout
 
-1. Overlay/scene page serving + built-in templates (§4.1) - OBS-mode users
+1. ✅ Overlay/scene page serving + built-in templates (§4.1) - OBS-mode users
    get value immediately, zero pipeline risk.
-2. Overlay config API + dashboard UI tab (§4.2, §4.5).
-3. Custom scenes CRUD + now-playing/music contract (§4.3, §4.4).
-4. PS5-mode compositor (§5) - only after 1-3 exist and there's real demand;
+2. ✅ Overlay config API + dashboard UI tab (§4.2, §4.5).
+3. ✅ Custom scenes CRUD + music (§4.3, §4.4) - see the implementation-notes
+   callout at the top for exactly how this diverged from the original plan.
+4. ⬜ PS5-mode compositor (§5) - only after 1-3 exist and there's real demand;
    scope/review as its own change since it's the first time this project
-   would ever re-encode the console's video instead of copying it.
+   would ever re-encode the console's video instead of copying it. 1-3
+   shipped without needing this at all - it stays purely optional.
 
 ## 7. Open questions
 

@@ -4,7 +4,9 @@ const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const express = require("express");
 const session = require("express-session");
+const multer = require("multer");
 const { createProxyMiddleware } = require("http-proxy-middleware");
+const { createOverlayRouter } = require("./overlays");
 
 const PORT = Number(process.env.DASHBOARD_PORT || 8090);
 const MEDIAMTX_API = process.env.MEDIAMTX_API || "http://127.0.0.1:9997";
@@ -19,6 +21,8 @@ const MEDIA_HOST = process.env.PI_IP || "127.0.0.1";
 const CONSOLE_APP = process.env.CONSOLE_APP || "app";
 const PC_APP = process.env.PC_APP || "live";
 const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, "data", "state.json");
+const MUSIC_DIR = process.env.MUSIC_DIR || path.join(path.dirname(STATE_FILE), "music");
+const MUSIC_MAX_BYTES = Number(process.env.MUSIC_MAX_MB || 50) * 1024 * 1024;
 const POLL_MS = 1500;
 // If a stream drops unexpectedly and no other source is live to fail over
 // to, don't end it right away - flaky wifi, a console reboot, or OBS
@@ -62,8 +66,39 @@ function saveState(state) {
 
 const state = loadState();
 
+function generatePcKey() {
+  // Ours to generate and regenerate at will - unlike the Twitch stream key,
+  // there's no external platform tying this value to anything, so it's
+  // safe to display in full and rotate on request.
+  return crypto.randomBytes(12).toString("hex");
+}
+
+function defaultOverlayConfig() {
+  return {
+    startingSoon: { title: "Starting Soon", subtitle: "Stream begins shortly", accent: "#7c5cff" },
+    brb: { title: "BRB", subtitle: "Be right back", accent: "#8a2bff" },
+    ending: { title: "Thanks for watching", subtitle: "Stream over", accent: "#ff2bd6" },
+    live: { title: "LIVE", accent: "#35d07f" },
+  };
+}
+
 function getAccount(id) {
-  return id ? state.accounts[id] : undefined;
+  if (!id) return undefined;
+  const account = state.accounts[id];
+  if (!account) return account;
+  // Backfills fields for any account that predates them, so nothing has to
+  // migrate state.json by hand.
+  let dirty = false;
+  if (!account.pcKey) { account.pcKey = generatePcKey(); dirty = true; }
+  if (!account.overlayConfig) { account.overlayConfig = defaultOverlayConfig(); dirty = true; }
+  if (!account.overlays) { account.overlays = []; dirty = true; }
+  if (!account.musicTracks) { account.musicTracks = []; dirty = true; }
+  if (dirty) saveState(state);
+  return account;
+}
+
+function getAccountByLogin(login) {
+  return Object.values(state.accounts).find(a => a.twitchLogin === login);
 }
 
 function findDestination(account, id) {
@@ -188,24 +223,32 @@ function stopRepublish(accountId) {
 function matchAccountForPath(pathName) {
   const app = pathName.split("/")[0];
   const key = pathName.split("/").pop();
-  const account = Object.values(state.accounts).find(a => a.streamKey && a.streamKey === key);
-  if (!account) return null;
 
-  // PC_APP is our own convention (we control the server URL people paste
-  // into OBS), so it's a reliable signal. Anything else is treated as
-  // console - that's the permissive default this project has always used
-  // (match by stream key alone), since a captured console broadcast's real
-  // app name comes from Twitch's own ingest scheme and isn't something we
-  // control; if it ever doesn't match CONSOLE_APP, still honor it as
-  // console rather than silently dropping a real capture.
-  const source = app === PC_APP ? "pc" : "console";
-  if (source === "console" && app !== CONSOLE_APP) {
-    console.log(`[dashboard] note: ${account.twitchLogin} stream matched under app "${app}" (expected "${CONSOLE_APP}" for console) - treating as console`);
+  // PC pushes are matched by pcKey - a value this project generates and
+  // owns, never the account's real Twitch stream key. That key is never
+  // handed to third-party software; only the console path (below) uses it.
+  if (app === PC_APP) {
+    const account = Object.values(state.accounts).find(a => a.pcKey && a.pcKey === key);
+    if (!account) return null;
+    const mode = account.sourceMode || "both"; // pre-existing accounts default permissive
+    if (mode !== "both" && mode !== "pc") return null; // e.g. console-only account, ignore a pc push under its key
+    return { account, source: "pc" };
   }
 
-  const mode = account.sourceMode || "both"; // pre-existing accounts default permissive
-  if (mode !== "both" && mode !== source) return null; // e.g. console-only account, ignore a pc push under the same key
-  return { account, source };
+  // Anything else is treated as console - that's the permissive default
+  // this project has always used (match by Twitch stream key alone), since
+  // a captured console broadcast's real app name comes from Twitch's own
+  // ingest scheme and isn't something we control; if it ever doesn't match
+  // CONSOLE_APP, still honor it as console rather than silently dropping a
+  // real capture.
+  const account = Object.values(state.accounts).find(a => a.streamKey && a.streamKey === key);
+  if (!account) return null;
+  if (app !== CONSOLE_APP) {
+    console.log(`[dashboard] note: ${account.twitchLogin} stream matched under app "${app}" (expected "${CONSOLE_APP}" for console) - treating as console`);
+  }
+  const mode = account.sourceMode || "both";
+  if (mode !== "both" && mode !== "console") return null;
+  return { account, source: "console" };
 }
 
 // The account's active feed path stays set through a reconnect grace window
@@ -354,6 +397,14 @@ app.use("/webrtc", createProxyMiddleware({
   onProxyRes: fixRedirectPrefix("/webrtc"),
 }));
 
+// Public (no auth - OBS Browser Sources can't log in), scoped by twitch
+// login the same way the public/<login> playback paths already are.
+app.use("/overlay", createOverlayRouter({
+  getAccountByLogin,
+  musicDir: MUSIC_DIR,
+  isLiveFn: account => !!activeSourceFor(account.twitchUserId),
+}));
+
 app.use(express.json());
 app.use(session({
   secret: state.sessionSecret,
@@ -369,12 +420,20 @@ function requireAuth(req, res, next) {
   next();
 }
 
-function requireStreamKey(req, res, next) {
-  if (!req.account.streamKey) return res.status(403).json({ error: "must set stream key" });
-  next();
+const SOURCE_MODES = ["console", "pc", "both"];
+
+// The Twitch stream key is only ever needed for console matching - a
+// pc-only account never needs one at all (its ingest key is the
+// auto-generated pcKey instead), so "onboarded" depends on the chosen mode.
+function needsStreamKeyFor(account) {
+  return (account.sourceMode === "console" || account.sourceMode === "both") && !account.streamKey;
 }
 
-const SOURCE_MODES = ["console", "pc", "both"];
+function requireOnboarded(req, res, next) {
+  if (!req.account.sourceMode) return res.status(403).json({ error: "pick a source mode first" });
+  if (needsStreamKeyFor(req.account)) return res.status(403).json({ error: "must set stream key" });
+  next();
+}
 
 app.get("/auth/twitch", (req, res) => {
   if (!TWITCH_CLIENT_ID) return res.status(500).send("TWITCH_CLIENT_ID is not configured");
@@ -427,9 +486,13 @@ app.get("/auth/twitch/callback", async (req, res) => {
     if (!account) {
       account = {
         twitchUserId: twitchUser.id,
-        streamKey: null,
-        sourceMode: null, // chosen alongside the stream key on first login (POST /api/streamkey)
+        streamKey: null, // real Twitch stream key - only ever needed for console (PS5) matching
+        pcKey: generatePcKey(), // dashboard-generated, for PC/software matching - never the Twitch key
+        sourceMode: null, // chosen first on login (POST /api/source-mode)
         destinations: state.pendingLegacyDestinations || [],
+        overlayConfig: defaultOverlayConfig(),
+        overlays: [], // custom overlays: html / text / music, see POST /api/overlays
+        musicTracks: [], // uploaded audio for the "music" overlay type
         createdAt: new Date().toISOString(),
       };
       state.accounts[twitchUser.id] = account;
@@ -456,27 +519,170 @@ app.post("/api/logout", (req, res) => {
   req.session.destroy(() => res.json({ ok: true }));
 });
 
+// Only ever needed for console matching - the first onboarding step is
+// picking a source mode (below); this step is skipped entirely for a
+// pc-only account, which never needs a Twitch stream key at all.
 app.post("/api/streamkey", requireAuth, (req, res) => {
-  const { streamKey, sourceMode } = req.body || {};
+  const { streamKey } = req.body || {};
   if (!streamKey || !String(streamKey).trim()) return res.status(400).json({ error: "stream key is required" });
-  if (!SOURCE_MODES.includes(sourceMode)) {
-    return res.status(400).json({ error: "sourceMode must be console, pc, or both" });
-  }
   req.account.streamKey = String(streamKey).trim();
-  req.account.sourceMode = sourceMode;
   saveState(state);
   res.json({ ok: true });
 });
 
-// Lets an account change how it's captured later on, without re-running the
-// whole onboarding step (e.g. adding a PC after starting console-only).
-app.post("/api/source-mode", requireAuth, requireStreamKey, (req, res) => {
+// The first onboarding step (and editable anytime after from "Connect a
+// source"). No requireOnboarded gate - this is what onboarding starts with.
+app.post("/api/source-mode", requireAuth, (req, res) => {
   const { sourceMode } = req.body || {};
   if (!SOURCE_MODES.includes(sourceMode)) {
     return res.status(400).json({ error: "sourceMode must be console, pc, or both" });
   }
   req.account.sourceMode = sourceMode;
   saveState(state);
+  res.json({ ok: true });
+});
+
+// pcKey is ours to rotate freely (unlike the Twitch stream key) - useful if
+// it ever leaks, without touching anything Twitch-related.
+app.post("/api/pckey/regenerate", requireAuth, (req, res) => {
+  req.account.pcKey = generatePcKey();
+  saveState(state);
+  res.json({ ok: true, pcKey: req.account.pcKey });
+});
+
+// ---- Overlays: built-in scenes (starting soon / BRB / ending / live badge) ----
+// Config here is served publicly at /overlay/:login/<name> for use as an OBS
+// Browser Source - see dashboard/overlays.js.
+
+app.get("/api/overlays/config", requireAuth, (req, res) => {
+  res.json(req.account.overlayConfig);
+});
+
+app.post("/api/overlays/config", requireAuth, (req, res) => {
+  const body = req.body || {};
+  const cfg = req.account.overlayConfig;
+  for (const key of ["startingSoon", "brb", "ending", "live"]) {
+    if (body[key] && typeof body[key] === "object") cfg[key] = { ...cfg[key], ...body[key] };
+  }
+  saveState(state);
+  res.json({ ok: true, overlayConfig: cfg });
+});
+
+// ---- Overlays: custom (html / text / music) --------------------------------
+
+const OVERLAY_TYPES = ["html", "text", "music"];
+
+function slugify(name) {
+  return String(name).toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "overlay";
+}
+
+function uniqueSlug(account, base, ignoreId) {
+  let slug = base, n = 2;
+  while (account.overlays.some(o => o.slug === slug && o.id !== ignoreId)) slug = `${base}-${n++}`;
+  return slug;
+}
+
+app.get("/api/overlays", requireAuth, (req, res) => {
+  res.json({ overlays: req.account.overlays });
+});
+
+app.post("/api/overlays", requireAuth, (req, res) => {
+  const { name, type, config } = req.body || {};
+  if (!name || !String(name).trim()) return res.status(400).json({ error: "name is required" });
+  if (!OVERLAY_TYPES.includes(type)) return res.status(400).json({ error: `type must be one of ${OVERLAY_TYPES.join(", ")}` });
+
+  const overlay = {
+    id: crypto.randomUUID(),
+    name: String(name).trim(),
+    slug: uniqueSlug(req.account, slugify(name)),
+    type,
+    config: config && typeof config === "object" ? config : {},
+    createdAt: new Date().toISOString(),
+  };
+  req.account.overlays.push(overlay);
+  saveState(state);
+  res.json({ ok: true, overlay });
+});
+
+app.put("/api/overlays/:id", requireAuth, (req, res) => {
+  const overlay = req.account.overlays.find(o => o.id === req.params.id);
+  if (!overlay) return res.status(404).json({ error: "unknown overlay" });
+
+  const { name, config } = req.body || {};
+  if (name !== undefined) {
+    if (!String(name).trim()) return res.status(400).json({ error: "name cannot be empty" });
+    overlay.name = String(name).trim();
+    overlay.slug = uniqueSlug(req.account, slugify(overlay.name), overlay.id);
+  }
+  if (config !== undefined && typeof config === "object") overlay.config = { ...overlay.config, ...config };
+  overlay.updatedAt = new Date().toISOString();
+  saveState(state);
+  res.json({ ok: true, overlay });
+});
+
+app.delete("/api/overlays/:id", requireAuth, (req, res) => {
+  const before = req.account.overlays.length;
+  req.account.overlays = req.account.overlays.filter(o => o.id !== req.params.id);
+  if (req.account.overlays.length === before) return res.status(404).json({ error: "unknown overlay" });
+  saveState(state);
+  res.json({ ok: true });
+});
+
+// ---- Music library (backs the "music" overlay type) ------------------------
+
+const musicUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dir = path.join(MUSIC_DIR, req.account.twitchUserId);
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+      cb(null, `${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`);
+    },
+  }),
+  limits: { fileSize: MUSIC_MAX_BYTES },
+  fileFilter: (req, file, cb) => cb(null, file.mimetype.startsWith("audio/")),
+});
+
+app.get("/api/music/tracks", requireAuth, (req, res) => {
+  res.json({ tracks: req.account.musicTracks });
+});
+
+app.post("/api/music/tracks", requireAuth, (req, res) => {
+  musicUpload.single("file")(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || "upload failed" });
+    if (!req.file) return res.status(400).json({ error: "an audio file is required" });
+    const track = {
+      id: crypto.randomUUID(),
+      title: path.basename(req.file.originalname, path.extname(req.file.originalname)),
+      artist: "",
+      filename: req.file.filename,
+      sizeBytes: req.file.size,
+      addedAt: new Date().toISOString(),
+    };
+    req.account.musicTracks.push(track);
+    saveState(state);
+    res.json({ ok: true, track });
+  });
+});
+
+app.put("/api/music/tracks/:id", requireAuth, (req, res) => {
+  const track = req.account.musicTracks.find(t => t.id === req.params.id);
+  if (!track) return res.status(404).json({ error: "unknown track" });
+  const { title, artist } = req.body || {};
+  if (title !== undefined && String(title).trim()) track.title = String(title).trim();
+  if (artist !== undefined) track.artist = String(artist).trim();
+  saveState(state);
+  res.json({ ok: true, track });
+});
+
+app.delete("/api/music/tracks/:id", requireAuth, (req, res) => {
+  const track = req.account.musicTracks.find(t => t.id === req.params.id);
+  if (!track) return res.status(404).json({ error: "unknown track" });
+  req.account.musicTracks = req.account.musicTracks.filter(t => t.id !== req.params.id);
+  saveState(state);
+  fs.unlink(path.join(MUSIC_DIR, req.account.twitchUserId, track.filename), () => {}); // best-effort
   res.json({ ok: true });
 });
 
@@ -522,10 +728,10 @@ app.get("/api/status", requireAuth, (req, res) => {
     twitchLogin: account.twitchLogin,
     displayName: account.displayName,
     profileImageUrl: account.profileImageUrl,
-    needsStreamKey: !account.streamKey,
     needsSourceMode: !account.sourceMode,
+    needsStreamKey: needsStreamKeyFor(account),
     streamKeyMasked: account.streamKey ? maskSecret(account.streamKey) : null,
-    sourceMode: account.sourceMode || "both",
+    sourceMode: account.sourceMode || null,
     live: !!activeSource,
     sources,
     activeSource,
@@ -533,11 +739,13 @@ app.get("/api/status", requireAuth, (req, res) => {
     // outputs are still running (retrying the dead source on their own),
     // this is purely so the UI can show "reconnecting" instead of "idle".
     graceUntil: graceState.get(account.twitchUserId)?.deadline ?? null,
-    // Not secrets - just where OBS/streaming software should point, and
-    // what to set the PS5's DNS to. The stream key itself is never
-    // re-displayed (users paste the same one they already saved via the
-    // stream-key step, from Twitch's own page).
+    // Not secrets - just where PC software should point, and what to set
+    // the console's DNS to. pcKey is shown in full on purpose - we
+    // generated it, we can rotate it, and OBS needs to see it to be pasted
+    // in; it is never the real Twitch stream key, which is never
+    // re-displayed (users paste that one from Twitch's own page instead).
     pcServer: `rtmp://${MEDIA_HOST}:1935/${PC_APP}`,
+    pcKey: account.pcKey,
     mediaHost: MEDIA_HOST,
     playback: playbackUrlsFor(req, account),
     destinations: account.destinations.map(d => ({
@@ -550,7 +758,7 @@ app.get("/api/status", requireAuth, (req, res) => {
   });
 });
 
-app.post("/api/destinations", requireAuth, requireStreamKey, (req, res) => {
+app.post("/api/destinations", requireAuth, requireOnboarded, (req, res) => {
   const { name, url } = req.body || {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: "name is required" });
   if (!url || !DESTINATION_URL_RE.test(url)) return res.status(400).json({ error: DESTINATION_URL_HINT });
@@ -561,7 +769,7 @@ app.post("/api/destinations", requireAuth, requireStreamKey, (req, res) => {
   res.json({ ok: true, id: dest.id });
 });
 
-app.put("/api/destinations/:id", requireAuth, requireStreamKey, (req, res) => {
+app.put("/api/destinations/:id", requireAuth, requireOnboarded, (req, res) => {
   const dest = findDestination(req.account, req.params.id);
   if (!dest) return res.status(404).json({ error: "unknown destination" });
 
@@ -583,7 +791,7 @@ app.put("/api/destinations/:id", requireAuth, requireStreamKey, (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete("/api/destinations/:id", requireAuth, requireStreamKey, (req, res) => {
+app.delete("/api/destinations/:id", requireAuth, requireOnboarded, (req, res) => {
   const dest = findDestination(req.account, req.params.id);
   if (!dest) return res.status(404).json({ error: "unknown destination" });
   stopDestination(req.account.twitchUserId, dest.id);
@@ -592,7 +800,7 @@ app.delete("/api/destinations/:id", requireAuth, requireStreamKey, (req, res) =>
   res.json({ ok: true });
 });
 
-app.post("/api/destinations/:id/toggle", requireAuth, requireStreamKey, (req, res) => {
+app.post("/api/destinations/:id/toggle", requireAuth, requireOnboarded, (req, res) => {
   const dest = findDestination(req.account, req.params.id);
   if (!dest) return res.status(404).json({ error: "unknown destination" });
 

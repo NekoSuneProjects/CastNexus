@@ -4,6 +4,7 @@
   "dependencies": {
     "express": "4.19.2",
     "express-session": "1.18.0",
-    "http-proxy-middleware": "2.0.6"
+    "http-proxy-middleware": "2.0.6",
+    "multer": "2.2.0"
   }
 }
