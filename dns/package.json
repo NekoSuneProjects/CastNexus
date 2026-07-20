@@ -1,0 +1,7 @@
+{
+  "name": "nekosune-ps5-dns",
+  "private": true,
+  "dependencies": {
+    "dns-packet": "5.6.1"
+  }
+}

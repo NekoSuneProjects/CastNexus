@@ -1,0 +1,32 @@
+logLevel: info
+
+# ingest from the PS5 (via ARP-spoof/DNAT intercept and/or DNS hijack)
+rtmp: yes
+rtmpAddress: :1935
+
+# playback protocols - pull the same live stream directly, without going
+# through Twitch/YouTube at all. Useful for VRChat, OBS, VLC, etc.
+rtsp: yes
+rtspAddress: :8554
+rtpAddress: :8000
+rtcpAddress: :8001
+
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsAllowOrigins:
+  - '*'
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcAdditionalHosts:
+  - 192.168.1.107
+
+srt: yes
+srtAddress: :8890
+
+api: yes
+apiAddress: 127.0.0.1:9997
+
+paths:
+  all_others:

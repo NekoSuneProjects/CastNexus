@@ -1,0 +1,6 @@
+.env
+node_modules/
+dashboard/data/
+desktop/dist/
+desktop/auto.crt
+desktop/auto.key
