@@ -271,22 +271,32 @@ and how far into it - so every Music-player overlay, and the optional **Now
 Playing widget** (layered onto any scene above, master switcher included),
 all agree, in sync, no matter which page loaded or reloaded when. Autoplay-
 with-sound works in OBS's Browser Source; a regular browser tab may block it
-until you click into the page. (The audio itself still plays from whichever
-overlay page has it - there's no server-side audio mixing pipeline, since
-that would need a compositor this project deliberately doesn't have; see
-`docs/design/overlays.md` for the reasoning.)
+until you click into the page.
 
 Every scene/overlay has **Copy URL** / **Open** so you can paste it straight
 into OBS's Browser Source URL field. These pages are unauthenticated (OBS
 can't log in) but scoped to your account's login, the same trust model
 already used for the direct-playback URLs above.
 
-Not yet supported: burning overlays directly into a **console** capture's
-video (that pipeline is zero-cost passthrough today, with no compositor at
-all) - overlays work great layered in your own OBS scenes regardless of
-which source you're using, just not baked into the raw console feed itself.
-See [`docs/design/overlays.md`](docs/design/overlays.md) for the full design
-and what's left.
+### Built-in compositor (experimental) - bake overlays into the actual video
+
+By default, overlays only exist inside whatever OBS Browser Source is
+showing them - they're never part of the raw video this project pushes to
+destinations. Turning on **"Built-in compositor"** in the Overlays panel
+changes that: it spins up a real headless-Chromium + FFmpeg pipeline per
+account (the same mechanism [CacheStream](https://github.com/NekoSuneProjectsForks/NekoStreamAPP)
+uses to render its scenes) that plays your own live feed back into itself
+alongside the overlay layer, re-encodes the result, and that's what
+destinations push out - so overlays show up for viewers even if they're not
+watching through your own OBS.
+
+This is a genuinely heavy, opt-in addition - a persistent browser process
+plus several ffmpeg processes per account, real CPU cost instead of the
+normal zero-cost passthrough, and a real (if usually small) added-latency
+cost since the video gets decoded twice. Off by default; not recommended on
+low-end hardware (e.g. a Raspberry Pi 3). See
+[`docs/design/overlays.md`](docs/design/overlays.md) for the full mechanism
+and what's still unverified on real hardware.
 
 ## Console DNS
 

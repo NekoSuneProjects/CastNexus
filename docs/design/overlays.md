@@ -1,7 +1,7 @@
 # Design: Overlays, text & music widgets
 
-Status: **Phases 1-3 shipped** (see §6) · Phase 4 (PS5-mode compositor) not
-started - no blocker, just no demand yet
+Status: **Phases 1-4 all shipped** (see §6, and the v3 addendum below for what
+phase 4 actually turned into)
 
 > Implementation notes vs. the original design below, kept for history:
 > - Built-ins ended up as **Starting Soon / BRB / Ending / a self-hiding Live
@@ -78,6 +78,74 @@ started - no blocker, just no demand yet
 >   host/port/password config) that doesn't help console-mode users at all.
 >   Worth a future TODO if there's demand for controlling OBS's own scene
 >   collection directly rather than adding one master Browser Source.
+
+> **v3 addendum - the actual built-in compositor, after reading CacheStream's
+> real `apps/streamer/src/stream.js` (docker branch,
+> github.com/NekoSuneProjectsForks/NekoStreamAPP) in full, not just a
+> summary:**
+> - The v2 addendum above concluded that literally porting CacheStream's
+>   mechanism was out of scope, because CacheStream's browser page IS the
+>   entire video - it has no real external feed at all, so it never needs to
+>   composite a captured overlay layer onto anything. Explicitly asked to
+>   build the literal mechanism anyway (not the FFmpeg-`overlay`-filter
+>   alternative) - which meant solving the problem CacheStream's own
+>   architecture never has to: getting a REAL external video feed
+>   (console/PC) into the same browser page as the overlays, so the one
+>   screencast captures both.
+> - **`dashboard/compositor.js`** is the result - a per-account `Compositor`
+>   class adapted line-by-line from `Streamer` in `stream.js`: same
+>   battle-tested Chromium launch flags, same CDP `Page.startScreencast`
+>   (JPEG, not screenshot-loop) with the same backpressure-drop fix on
+>   `ffmpeg.stdin`, same frame-flow watchdog + reconnect-with-backoff +
+>   bounded teardown. Deliberately NOT ported (kept as a bounded v1):
+>   hardware-encoder auto-fallback (libx264 software only), periodic
+>   Chromium recycle, memory-pressure recycling - CacheStream added these
+>   after real multi-hour-stream production pain; worth revisiting if this
+>   compositor sees real usage.
+> - **The one genuinely new problem**: `/overlay/:login/compositor`
+>   (`dashboard/overlays.js`) plays this account's own live output back into
+>   itself via a background `<video>` fed by a hand-rolled WHEP client
+>   (WebRTC - lowest latency of the playback protocols already served),
+>   muted, with the same SSE-driven overlay layer `/master` already uses on
+>   top - so scene switching keeps working exactly the same way, no
+>   Chromium navigation needed, just a DOM swap. This means every account's
+>   feed gets decoded once to produce the WHEP source, decoded *again*
+>   inside the browser, then re-encoded - a real cost CacheStream's
+>   architecture never pays, called out explicitly when this was scoped.
+> - **Audio never comes from the browser** - CDP screencast is video-only.
+>   Two FIFOs feed the main encode, directly mirroring CacheStream's
+>   silence+music split (`_ensureAudioFifos`, the RDWR keep-alive-fd trick
+>   for the writer-less case) - except the "always-on carrier" is real live
+>   feed audio (tapped from this account's own already-republished
+>   `public/<login>` path, which the compositor depends on regardless of
+>   which source is actually live) rather than silence, since a live feed
+>   is guaranteed here in a way CacheStream's virtual content never
+>   guarantees anything. Music audio is tapped per-track from the same
+>   shared `music-engine.js` state everything else reads, so what's baked
+>   into the compositor's output matches what a Browser-Source Music
+>   overlay would also be playing.
+> - **Output**: instead of pushing straight to Twitch like CacheStream, the
+>   compositor pushes to this project's own MediaMTX
+>   (`composited/<accountId>`), and the existing destination-push machinery
+>   (`startDestination`) reads from THAT instead of the raw source when
+>   `account.compositorEnabled` is true - reusing essentially all of the
+>   existing multi-destination fan-out unchanged. Republish
+>   (`public/<login>`) always stays on the raw source, since the compositor
+>   itself depends on it as an input.
+> - **Scope, per explicit instruction**: applies to BOTH console and
+>   PC/OBS-mode accounts, not just console (which is where the v2 addendum
+>   assumed any future compositor would be scoped, since PC/OBS mode already
+>   has OBS's own Browser Source as a compositor). Opt-in per account
+>   (`account.compositorEnabled`, default off) either way - `POST
+>   /api/compositor` - since it's a genuinely heavy addition (persistent
+>   headless Chromium + several ffmpeg processes) on hardware (Raspberry Pi)
+>   this project otherwise targets a zero-cost passthrough for.
+> - Verified locally: Puppeteer launch + CDP screencast + FFmpeg piping
+>   produces valid video (a local Chrome install, not the Alpine/Docker
+>   Chromium path) - the WHEP-video-in-browser path and full
+>   Docker/Raspberry-Pi performance are NOT verified, since that needs a
+>   real MediaMTX + live source + the actual container image running.
+>   Treat as experimental until run for real on target hardware.
 
 ## 1. Goal
 
@@ -212,32 +280,18 @@ toggle widgets on/off with a corner picker, template picker for new custom
 scenes, a raw HTML/CSS editor, "Copy URL" / "Open preview" buttons for each
 scene using the `/overlay/:twitchLogin/...` paths from §4.1.
 
-## 5. PS5-mode compositor (phase 4, higher risk - separate effort)
+## 5. Compositor (phase 4 - superseded by the v3 addendum above)
 
-To burn an overlay into the actual outgoing video when the source is the
-PS5's own broadcast (no OBS involved), `startDestination`/`startRepublish`
-need a **new opt-in transcode path** instead of today's `-c copy`:
-
-- Render the overlay to a live image/video feed a filtergraph can read -
-  e.g. a small headless-Chromium (Puppeteer/Playwright) process screenshotting
-  the same `/overlay/:twitchLogin/widgets` page at N fps to a named pipe or
-  looping file, or a lightweight canvas/text renderer if full HTML/CSS is
-  overkill for what's actually needed (mostly text + a corner card).
-- Feed it into ffmpeg as a second input, composited with `overlay=`/`drawtext=`
-  filters ahead of `-c:v libx264` (can no longer be `-c copy` - this is a
-  real CPU cost the Pi doesn't pay today).
-- Make it **strictly opt-in per account/destination**, default off, and
-  call out in the dashboard UI that enabling it switches that stream from
-  zero-cost passthrough to an actual encode. Cheap Pis (3B/4) may not keep
-  up at the PS5's typical 1080p60 - profile before shipping this as
-  anything but experimental.
-- Alternative worth considering instead of burning it in: leave PS5-mode
-  video untouched and only offer the overlay pages for **secondary use**
-  (a phone/monitor "now playing" display, an embed on a companion page) -
-  much lower effort, no transcode, but doesn't satisfy "overlay on the
-  actual stream" for console users. Decide this tradeoff explicitly before
-  starting phase 4; it may be the right permanent answer rather than a
-  stepping stone.
+This section originally proposed an FFmpeg `overlay=`/`drawtext=` filter
+approach (capture the overlay layer via headless browser, composite it onto
+the raw feed FFmpeg decodes natively) as the cheaper, lower-latency option
+for console mode specifically. That's **not what got built** - explicitly
+asked for CacheStream's literal mechanism instead (the whole page,
+including a real video element, gets screencasted as one), applied to both
+console AND PC/OBS mode. See the v3 addendum and `dashboard/compositor.js`
+for what actually shipped, and why it costs a real second decode/encode
+round-trip that this section's original proposal would have avoided. Kept
+here for the historical tradeoff record, not as the current design.
 
 ## 6. Staged rollout
 
@@ -246,19 +300,24 @@ need a **new opt-in transcode path** instead of today's `-c copy`:
 2. ✅ Overlay config API + dashboard UI tab (§4.2, §4.5).
 3. ✅ Custom scenes CRUD + music (§4.3, §4.4) - see the implementation-notes
    callout at the top for exactly how this diverged from the original plan.
-4. ⬜ PS5-mode compositor (§5) - only after 1-3 exist and there's real demand;
-   scope/review as its own change since it's the first time this project
-   would ever re-encode the console's video instead of copying it. 1-3
-   shipped without needing this at all - it stays purely optional.
+4. ✅ Built-in compositor (§5, v3 addendum) - `dashboard/compositor.js`,
+   opt-in per account (`account.compositorEnabled`), applies to both console
+   and PC/OBS mode. Verified locally at the Puppeteer+CDP-screencast+FFmpeg
+   level; NOT yet verified on real target hardware (Raspberry Pi/Docker) or
+   with the WHEP-video-in-browser path end to end - treat as experimental.
 
 ## 7. Open questions
 
 - Should overlay page URLs be authenticated at all (e.g. a per-account
   token in the query string), or is the existing "unguessable path" trust
   model (same as `public/<twitch-username>` playback URLs) good enough?
-- Any real demand for phase 4 (burned-in PS5 overlays), or is "overlay
-  pages for secondary displays only" the right permanent scope for console
-  mode?
 - Cap on custom scenes per account, and on raw-HTML size/content (same
   "you're trusted, but typos break the broadcast" tradeoff CacheStream
   already accepts for `raw_html`)?
+- Compositor follow-ups, if it sees real usage: hardware-encoder fallback,
+  periodic Chromium recycle, memory-pressure recycling (all present in
+  CacheStream's `stream.js`, deliberately not ported yet - see the v3
+  addendum); real Raspberry Pi performance numbers; whether the
+  double-decode cost is acceptable or whether the cheaper FFmpeg-`overlay`-
+  filter alternative (§5's original proposal) should be offered as a
+  lighter-weight option alongside this one, not instead of it.

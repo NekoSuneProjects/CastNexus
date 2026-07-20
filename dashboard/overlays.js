@@ -299,6 +299,90 @@ function masterPage(login, initialFragment) {
   return page({ title: "Live scene", body, transparent: true });
 }
 
+// ---------------------------------------------------------------------------
+// Compositor page - loaded by the OPTIONAL built-in compositor
+// (dashboard/compositor.js), a headless Chromium instance that screencasts
+// this exact page and re-encodes it, the same mechanism CacheStream uses.
+// Unlike CacheStream (whose page IS the entire video - no external feed at
+// all), this page plays the account's own live output as a background
+// <video> via WHEP (lowest latency of the playback protocols already
+// served), with the normal SSE-driven overlay layer on top - same
+// scene-switch mechanic as /master, just with real video underneath.
+// Audio is NOT taken from this <video> element (CDP screencast is
+// video-only) - it's tapped separately server-side, see compositor.js.
+
+function whepClientScript(whepUrl) {
+  return `
+    <script>
+      (function () {
+        function connectWhep() {
+          var pc = new RTCPeerConnection();
+          pc.addTransceiver("video", { direction: "recvonly" });
+          pc.addTransceiver("audio", { direction: "recvonly" });
+          var video = document.getElementById("bg-video");
+          pc.ontrack = function (ev) {
+            if (video.srcObject !== ev.streams[0]) video.srcObject = ev.streams[0];
+          };
+          pc.oniceconnectionstatechange = function () {
+            if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+              try { pc.close(); } catch (e) {}
+              setTimeout(connectWhep, 3000);
+            }
+          };
+          pc.createOffer().then(function (offer) {
+            return pc.setLocalDescription(offer);
+          }).then(function () {
+            return new Promise(function (resolve) {
+              if (pc.iceGatheringState === "complete") return resolve();
+              pc.addEventListener("icegatheringstatechange", function onchange() {
+                if (pc.iceGatheringState === "complete") { pc.removeEventListener("icegatheringstatechange", onchange); resolve(); }
+              });
+            });
+          }).then(function () {
+            return fetch(${JSON.stringify(whepUrl)}, {
+              method: "POST",
+              headers: { "Content-Type": "application/sdp" },
+              body: pc.localDescription.sdp,
+            });
+          }).then(function (res) {
+            if (!res.ok) throw new Error("WHEP offer rejected: " + res.status);
+            return res.text();
+          }).then(function (answer) {
+            return pc.setRemoteDescription({ type: "answer", sdp: answer });
+          }).catch(function () {
+            // Account may not be live yet, or MediaMTX hasn't got the path
+            // ready - a fresh RTCPeerConnection is needed per attempt (WHEP
+            // has no "retry the same offer" concept), so just try again.
+            try { pc.close(); } catch (e) {}
+            setTimeout(connectWhep, 3000);
+          });
+        }
+        connectWhep();
+      })();
+    </script>`;
+}
+
+function compositorPage(login, initialFragment) {
+  const whepUrl = "/" + ["webrtc", "public", login, "whep"].map(encodeURIComponent).join("/");
+  const body = `
+    <video id="bg-video" autoplay muted playsinline style="position:fixed; inset:0; width:100vw; height:100vh; object-fit:cover; background:#000;"></video>
+    <div id="scene-root" style="position:fixed; inset:0;">${initialFragment}</div>
+    <script>
+      (function () {
+        var root = document.getElementById("scene-root");
+        var es = new EventSource(${JSON.stringify(`/overlay/${encodeURIComponent(login)}/events`)});
+        es.onmessage = function (e) {
+          try {
+            var msg = JSON.parse(e.data);
+            if (msg.type === "scene") root.innerHTML = msg.html;
+          } catch (err) {}
+        };
+      })();
+    </script>
+    ${whepClientScript(whepUrl)}`;
+  return page({ title: "Compositor", body, transparent: false });
+}
+
 /**
  * @param {object} deps
  * @param {(login: string) => object | undefined} deps.getAccountByLogin
@@ -356,6 +440,17 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn, subscribeE
     if (!account) return;
     const fragment = withWidgets(resolveSceneFragment(account.currentScene, account), account.overlayConfig, req.params.login);
     res.send(masterPage(req.params.login, fragment));
+  });
+
+  // Loaded by the built-in compositor (dashboard/compositor.js) only -
+  // not meant to be pasted into OBS (it plays this account's OWN output
+  // back into itself, which would be a feedback loop with a real capture
+  // engine wired in front of it).
+  router.get("/:login/compositor", (req, res) => {
+    const account = accountOr404(req, res);
+    if (!account) return;
+    const fragment = withWidgets(resolveSceneFragment(account.currentScene, account), account.overlayConfig, req.params.login);
+    res.send(compositorPage(req.params.login, fragment));
   });
 
   // SSE stream the master page (and, in principle, any future live widget)

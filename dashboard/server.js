@@ -9,6 +9,7 @@ const { createProxyMiddleware } = require("http-proxy-middleware");
 const { createOverlayRouter, resolveSceneFragment, withWidgets } = require("./overlays");
 const events = require("./events");
 const musicEngine = require("./music-engine");
+const { Compositor } = require("./compositor");
 
 const PORT = Number(process.env.DASHBOARD_PORT || 8090);
 const MEDIAMTX_API = process.env.MEDIAMTX_API || "http://127.0.0.1:9997";
@@ -32,6 +33,10 @@ const POLL_MS = 1500;
 // up to this long for the same (or another) source to reconnect before
 // actually stopping outputs.
 const RECONNECT_GRACE_MS = Number(process.env.RECONNECT_GRACE_MS || 60 * 60 * 1000); // 1h
+// Where the compositor's own headless Chromium loads /overlay/:login/compositor
+// from - always this dashboard's own local HTTP server, since Chromium runs
+// on the same machine/container as the dashboard regardless of MEDIA_HOST.
+const DASHBOARD_ORIGIN = `http://127.0.0.1:${PORT}`;
 
 const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID || "";
 const TWITCH_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET || "";
@@ -106,6 +111,7 @@ function getAccount(id) {
   if (!account.musicTracks) { account.musicTracks = []; dirty = true; }
   if (!account.musicSettings) { account.musicSettings = defaultMusicSettings(); dirty = true; }
   if (account.currentScene === undefined) { account.currentScene = null; dirty = true; }
+  if (account.compositorEnabled === undefined) { account.compositorEnabled = false; dirty = true; }
   if (dirty) saveState(state);
   return account;
 }
@@ -154,6 +160,58 @@ const activeFeedPath = new Map();
 // only source has dropped and we're waiting out RECONNECT_GRACE_MS for it
 // (or another source) to come back before really ending the stream.
 const graceState = new Map();
+// accountId -> Compositor instance (dashboard/compositor.js) - only ever
+// populated for accounts with compositorEnabled, and only while live.
+const compositors = new Map();
+
+function compositedPathFor(accountId) {
+  return `composited/${accountId}`;
+}
+
+// What a destination push should actually read from right now: the
+// composited output when the compositor is enabled (so overlays are baked
+// into what viewers see), otherwise the raw source path, unchanged from
+// before the compositor existed. Null if nothing is currently active.
+function destinationSourcePathFor(account) {
+  const pathName = activeFeedPath.get(account.twitchUserId);
+  if (!pathName) return null;
+  return account.compositorEnabled ? compositedPathFor(account.twitchUserId) : pathName;
+}
+
+// Lazily creates (but doesn't start) this account's Compositor, wired up to
+// read its own already-republished public/<login> path (stable across
+// console/PC failover) and the shared music engine, and to publish to this
+// project's own composited/<accountId> MediaMTX path - which destinations
+// then read from instead of the raw source when compositorEnabled is set.
+function compositorFor(account) {
+  let compositor = compositors.get(account.twitchUserId);
+  if (!compositor) {
+    compositor = new Compositor({
+      accountId: account.twitchUserId,
+      pageUrl: `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/compositor`,
+      audioSourceUrl: `rtmp://127.0.0.1:1935/${safePathFor(account)}`,
+      outputUrl: `rtmp://127.0.0.1:1935/${compositedPathFor(account.twitchUserId)}`,
+      getMusicNow: () => getMusicNow(getAccount(account.twitchUserId)),
+      musicFilePathFor: (trackId) => {
+        const acc = getAccount(account.twitchUserId);
+        const track = acc?.musicTracks.find(t => t.id === trackId);
+        return track ? path.join(MUSIC_DIR, account.twitchUserId, track.filename) : null;
+      },
+    });
+    compositors.set(account.twitchUserId, compositor);
+  }
+  return compositor;
+}
+
+function startCompositorFor(account) {
+  if (!account.compositorEnabled) return;
+  compositorFor(account).start();
+}
+
+function stopCompositorFor(accountId) {
+  const compositor = compositors.get(accountId);
+  if (compositor) compositor.stop();
+}
 
 function outputFormatFor(url) {
   return url.startsWith("srt://") ? "mpegts" : "flv";
@@ -277,13 +335,19 @@ function stopOutputsFor(accountId) {
   activeFeedPath.delete(accountId);
   stopAllDestinationsFor(accountId);
   stopRepublish(accountId);
+  stopCompositorFor(accountId);
 }
 
 function startOutputsFor(account, pathName) {
   activeFeedPath.set(account.twitchUserId, pathName);
+  // Republish ALWAYS reads the raw source, compositor state notwithstanding -
+  // the compositor itself depends on this stable public/<login> path for its
+  // own WHEP video + audio tap (see compositorFor()).
   startRepublish(account, pathName);
+  if (account.compositorEnabled) startCompositorFor(account);
+  const destinationSource = destinationSourcePathFor(account);
   for (const dest of account.destinations) {
-    if (dest.enabled) startDestination(account, dest, pathName);
+    if (dest.enabled) startDestination(account, dest, destinationSource);
   }
 }
 
@@ -510,6 +574,7 @@ app.get("/auth/twitch/callback", async (req, res) => {
         musicTracks: [], // uploaded audio for the "music" overlay type
         musicSettings: defaultMusicSettings(),
         currentScene: null, // { kind: "builtin", name } | { kind: "custom", overlayId } | null - see /api/scenes/current
+        compositorEnabled: false, // opt-in: bake overlays into the actual outgoing video - see /api/compositor
         createdAt: new Date().toISOString(),
       };
       state.accounts[twitchUser.id] = account;
@@ -781,6 +846,30 @@ app.post("/api/scenes/current", requireAuth, (req, res) => {
   res.json({ ok: true, currentScene: scene });
 });
 
+// ---- Built-in compositor: bake overlays into the actual outgoing video ----
+// Opt-in, off by default - see dashboard/compositor.js for what this
+// actually spins up (a persistent headless Chromium + several ffmpeg
+// processes per account with it enabled).
+
+app.get("/api/compositor", requireAuth, (req, res) => {
+  res.json({ enabled: !!req.account.compositorEnabled });
+});
+
+app.post("/api/compositor", requireAuth, (req, res) => {
+  req.account.compositorEnabled = Boolean(req.body?.enabled);
+  saveState(state);
+
+  // Apply immediately if currently live, rather than waiting for the next
+  // reconnect - restart outputs against the same active path so
+  // destinations switch to/from the composited path right now.
+  const activePath = activeFeedPath.get(req.account.twitchUserId);
+  if (activePath) {
+    stopOutputsFor(req.account.twitchUserId);
+    startOutputsFor(req.account, activePath);
+  }
+  res.json({ ok: true, enabled: req.account.compositorEnabled });
+});
+
 function playbackUrlsFor(req, account) {
   if (!activeSourceFor(account.twitchUserId)) return null;
   const safePath = safePathFor(account);
@@ -876,7 +965,7 @@ app.put("/api/destinations/:id", requireAuth, requireOnboarded, (req, res) => {
   if (url !== undefined) {
     if (!DESTINATION_URL_RE.test(url)) return res.status(400).json({ error: DESTINATION_URL_HINT });
     dest.url = String(url).trim();
-    const activePathName = activeFeedPath.get(req.account.twitchUserId);
+    const activePathName = destinationSourcePathFor(req.account);
     if (activePathName) {
       stopDestination(req.account.twitchUserId, dest.id);
       startDestination(req.account, dest, activePathName);
@@ -902,7 +991,7 @@ app.post("/api/destinations/:id/toggle", requireAuth, requireOnboarded, (req, re
   dest.enabled = Boolean(req.body?.enabled);
   saveState(state);
 
-  const activePathName = activeFeedPath.get(req.account.twitchUserId);
+  const activePathName = destinationSourcePathFor(req.account);
   if (activePathName) {
     if (dest.enabled) startDestination(req.account, dest, activePathName); else stopDestination(req.account.twitchUserId, dest.id);
   }

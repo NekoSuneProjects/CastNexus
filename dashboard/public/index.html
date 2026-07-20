@@ -229,6 +229,10 @@
     background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 8px; cursor: pointer;
   }
   .scene-switch-btn.active { background: var(--accent); border-color: var(--accent); color: white; }
+  .tag-experimental {
+    font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+    color: #e6b800; border: 1px solid #e6b800; border-radius: 999px; padding: 2px 8px; margin-left: 8px;
+  }
   .input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: #0b0d11; color: var(--text); font-size: 0.9rem; font-family: inherit; }
   textarea.input { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; }
 </style>
@@ -401,6 +405,26 @@
       <div class="scene-switch-row" id="scene-switch-row"></div>
     </div>
 
+    <div class="overlay-card" style="margin-bottom:16px; border-color:#e6b800;">
+      <div class="overlay-card-head">
+        <span class="overlay-card-name">Built-in compositor <span class="tag-experimental">experimental</span></span>
+        <label class="switch" style="flex-shrink:0;">
+          <input type="checkbox" id="compositor-enabled-input">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <p class="hint" style="margin-top:0;">
+        Bakes the master scene + overlays directly into the video sent to
+        your destinations, instead of relying on OBS's own Browser Source
+        (matches how CacheStream composites its scenes). This spins up a
+        real headless-Chromium + FFmpeg pipeline per account while you're
+        live - heavier than the normal zero-cost passthrough, real CPU cost,
+        and not recommended on lower-end hardware (e.g. a Raspberry Pi 3).
+        Leave this off unless you specifically want overlays burned into the
+        stream for viewers who <em>aren't</em> watching through your own OBS.
+      </p>
+    </div>
+
     <div class="overlay-card" style="margin-bottom:16px;">
       <div class="overlay-card-head">
         <span class="overlay-card-name">Now Playing widget</span>
@@ -567,12 +591,13 @@ let lastOverlayConfig = null;
 
 async function loadOverlaysSection() {
   try {
-    const [cfg, overlaysRes, tracksRes, sceneRes, musicSettings] = await Promise.all([
+    const [cfg, overlaysRes, tracksRes, sceneRes, musicSettings, compositorRes] = await Promise.all([
       api("/api/overlays/config"),
       api("/api/overlays"),
       api("/api/music/tracks"),
       api("/api/scenes/current"),
       api("/api/music/settings"),
+      api("/api/compositor"),
     ]);
     lastOverlayConfig = cfg;
     renderBuiltins(cfg);
@@ -581,10 +606,29 @@ async function loadOverlaysSection() {
     renderSceneSwitcher(sceneRes.currentScene, overlaysRes.overlays);
     renderNowPlayingToggle(cfg.nowPlaying);
     renderMusicSettings(musicSettings);
+    el("compositor-enabled-input").checked = !!compositorRes.enabled;
   } catch (e) {
     console.error("failed to load overlays section:", e.message);
   }
 }
+
+el("compositor-enabled-input").addEventListener("change", async (e) => {
+  const enabled = e.target.checked;
+  if (enabled && !confirm(
+    "Enable the built-in compositor? This spins up a headless Chromium + " +
+    "FFmpeg pipeline for this account while live - real CPU cost, not " +
+    "recommended on low-end hardware. Continue?"
+  )) {
+    e.target.checked = false;
+    return;
+  }
+  try {
+    await api("/api/compositor", { method: "POST", body: JSON.stringify({ enabled }) });
+  } catch (err) {
+    alert(err.message);
+    e.target.checked = !enabled;
+  }
+});
 
 // ---- Master scene switcher ----
 
