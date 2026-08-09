@@ -317,6 +317,52 @@ docker compose logs -f dns
 docker compose logs -f intercept
 ```
 
+## 💖 Support NekoSuneProjects
+
+If you enjoy our projects, find them useful, or would like to help support the continued development of **NekoSuneProjects**, donations are greatly appreciated. ❤️
+
+Donations help support:
+
+* 🖥️ Server and hosting costs
+* 🌐 Domains and infrastructure
+* 🔧 Development and maintenance
+* 💾 Storage and backup costs
+* 🛡️ Security and infrastructure improvements
+* 🚀 New open-source projects and features
+* ☕ The time and effort that goes into maintaining our projects
+
+### 💰 Cryptocurrency Donations
+
+You can support **NekoSuneProjects** using any of the following cryptocurrencies:
+
+| Cryptocurrency                     | Donation Address                 |
+| ---------------------------------- | -------------------------------- |
+| 🟣 **Ethereum (ETH)**              | `0xAD41cD581FD06dB2589fd745BB179cA454a242ac`               |
+| 🟠 **Bitcoin (BTC)**               | `38qeqyTxgakcsb8swbo4g8EnovUSX4DDNp`               |
+| 🐕 **Dogecoin (DOGE)**             | `DGVT15yeHJnSFsAy6zWx3m6grXsK7FV9kk`              |
+| 🟢 **Hive (HIVE)**                 | `chisdealhd`  |
+| 🟡 **Hive Dollar (HBD)**           | `chisdealhd`  |
+| 🟢 **Steem (STEEM)**               | `chisdealhd` |
+| 🟡 **Steem Dollar (SBD)**          | `chisdealhd` |
+| 🔵 **Blurt (BLURT)**               | `chisdealhd` |
+| 🟣 **Solana (SOL)**                | `YOUR_SOL_ADDRESS`               |
+| 💵 **USD Coin (USDC)**             | `0xAD41cD581FD06dB2589fd745BB179cA454a242ac`              |
+| 💵 **USDT Coin (USDT)**             | `0xAD41cD581FD06dB2589fd745BB179cA454a242ac`             |
+| 🟡 **BNB**                         | `0xAD41cD581FD06dB2589fd745BB179cA454a242ac`               |
+| 🦇 **Basic Attention Token (BAT) ETH CHAIN** | `0x7196Ec85d9FB64f1a6EA94e0E7d7f25195416F17`               |
+| ⚡ **ZBD / Bitcoin Lightning**      | `nekosunevr`   |
+| **Github Sponsor** | `https://github.com/sponsors/NekoSuneProjects` |
+
+> ⚠️ **Important:** Always verify the cryptocurrency and network before sending a donation. Sending funds to an incorrect address or unsupported network may result in permanent loss of funds.
+
+### 🙏 Thank You
+
+Whether you contribute financially, report bugs, submit improvements, or simply use and share our projects, **thank you for supporting NekoSuneProjects**.
+
+Every contribution helps us continue building and maintaining open-source software for the community. ❤️
+
+**Thank you for supporting NekoSuneProjects!** 🌙
+
 ## Important
 
 This is a LAN-only prototype. Do not expose DNS port 53, RTMP port 1935,
