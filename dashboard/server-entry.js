@@ -1,5 +1,12 @@
 "use strict";
 
+const { installPublicRepublishSpawnPolicy } = require("./public-republish-runtime");
+
+// Install before server.js captures child_process.spawn. This upgrades the
+// legacy internal profile -> public FFmpeg relay to the stable live-RTMP
+// pipeline without affecting the Music worker's own FFmpeg processes.
+installPublicRepublishSpawnPolicy();
+
 const music24 = require("./music24");
 
 let closing = false;
