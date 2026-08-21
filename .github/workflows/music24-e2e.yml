@@ -1,0 +1,103 @@
+name: Music 24/7 End-to-End
+
+on:
+  pull_request:
+    paths:
+      - "dashboard/**"
+      - "config/mediamtx.yml"
+      - ".github/workflows/music24-e2e.yml"
+  push:
+    branches:
+      - main
+      - "fix/**"
+      - "feature/**"
+    paths:
+      - "dashboard/**"
+      - "config/mediamtx.yml"
+      - ".github/workflows/music24-e2e.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  music24-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Install CastNexus dashboard dependencies
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Install broadcast runtime tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Verify runtime tools
+        id: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+          CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
+          if [ -z "$CHROME" ]; then
+            echo "Chrome/Chromium is not installed on the runner." >&2
+            exit 1
+          fi
+          echo "chrome=$CHROME" >> "$GITHUB_OUTPUT"
+          "$CHROME" --version
+
+      - name: Start real MediaMTX
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name castnexus-music24-mediamtx \
+            --network host \
+            -v "$PWD/config/mediamtx.yml:/mediamtx.yml:ro" \
+            bluenviron/mediamtx:1.19.2 /mediamtx.yml
+
+          ready=0
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:9997/v3/paths/list >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep .25
+          done
+          if [ "$ready" -ne 1 ]; then
+            docker logs castnexus-music24-mediamtx || true
+            echo "MediaMTX Control API did not become ready." >&2
+            exit 1
+          fi
+
+      - name: RTMP readiness fallback test
+        run: node --test dashboard/music24-readiness.test.js
+
+      - name: Publish a real Music 24/7 profile end-to-end
+        env:
+          PUPPETEER_EXECUTABLE_PATH: ${{ steps.runtime.outputs.chrome }}
+          MEDIAMTX_API: http://127.0.0.1:9997
+          MEDIA_RTMP_ORIGIN: rtmp://127.0.0.1:1935
+          COMPOSITOR_DEBUG: "true"
+        run: node dashboard/music24-live.integration.js
+
+      - name: MediaMTX logs
+        if: always()
+        shell: bash
+        run: docker logs castnexus-music24-mediamtx || true
+
+      - name: Stop MediaMTX
+        if: always()
+        shell: bash
+        run: docker rm -f castnexus-music24-mediamtx >/dev/null 2>&1 || true

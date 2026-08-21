@@ -28,6 +28,9 @@ RUN python3 -m venv /opt/yt-dlp \
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV YTDLP_BIN=/usr/local/bin/yt-dlp
+# Chromium + FFmpeg can take tens of seconds to warm up on Raspberry Pi.
+# Older custom Compose files don't pass this variable, so keep a safe image default.
+ENV MUSIC24_START_TIMEOUT_MS=60000
 
 ARG CASTNEXUS_VERSION=0.0.0-dev
 ARG CASTNEXUS_CHANNEL=dev

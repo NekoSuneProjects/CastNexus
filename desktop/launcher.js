@@ -137,6 +137,9 @@ mtx.on("error",err=>{console.error(`[CastNexus] failed to start MediaMTX: ${err.
 mtx.on("exit",code=>{if(closing)return;console.error(`[CastNexus] MediaMTX exited (code ${code}), shutting down`);process.exit(1);});
 
 setTimeout(()=>{
+  // Desktop uses the same internal profile -> public RTMP policy as Docker.
+  // Install it before server.js captures child_process.spawn.
+  require("../dashboard/public-republish-runtime.js").installPublicRepublishSpawnPolicy();
   require("../dashboard/server.js");
   music24Service=require("../dashboard/music24.js");
   music24Service.startMusic24();
