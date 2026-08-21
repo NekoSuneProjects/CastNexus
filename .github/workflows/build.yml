@@ -75,14 +75,19 @@ jobs:
           pid=$!
           cleanup() { kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }
           trap cleanup EXIT
-          ready=0
+          http_ready=0
           for i in $(seq 1 20); do
-            if curl -fsS http://127.0.0.1:18090/ >/dev/null 2>&1; then ready=1; break; fi
+            if curl -fsS http://127.0.0.1:18090/ >/dev/null 2>&1; then http_ready=1; break; fi
+            sleep .25
+          done
+          worker_ready=0
+          for i in $(seq 1 20); do
+            if grep -Fq "[music24] watching" "$LOG"; then worker_ready=1; break; fi
             sleep .25
           done
           cat "$LOG"
-          test "$ready" -eq 1
-          grep -F "[music24] watching" "$LOG"
+          test "$http_ready" -eq 1
+          test "$worker_ready" -eq 1
 
       - name: Profile music isolation + dual-format smoke test
         run: node --test dashboard/profile-music.test.js
