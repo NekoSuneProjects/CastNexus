@@ -12,6 +12,7 @@ const AUDIO_MIME = {
   ".oga": "audio/ogg", ".wav": "audio/wav", ".flac": "audio/flac",
   ".opus": "audio/opus", ".weba": "audio/webm",
 };
+const IMAGE_MIME = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp" };
 
 function safeEmbedUrl(value) {
   try {
@@ -20,6 +21,17 @@ function safeEmbedUrl(value) {
   } catch {
     return "";
   }
+}
+
+function safeLocalSegment(value) {
+  return String(value || "legacy").replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 120) || "legacy";
+}
+
+function musicCoverPath(musicDir, account, profileId, track) {
+  if (!musicDir || !track?.coverFilename) return null;
+  const filename = path.basename(String(track.coverFilename));
+  if (filename !== track.coverFilename || !IMAGE_MIME[path.extname(filename).toLowerCase()]) return null;
+  return path.join(musicDir, safeLocalSegment(account.twitchUserId), safeLocalSegment(profileId), filename);
 }
 
 function profileStoreForAccount(account) {
@@ -169,6 +181,17 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn, subscribeE
     return withWidgets(fragment + profileSceneMusicFrame(account, sceneName), account.overlayConfig, account.twitchLogin);
   }
 
+  function sendTrackCover(res, account, profileId, musicState, trackId) {
+    const track = musicState?.tracks.find(t => t.id === trackId);
+    if (!track) return res.status(404).send("not found");
+    const filePath = musicCoverPath(musicDir, account, musicState.profileId || profileId, track);
+    if (!filePath || !fs.existsSync(filePath)) return res.status(404).send("not found");
+    const ext = path.extname(filePath).toLowerCase();
+    res.setHeader("Content-Type", IMAGE_MIME[ext] || "application/octet-stream");
+    res.setHeader("Cache-Control", "public, max-age=3600, immutable");
+    res.sendFile(filePath);
+  }
+
   router.get("/:login/starting-soon", (req, res) => {
     const account = accountOr404(req, res); if (!account) return;
     const cfg = account.overlayConfig?.startingSoon || {};
@@ -206,6 +229,12 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn, subscribeE
     res.setHeader("Content-Type", AUDIO_MIME[ext] || "application/octet-stream");
     res.sendFile(filePath);
   });
+  router.get("/:login/music/:profileId/cover/:trackId", (req, res) => {
+    const account = accountOr404(req, res); if (!account) return;
+    const musicState = getMusicState?.(account, req.params.profileId);
+    if (!musicState) return res.status(404).send("not found");
+    sendTrackCover(res, account, req.params.profileId, musicState, req.params.trackId);
+  });
   router.get("/:login/music/now.json", (req, res) => {
     const account = accountOr404(req, res); if (!account) return;
     const profileId = profileIdOrActive(account, null);
@@ -221,6 +250,13 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn, subscribeE
     const ext = path.extname(filePath).toLowerCase();
     res.setHeader("Content-Type", AUDIO_MIME[ext] || "application/octet-stream");
     res.sendFile(filePath);
+  });
+  router.get("/:login/music/cover/:trackId", (req, res) => {
+    const account = accountOr404(req, res); if (!account) return;
+    const profileId = profileIdOrActive(account, null);
+    const musicState = getMusicState?.(account, profileId);
+    if (!musicState) return res.status(404).send("not found");
+    sendTrackCover(res, account, profileId, musicState, req.params.trackId);
   });
   router.get("/:login/music/:profileId", (req, res) => {
     const account = accountOr404(req, res); if (!account) return;

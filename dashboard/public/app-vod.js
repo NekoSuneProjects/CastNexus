@@ -2,215 +2,120 @@
 
 PAGE_TITLES.reruns = "Reruns / VOD";
 
-const VOD_UI = { items: [], status: { state:"idle" }, timer: null };
+const VOD_UI = {
+  items: [], status:{ state:"idle" }, twitchVods:[], twitchCatalog:null,
+  twitchLive:{ live:false }, recordings:{ enabled:false, bytes:0, segments:[] },
+  youtube:{ configured:false, connected:false, quota:{} }, encoder:null, timer:null,
+};
 
 function vodFmtDuration(sec) {
-  sec = Math.max(0, Number(sec) || 0);
-  if (!sec) return "—";
-  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
-  return h ? `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}` : `${m}:${String(s).padStart(2,"0")}`;
+  sec=Math.max(0,Number(sec)||0); if(!sec)return "—";
+  const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=Math.floor(sec%60);
+  return h?`${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`:`${m}:${String(s).padStart(2,"0")}`;
 }
+function vodFmtBytes(bytes) {
+  let n=Math.max(0,Number(bytes)||0); const units=["B","KB","MB","GB","TB"]; let i=0;
+  while(n>=1024&&i<units.length-1){n/=1024;i++;}
+  return `${n>=100||i===0?n.toFixed(0):n>=10?n.toFixed(1):n.toFixed(2)} ${units[i]}`;
+}
+function vodFmtDate(value) { try{return new Date(value).toLocaleString();}catch{return String(value||"");} }
+function vodKindLabel(kind){return({upload:"Uploaded video",youtube:"YouTube VOD","twitch-vod":"Twitch VOD","twitch-live":"Twitch Live HLS"})[kind]||kind;}
+async function vodSafeApi(url,fallback){try{return await api(url);}catch(e){return{...fallback,error:e.message};}}
 
-function vodKindLabel(kind) {
-  return ({ upload:"Uploaded video", youtube:"YouTube VOD", "twitch-vod":"Twitch VOD", "twitch-live":"Twitch Live HLS" })[kind] || kind;
+function encoderCard() {
+  const enc=VOD_UI.encoder?.selected||S.status?.encoder?.selected||{};
+  const hardware=!!enc.hardware;
+  return `<div class="card-panel"><div class="card-title-row"><h3>Video encoder</h3><span class="badge ${hardware?"green":""}">${hardware?"GPU":"CPU FALLBACK"}</span></div><div class="stat-value" style="font-size:1.25rem">${esc(enc.label||"Detecting…")}</div><p>${hardware?`CastNexus probed ${esc(enc.encoder||"")} successfully and will use it for compositor, layout transcodes and compatible VOD normalization.`:"No usable hardware encoder was detected. CastNexus uses libx264 automatically."}</p>${enc.fallbackReason?`<div class="callout warn">${esc(enc.fallbackReason)}</div>`:""}<div class="stat-sub">Desktop uses the host FFmpeg/GPU. Docker needs the optional NVIDIA or /dev/dri GPU override so the container can see the device.</div></div>`;
 }
 
 function renderVodPage() {
-  const p = activeProfile();
-  const pcProfile = p?.mode === "pc";
+  const p=activeProfile(),pcProfile=p?.mode==="pc",own=S.status?.twitchLogin||"";
   return `
-    ${pageHead("PC RERUN ENGINE", "Reruns / VOD", "Relay an authorized Twitch live HLS feed, rerun Twitch/YouTube VODs, or upload video files as profile-scoped rerun assets.")}
+    ${pageHead("PC RERUN + RECORDING ENGINE","Reruns / VOD","Automatically discover your Twitch VODs, relay Twitch live HLS only when Twitch reports you live, record the CastNexus program with MediaMTX, and upload recordings to YouTube.")}
 
-    <section class="card-panel vod-program-card">
-      <div class="card-title-row">
-        <div><div class="eyebrow">PROGRAM SOURCE</div><h3>Rerun / relay status</h3></div>
-        <span id="vod-state-badge" class="badge">LOADING</span>
-      </div>
-      <div id="vod-status-body" class="callout">Checking rerun engine…</div>
-      ${pcProfile ? "" : `<div class="callout warn" style="margin-top:12px">This is a PC Streaming feature. You can manage the library here, but switch to a PC profile before starting a Twitch relay or VOD rerun.</div>`}
-      <div class="page-actions" style="margin-top:12px"><button id="vod-stop" class="btn btn-danger btn-sm">Stop rerun / relay</button></div>
-    </section>
-
-    <div class="section-title">Twitch live → HLS/m3u8 relay</div>
     <section class="grid grid-2">
-      <div class="card-panel">
-        <div class="card-title-row"><div><h3>Relay a Twitch live channel</h3><p>CastNexus resolves Twitch's current HLS/m3u8 source and republishes it into the normal restream fan-out.</p></div><span class="badge purple">TWITCH LIVE</span></div>
-        <label>Channel name or twitch.tv channel URL</label>
-        <input id="vod-twitch-live" placeholder="channelname or https://www.twitch.tv/channelname">
-        <label class="check-row" style="margin-top:12px"><input id="vod-twitch-auth" type="checkbox"> I own this broadcast or have permission to relay it outside Twitch.</label>
-        <div class="page-actions" style="margin-top:12px"><button id="vod-twitch-start" class="btn btn-primary" ${pcProfile ? "" : "disabled"}>Start Twitch relay</button></div>
-      </div>
-      <div class="card-panel">
-        <h3>How it routes</h3>
-        <p>Twitch HLS is resolved at start time, then FFmpeg publishes it to CastNexus's private <code>relay/&lt;pc-key&gt;</code> source. Your normal enabled destinations take over from there.</p>
-        <div class="callout">This does not use or expose your Twitch stream key, and it does not publish into the OBS <code>live/&lt;pc-key&gt;</code> path.</div>
-        <div class="callout warn" style="margin-top:10px">If OBS is already the active CastNexus source, the relay remains standby until that source stops. This prevents two publishers from fighting over the same destinations.</div>
-      </div>
+      <div class="card-panel vod-program-card"><div class="card-title-row"><div><div class="eyebrow">PROGRAM SOURCE</div><h3>Rerun / relay status</h3></div><span id="vod-state-badge" class="badge">LOADING</span></div><div id="vod-status-body" class="callout">Checking rerun engine…</div>${pcProfile?"":`<div class="callout warn" style="margin-top:12px">Switch to a PC Streaming profile before starting Twitch HLS or a VOD rerun.</div>`}<div class="page-actions" style="margin-top:12px"><button id="vod-stop" class="btn btn-danger btn-sm">Stop rerun / relay</button></div></div>
+      ${encoderCard()}
     </section>
 
-    <div class="section-title">Add remote VOD</div>
+    <div class="section-title">My Twitch live</div>
     <section class="grid grid-2">
-      <div class="card-panel">
-        <div class="card-title-row"><h3>Twitch / YouTube URL</h3><span class="badge cyan">REMOTE VOD</span></div>
-        <div class="form-grid">
-          <div><label>Source</label><select id="vod-remote-kind"><option value="twitch-vod">Twitch VOD / past broadcast</option><option value="youtube">YouTube video / past livestream</option></select></div>
-          <div class="full"><label>URL</label><input id="vod-remote-url" placeholder="https://www.twitch.tv/videos/... or https://www.youtube.com/watch?v=..."></div>
-          <label class="check-row full"><input id="vod-remote-auth" type="checkbox"> I own this content or have permission to rerun it.</label>
-        </div>
-        <div class="page-actions" style="margin-top:12px"><button id="vod-remote-add" class="btn btn-primary">Inspect & add to this profile</button></div>
-      </div>
-      <div class="card-panel">
-        <div class="card-title-row"><h3>YouTube network note</h3><span class="badge">YT-DLP NIGHTLY + DENO</span></div>
-        <p>CastNexus uses current yt-dlp nightly with Deno for YouTube extraction and does not request browser cookies.</p>
-        <div class="callout warn">YouTube frequently challenges hosting/VPS/datacenter IPs. For the most reliable URL resolving, run the desktop/self-hosted instance from a normal home/residential connection. A residential IP is not a guarantee, but it generally avoids many datacenter-specific challenges.</div>
-        <div class="callout" style="margin-top:10px">If YouTube responds with a sign-in, cookie or “not a bot” challenge, CastNexus stops there and tells you to upload the video manually instead of asking for browser cookies.</div>
-      </div>
+      <div class="card-panel"><div class="card-title-row"><div><h3>@${esc(own)} live status</h3><p>CastNexus asks Twitch Helix first. It only resolves the m3u8/HLS stream after Twitch reports the channel live.</p></div><span id="twitch-live-api-badge" class="badge">CHECKING</span></div><div id="twitch-live-api-body" class="callout">Checking Twitch…</div><input id="vod-twitch-live" value="${esc(own)}" placeholder="channel name"><label class="check-row" style="margin-top:12px"><input id="vod-twitch-auth" type="checkbox" checked> I own this broadcast or have permission to relay it outside Twitch.</label><div class="page-actions" style="margin-top:12px"><button id="vod-twitch-start" class="btn btn-primary" ${pcProfile?"":"disabled"}>Start HLS relay</button><button id="vod-live-refresh" class="btn btn-ghost">Refresh Twitch status</button></div></div>
+      <div class="card-panel"><h3>Safe live routing</h3><p>When Twitch says the channel is live, yt-dlp resolves the current Twitch HLS/m3u8 media URL. FFmpeg stream-copies that feed into <code>relay/&lt;pc-key&gt;</code>.</p><div class="callout">OBS remains on <code>live/&lt;pc-key&gt;</code>, so a Twitch relay cannot overwrite the OBS publisher path.</div><div class="callout warn" style="margin-top:10px">If Twitch reports the channel offline, CastNexus returns an offline error and does not start yt-dlp or FFmpeg.</div></div>
     </section>
 
-    <div class="section-title">Upload rerun video</div>
-    <section class="card-panel">
-      <div class="card-title-row"><div><h3>Profile VOD uploads</h3><p>These files exist only in the active profile's rerun library.</p></div><label class="btn btn-primary btn-sm" style="margin:0"><input id="vod-upload-input" type="file" accept="video/*" hidden>＋ Upload video</label></div>
-      <div class="callout">VOD uploads are deliberately separate from Overlay Studio backgrounds. Uploaded rerun videos are never offered as scene/background media.</div>
+    <div class="section-title">My Twitch cloud VODs</div>
+    <section class="card-panel"><div class="card-title-row"><div><h3>Past broadcasts from Twitch API</h3><p>Loaded automatically for the Twitch account you used to sign in. These live on Twitch and consume no CastNexus disk space.</p></div><button id="vod-twitch-vods-refresh" class="btn btn-ghost btn-sm">Refresh from Twitch</button></div><div id="twitch-vod-catalog" class="list-stack"><div class="empty-state"><strong>Loading Twitch VODs…</strong></div></div></section>
+
+    <div class="section-title">MediaMTX program recordings</div>
+    <section class="grid grid-2">
+      <div class="card-panel"><div class="card-title-row"><div><h3>Recording storage</h3><p>Records the stable <code>public/${esc(own)}</code> program path, regardless of whether the source is OBS, console or a rerun.</p></div><label class="toggle"><input id="recording-toggle" type="checkbox"><span class="toggle-track"></span></label></div><div class="grid grid-2" style="margin-top:12px"><div class="stat-card"><div class="stat-label">Disk used</div><div id="recording-bytes" class="stat-value">—</div></div><div class="stat-card"><div class="stat-label">Segments</div><div id="recording-count" class="stat-value">—</div></div></div><div class="callout" style="margin-top:12px">MediaMTX writes fMP4 segments to persistent CastNexus storage. Turning recording off stops future recording; existing files stay until you delete them.</div></div>
+      <div class="card-panel"><div class="card-title-row"><h3>YouTube upload</h3><span id="youtube-connect-badge" class="badge">LOADING</span></div><div id="youtube-status-body" class="callout">Checking YouTube API…</div><div class="page-actions" style="margin-top:12px"><button id="youtube-connect" class="btn btn-primary">Connect YouTube</button><button id="youtube-disconnect" class="btn btn-ghost btn-sm">Disconnect</button></div><div class="stat-sub" style="margin-top:10px">Uploads use the MediaMTX playback API to assemble MP4, then YouTube's resumable upload API. CastNexus keeps a local soft quota guard and optional account whitelist.</div></div>
     </section>
+    <section class="card-panel"><div class="card-title-row"><h3>Recorded VODs</h3><button id="recording-delete-all" class="btn btn-danger btn-sm">Delete all recordings</button></div><div id="recording-library" class="list-stack"><div class="empty-state"><strong>Loading recordings…</strong></div></div></section>
 
-    <div class="section-title">${esc(p?.name || "Profile")} VOD library</div>
-    <section class="card-panel"><div id="vod-library" class="list-stack"><div class="empty-state"><strong>Loading library…</strong></div></div></section>`;
+    <div class="section-title">Profile rerun library</div>
+    <section class="grid grid-2"><div class="card-panel"><div class="card-title-row"><h3>Add Twitch / YouTube URL</h3><span class="badge cyan">REMOTE VOD</span></div><div class="form-grid"><div><label>Source</label><select id="vod-remote-kind"><option value="twitch-vod">Twitch VOD URL</option><option value="youtube">YouTube video / past livestream</option></select></div><div class="full"><label>URL</label><input id="vod-remote-url" placeholder="https://www.twitch.tv/videos/... or https://www.youtube.com/watch?v=..."></div><label class="check-row full"><input id="vod-remote-auth" type="checkbox"> I own this content or have permission to rerun it.</label></div><div class="page-actions" style="margin-top:12px"><button id="vod-remote-add" class="btn btn-primary">Inspect & add</button></div></div>
+    <div class="card-panel"><div class="card-title-row"><div><h3>Upload rerun video</h3><p>Profile-scoped rerun files only; they are not Overlay Studio backgrounds.</p></div><label class="btn btn-primary btn-sm" style="margin:0"><input id="vod-upload-input" type="file" accept="video/*" hidden>＋ Upload video</label></div><div class="callout warn">YouTube URL resolving still uses yt-dlp nightly + Deno without browser cookies. If YouTube challenges the network/session, manual upload is the deterministic fallback.</div></div></section>
+    <section class="card-panel"><div class="card-title-row"><h3>${esc(p?.name||"Profile")} rerun assets</h3><span class="badge">LOCAL / REMOTE</span></div><div id="vod-library" class="list-stack"><div class="empty-state"><strong>Loading library…</strong></div></div></section>
+
+    <div class="section-title">YouTube upload jobs</div>
+    <section class="card-panel"><div id="youtube-job-library" class="list-stack"><div class="empty-state"><strong>No uploads yet</strong></div></div></section>`;
 }
 
-function vodItemRow(item) {
-  const remote = item.kind !== "upload";
-  return `<div class="list-row vod-item">
-    <div class="track-icon">▶</div>
-    <div class="item-main"><strong>${esc(item.title || "Untitled VOD")}</strong><span>${esc(vodKindLabel(item.kind))}${item.uploader ? ` · ${esc(item.uploader)}` : ""} · ${vodFmtDuration(item.durationS)}</span></div>
-    <span class="badge ${item.kind === "youtube" ? "cyan" : item.kind === "twitch-vod" ? "purple" : ""}">${esc(vodKindLabel(item.kind).toUpperCase())}</span>
-    <div class="item-actions">
-      <button class="btn btn-primary btn-sm" data-vod-play="${esc(item.id)}">Play</button>
-      <button class="btn btn-ghost btn-sm" data-vod-loop="${esc(item.id)}">Loop</button>
-      ${remote && item.url ? `<button class="icon-button" data-open-url="${esc(item.url)}" title="Open source">↗</button>` : ""}
-      <button class="icon-button" data-vod-delete="${esc(item.id)}" title="Delete">×</button>
-    </div>
-  </div>`;
+function vodItemRow(item){const remote=item.kind!=="upload";return `<div class="list-row vod-item"><div class="track-icon">▶</div><div class="item-main"><strong>${esc(item.title||"Untitled VOD")}</strong><span>${esc(vodKindLabel(item.kind))}${item.uploader?` · ${esc(item.uploader)}`:""} · ${vodFmtDuration(item.durationS)}${item.sizeBytes?` · ${vodFmtBytes(item.sizeBytes)}`:""}</span></div><span class="badge ${item.kind==="youtube"?"cyan":item.kind==="twitch-vod"?"purple":""}">${esc(vodKindLabel(item.kind).toUpperCase())}</span><div class="item-actions"><button class="btn btn-primary btn-sm" data-vod-play="${esc(item.id)}">Play</button><button class="btn btn-ghost btn-sm" data-vod-loop="${esc(item.id)}">Loop</button>${remote&&item.url?`<button class="icon-button" data-open-url="${esc(item.url)}" title="Open source">↗</button>`:""}<button class="icon-button" data-vod-delete="${esc(item.id)}" title="Delete">×</button></div></div>`;}
+function twitchVodRow(item){return `<div class="list-row"><div class="track-icon">T</div><div class="item-main"><strong>${esc(item.title||"Twitch VOD")}</strong><span>${vodFmtDate(item.publishedAt||item.createdAt)} · ${vodFmtDuration(item.durationS)} · ${Number(item.viewCount||0).toLocaleString()} views</span></div><span class="badge purple">TWITCH CLOUD</span><div class="item-actions"><button class="btn btn-primary btn-sm" data-twitch-vod-play="${esc(item.id)}">Play</button><button class="btn btn-ghost btn-sm" data-twitch-vod-loop="${esc(item.id)}">Loop</button>${item.url?`<button class="icon-button" data-open-url="${esc(item.url)}">↗</button>`:""}</div></div>`;}
+function recordingRow(seg){const start=String(seg.start||"");return `<div class="list-row"><div class="track-icon">●</div><div class="item-main"><strong>${esc(vodFmtDate(start))}</strong><span>${vodFmtDuration(seg.duration)} · MediaMTX fMP4 recording</span></div><span class="badge green">RECORDED</span><div class="item-actions"><button class="btn btn-ghost btn-sm" data-recording-play="${esc(start)}">Play</button><button class="btn btn-primary btn-sm" data-recording-youtube="${esc(start)}">YouTube</button><button class="icon-button" data-recording-delete="${esc(start)}" title="Delete">×</button></div></div>`;}
+
+async function loadVodUi({refreshTwitch=false}={}) {
+  const p=activeProfile(); if(!p?.id||S.page!=="reruns")return;
+  const [library,status,catalog,live,recs,youtube,encoder]=await Promise.all([
+    vodSafeApi(`/api/vod/items?profileId=${encodeURIComponent(p.id)}`,{items:[]}),
+    vodSafeApi("/api/vod/status",{state:"idle"}),
+    vodSafeApi(`/api/vod/twitch-vods${refreshTwitch?"?refresh=1":""}`,{items:[]}),
+    vodSafeApi("/api/vod/twitch-live/status",{live:false}),
+    vodSafeApi("/api/recordings",{enabled:false,bytes:0,segments:[]}),
+    vodSafeApi("/api/youtube/status",{configured:false,connected:false,quota:{}}),
+    vodSafeApi("/api/system/encoder",{selected:{label:"CPU · x264",hardware:false}}),
+  ]);
+  VOD_UI.items=library.items||[];VOD_UI.status=status||{state:"idle"};VOD_UI.twitchCatalog=catalog;VOD_UI.twitchVods=catalog.items||[];VOD_UI.twitchLive=live;VOD_UI.recordings=recs;VOD_UI.youtube=youtube;VOD_UI.encoder=encoder;paintVodUi();
 }
 
-async function loadVodUi() {
-  const p = activeProfile();
-  if (!p?.id || S.page !== "reruns") return;
-  try {
-    const [library, status] = await Promise.all([
-      api(`/api/vod/items?profileId=${encodeURIComponent(p.id)}`),
-      api("/api/vod/status"),
-    ]);
-    VOD_UI.items = library.items || [];
-    VOD_UI.status = status || { state:"idle" };
-    paintVodUi();
-  } catch (e) {
-    const body = $("#vod-status-body"); if (body) body.textContent = e.message;
-  }
+function paintVodUi(){
+  if(S.page!=="reruns")return;const st=VOD_UI.status||{state:"idle"};
+  const badge=$("#vod-state-badge"),body=$("#vod-status-body");if(badge){const live=st.state==="playing";badge.className=`badge ${live?"green":st.state==="error"?"":"purple"}`;badge.textContent=String(st.state||"idle").toUpperCase();}if(body)body.innerHTML=st.state==="idle"?"No Twitch relay or VOD rerun is active.":`<strong>${esc(st.title||"Rerun")}</strong> · ${esc(vodKindLabel(st.kind||""))}${st.loop?" · LOOP":""}${st.encoder?` · ${esc(st.encoder)}`:""}${st.error?`<br><span class="form-error">${esc(st.error)}</span>`:""}`;
+  const lb=$("#twitch-live-api-badge"),lbody=$("#twitch-live-api-body");if(lb){lb.className=`badge ${VOD_UI.twitchLive.live?"green":""}`;lb.textContent=VOD_UI.twitchLive.error?"API ERROR":VOD_UI.twitchLive.live?"LIVE":"OFFLINE";}if(lbody)lbody.innerHTML=VOD_UI.twitchLive.error?`<span class="form-error">${esc(VOD_UI.twitchLive.error)}</span>`:VOD_UI.twitchLive.live?`<strong>${esc(VOD_UI.twitchLive.stream?.title||"Live on Twitch")}</strong><br>${esc(VOD_UI.twitchLive.stream?.gameName||"")} · ${Number(VOD_UI.twitchLive.stream?.viewerCount||0).toLocaleString()} viewers`:"Twitch reports this account is offline. HLS relay will stay disabled until it goes live.";
+  const tcat=$("#twitch-vod-catalog");if(tcat){tcat.innerHTML=VOD_UI.twitchVods.length?VOD_UI.twitchVods.map(twitchVodRow).join(""):`<div class="empty-state"><strong>${VOD_UI.twitchCatalog?.error?esc(VOD_UI.twitchCatalog.error):"No Twitch past broadcasts found"}</strong>${VOD_UI.twitchCatalog?.stale?"Showing stale cache was not possible.":"Twitch archive VODs appear here automatically after login."}</div>`;wireTwitchCatalog();}
+  const toggle=$("#recording-toggle");if(toggle)toggle.checked=!!VOD_UI.recordings.enabled;if($("#recording-bytes"))$("#recording-bytes").textContent=vodFmtBytes(VOD_UI.recordings.bytes);if($("#recording-count"))$("#recording-count").textContent=String(VOD_UI.recordings.segmentCount??VOD_UI.recordings.segments?.length??0);const rlib=$("#recording-library");if(rlib){rlib.innerHTML=(VOD_UI.recordings.segments||[]).length?VOD_UI.recordings.segments.map(recordingRow).join(""):`<div class="empty-state"><strong>No MediaMTX recordings yet</strong>Enable recording, then start a CastNexus program source.</div>`;wireRecordingLibrary();}
+  const y=VOD_UI.youtube||{},yb=$("#youtube-connect-badge"),ybody=$("#youtube-status-body");if(yb){yb.className=`badge ${y.connected&&y.quota?.allowed?"green":""}`;yb.textContent=!y.configured?"NOT CONFIGURED":!y.quota?.allowed?"NOT WHITELISTED":y.connected?"CONNECTED":"DISCONNECTED";}if(ybody){const q=y.quota||{};ybody.innerHTML=!y.configured?"Set YouTube OAuth client ID/secret/redirect URI on the CastNexus host.":!q.allowed?"This CastNexus/Twitch account is not in the configured YouTube upload whitelist.":`${y.connected?"YouTube OAuth connected.":"Connect YouTube to upload MediaMTX recordings."}<br><strong>Local upload guard:</strong> ${q.used||0}/${q.softLimit||90} attempts today · ${q.remaining??"—"} remaining.`;}const connect=$("#youtube-connect");if(connect)connect.style.display=y.configured&&!y.connected?"inline-flex":"none";const disconnect=$("#youtube-disconnect");if(disconnect)disconnect.style.display=y.connected?"inline-flex":"none";
+  const jobs=[...(y.jobs||[]),...(y.history||[]).map(h=>({state:"completed",title:h.title,result:{url:h.url,id:h.id},completedAt:h.completedAt}))];const jlib=$("#youtube-job-library");if(jlib)jlib.innerHTML=jobs.length?jobs.slice(0,20).map(j=>`<div class="list-row"><div class="track-icon">Y</div><div class="item-main"><strong>${esc(j.title||"YouTube upload")}</strong><span>${esc(String(j.state||"completed").toUpperCase())}${j.error?` · ${esc(j.error)}`:""}</span></div><span class="badge ${j.state==="completed"?"green":j.state==="error"?"":"cyan"}">${esc(j.state||"completed")}</span>${j.result?.url?`<button class="btn btn-ghost btn-sm" data-open-url="${esc(j.result.url)}">Open YouTube</button>`:""}</div>`).join(""):`<div class="empty-state"><strong>No YouTube recording uploads yet</strong>Use the YouTube button next to a MediaMTX recording.</div>`;
+  const library=$("#vod-library");if(library){library.innerHTML=VOD_UI.items.length?VOD_UI.items.map(vodItemRow).join(""):`<div class="empty-state"><strong>No profile rerun assets</strong>Add a remote URL or upload a video file.</div>`;wireVodLibrary();}
+  $$('[data-open-url]',$("#page-content")).forEach(b=>b.onclick=()=>openUrl(b.dataset.openUrl));
 }
 
-function paintVodUi() {
-  if (S.page !== "reruns") return;
-  const badge = $("#vod-state-badge"), body = $("#vod-status-body"), library = $("#vod-library");
-  const st = VOD_UI.status || { state:"idle" };
-  if (badge) {
-    const live = st.state === "playing";
-    badge.className = `badge ${live ? "green" : st.state === "error" ? "" : "purple"}`;
-    badge.textContent = String(st.state || "idle").toUpperCase();
-  }
-  if (body) {
-    body.innerHTML = st.state === "idle"
-      ? "No Twitch relay or VOD rerun is active."
-      : `<strong>${esc(st.title || "Rerun")}</strong> · ${esc(vodKindLabel(st.kind || ""))}${st.loop ? " · LOOP" : ""}${st.error ? `<br><span class="form-error">${esc(st.error)}</span>` : ""}`;
-  }
-  if (library) {
-    library.innerHTML = VOD_UI.items.length ? VOD_UI.items.map(vodItemRow).join("") : `<div class="empty-state"><strong>No rerun videos in this profile</strong>Add a Twitch/YouTube VOD URL or upload a video file.</div>`;
-    wireVodLibrary();
-  }
+function wireVodLibrary(){const root=$("#vod-library");if(!root)return;$$('[data-vod-play]',root).forEach(b=>b.onclick=()=>startVodItem(b.dataset.vodPlay,false));$$('[data-vod-loop]',root).forEach(b=>b.onclick=()=>startVodItem(b.dataset.vodLoop,true));$$('[data-vod-delete]',root).forEach(b=>b.onclick=async()=>{const item=VOD_UI.items.find(i=>i.id===b.dataset.vodDelete);if(!item)return;if(!(await confirmAction("Delete VOD",`Remove ${item.title} from ${activeProfile()?.name||"this profile"}'s rerun library?`)))return;try{await api(`/api/vod/items/${encodeURIComponent(item.id)}?profileId=${encodeURIComponent(activeProfile().id)}`,{method:"DELETE"});toast("VOD removed","success");await loadVodUi();}catch(e){toast(e.message,"error");}});}
+function wireTwitchCatalog(){const root=$("#twitch-vod-catalog");if(!root)return;$$('[data-twitch-vod-play]',root).forEach(b=>b.onclick=()=>startTwitchCatalogVod(b.dataset.twitchVodPlay,false));$$('[data-twitch-vod-loop]',root).forEach(b=>b.onclick=()=>startTwitchCatalogVod(b.dataset.twitchVodLoop,true));}
+function wireRecordingLibrary(){const root=$("#recording-library");if(!root)return;$$('[data-recording-play]',root).forEach(b=>b.onclick=()=>openUrl(`${location.origin}/api/recordings/play?start=${encodeURIComponent(b.dataset.recordingPlay)}`));$$('[data-recording-delete]',root).forEach(b=>b.onclick=async()=>{if(!(await confirmAction("Delete recording",`Permanently delete the MediaMTX recording from ${vodFmtDate(b.dataset.recordingDelete)}?`)))return;try{await api("/api/recordings/segment",{method:"DELETE",body:{start:b.dataset.recordingDelete}});toast("Recording deleted","success");await loadVodUi();}catch(e){toast(e.message,"error");}});$$('[data-recording-youtube]',root).forEach(b=>b.onclick=()=>openYoutubeRecordingModal(b.dataset.recordingYoutube));}
+
+async function startVodItem(itemId,loop){const p=activeProfile();if(p?.mode!=="pc")return toast("Switch to a PC Streaming profile before starting a rerun","error");try{await api("/api/vod/play",{method:"POST",body:{profileId:p.id,itemId,loop}});toast(loop?"VOD loop starting":"VOD rerun starting","success");await loadVodUi();}catch(e){toast(e.message,"error");}}
+async function startTwitchCatalogVod(videoId,loop){const p=activeProfile();if(p?.mode!=="pc")return toast("Switch to a PC Streaming profile first","error");try{await api(`/api/vod/twitch-vods/${encodeURIComponent(videoId)}/play`,{method:"POST",body:{profileId:p.id,loop}});toast(loop?"Twitch VOD loop starting":"Twitch VOD starting","success");await loadVodUi();}catch(e){toast(e.message,"error");}}
+
+function openYoutubeRecordingModal(start){const seg=(VOD_UI.recordings.segments||[]).find(s=>s.start===start);const defaultTitle=`${S.status?.displayName||S.status?.twitchLogin||"CastNexus"} · ${vodFmtDate(start)}`;modalShell("Upload recording to YouTube","YOUTUBE DATA API",`<p class="muted">MediaMTX will assemble this recording as MP4, then CastNexus uses a resumable YouTube upload. Recording: ${esc(vodFmtDate(start))} · ${vodFmtDuration(seg?.duration)}</p><div class="form-grid"><div class="full"><label>Title</label><input id="yt-up-title" value="${esc(defaultTitle)}"></div><div class="full"><label>Description</label><textarea id="yt-up-desc" placeholder="Stream rerun / VOD description"></textarea></div><div><label>Privacy</label><select id="yt-up-privacy"><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select></div><div><label>Category ID</label><input id="yt-up-category" value="20"></div><div class="full"><label>Tags (comma separated)</label><input id="yt-up-tags" value="CastNexus, livestream, VOD"></div></div><div class="callout warn" style="margin-top:12px">Google may force uploads from unverified API projects to Private regardless of this selection until the project passes the required audit.</div><div id="modal-error" class="form-error"></div>`,`<button class="btn btn-ghost" data-modal-close>Cancel</button><button id="yt-up-send" class="btn btn-primary">Queue upload</button>`,true);$$('[data-modal-close]').forEach(b=>b.onclick=closeModal);$("#yt-up-send").onclick=async()=>{const btn=$("#yt-up-send");btn.disabled=true;try{const r=await api("/api/youtube/upload-recording",{method:"POST",body:{start,title:$("#yt-up-title").value.trim(),description:$("#yt-up-desc").value,privacyStatus:$("#yt-up-privacy").value,categoryId:$("#yt-up-category").value.trim(),tags:$("#yt-up-tags").value}});closeModal();toast(`YouTube upload queued (${r.jobId.slice(0,8)})`,"success");await loadVodUi();}catch(e){$("#modal-error").textContent=e.message;btn.disabled=false;}};}
+
+function wireVodPage(){const p=activeProfile();
+  $("#vod-stop")?.addEventListener("click",async()=>{try{await api("/api/vod/stop",{method:"POST"});toast("Rerun stopped","success");await loadVodUi();}catch(e){toast(e.message,"error");}});
+  $("#vod-twitch-start")?.addEventListener("click",async()=>{const channel=$("#vod-twitch-live").value.trim(),authorized=$("#vod-twitch-auth").checked;try{await api("/api/vod/twitch-live",{method:"POST",body:{profileId:p?.id,channel,authorized}});toast("Twitch HLS relay starting","success");await loadVodUi();}catch(e){toast(e.message,"error");}});
+  $("#vod-live-refresh")?.addEventListener("click",()=>loadVodUi());
+  $("#vod-twitch-vods-refresh")?.addEventListener("click",async()=>{toast("Refreshing Twitch VOD catalog…");await loadVodUi({refreshTwitch:true});toast("Twitch VOD catalog refreshed","success");});
+  $("#recording-toggle")?.addEventListener("change",async e=>{const checked=e.target.checked;e.target.disabled=true;try{await api("/api/recordings/toggle",{method:"POST",body:{enabled:checked}});toast(checked?"MediaMTX recording enabled":"MediaMTX recording disabled","success");await loadVodUi();}catch(err){e.target.checked=!checked;toast(err.message,"error");}finally{e.target.disabled=false;}});
+  $("#recording-delete-all")?.addEventListener("click",async()=>{if(!(await confirmAction("Delete all recordings",`Permanently delete every MediaMTX recording for @${S.status?.twitchLogin}?`,"Delete all")))return;try{await api("/api/recordings/all",{method:"DELETE"});toast("All recordings deleted","success");await loadVodUi();}catch(e){toast(e.message,"error");}});
+  $("#youtube-connect")?.addEventListener("click",()=>{location.href="/auth/youtube";});$("#youtube-disconnect")?.addEventListener("click",async()=>{try{await api("/api/youtube/disconnect",{method:"POST"});toast("YouTube disconnected","success");await loadVodUi();}catch(e){toast(e.message,"error");}});
+  $("#vod-remote-add")?.addEventListener("click",async()=>{const kind=$("#vod-remote-kind").value,url=$("#vod-remote-url").value.trim(),authorized=$("#vod-remote-auth").checked,button=$("#vod-remote-add");button.disabled=true;button.textContent="Inspecting…";try{await api("/api/vod/remote",{method:"POST",body:{profileId:p?.id,kind,url,authorized}});$("#vod-remote-url").value="";toast("VOD added to this profile","success");await loadVodUi();}catch(e){toast(e.message,"error");}finally{button.disabled=false;button.textContent="Inspect & add";}});
+  const upload=$("#vod-upload-input");if(upload)upload.onchange=async()=>{const file=upload.files?.[0];if(!file)return;const fd=new FormData();fd.append("file",file);try{toast(`Uploading ${file.name}…`);await api(`/api/vod/upload?profileId=${encodeURIComponent(p?.id||"")}`,{method:"POST",body:fd});toast("Rerun video uploaded","success");await loadVodUi();}catch(e){toast(e.message,"error");}upload.value="";};
+  loadVodUi();clearInterval(VOD_UI.timer);VOD_UI.timer=setInterval(()=>{if(S.page==="reruns")loadVodUi();},10000);
 }
 
-function wireVodLibrary() {
-  const root = $("#vod-library"); if (!root) return;
-  $$('[data-open-url]',root).forEach(b => b.onclick = () => openUrl(b.dataset.openUrl));
-  $$('[data-vod-play]',root).forEach(b => b.onclick = () => startVodItem(b.dataset.vodPlay, false));
-  $$('[data-vod-loop]',root).forEach(b => b.onclick = () => startVodItem(b.dataset.vodLoop, true));
-  $$('[data-vod-delete]',root).forEach(b => b.onclick = async () => {
-    const item = VOD_UI.items.find(i => i.id === b.dataset.vodDelete); if (!item) return;
-    if (!(await confirmAction("Delete VOD", `Remove ${item.title} from ${activeProfile()?.name || "this profile"}'s rerun library?`))) return;
-    try {
-      await api(`/api/vod/items/${encodeURIComponent(item.id)}?profileId=${encodeURIComponent(activeProfile().id)}`, { method:"DELETE" });
-      toast("VOD removed", "success"); await loadVodUi();
-    } catch (e) { toast(e.message, "error"); }
-  });
-}
-
-async function startVodItem(itemId, loop) {
-  const p = activeProfile();
-  if (p?.mode !== "pc") return toast("Switch to a PC Streaming profile before starting a rerun", "error");
-  try {
-    await api("/api/vod/play", { method:"POST", body:{ profileId:p.id, itemId, loop } });
-    toast(loop ? "VOD loop starting" : "VOD rerun starting", "success");
-    await loadVodUi();
-  } catch (e) { toast(e.message, "error"); }
-}
-
-function wireVodPage() {
-  const p = activeProfile();
-  $("#vod-stop")?.addEventListener("click", async () => {
-    try { await api("/api/vod/stop", { method:"POST" }); toast("Rerun stopped", "success"); await loadVodUi(); } catch (e) { toast(e.message,"error"); }
-  });
-  $("#vod-twitch-start")?.addEventListener("click", async () => {
-    const channel = $("#vod-twitch-live").value.trim(), authorized = $("#vod-twitch-auth").checked;
-    try {
-      await api("/api/vod/twitch-live", { method:"POST", body:{ profileId:p?.id, channel, authorized } });
-      toast("Twitch HLS relay starting", "success"); await loadVodUi();
-    } catch (e) { toast(e.message,"error"); }
-  });
-  $("#vod-remote-add")?.addEventListener("click", async () => {
-    const kind = $("#vod-remote-kind").value, url = $("#vod-remote-url").value.trim(), authorized = $("#vod-remote-auth").checked;
-    const button = $("#vod-remote-add"); button.disabled = true; button.textContent = "Inspecting…";
-    try {
-      await api("/api/vod/remote", { method:"POST", body:{ profileId:p?.id, kind, url, authorized } });
-      $("#vod-remote-url").value = ""; toast("VOD added to this profile", "success"); await loadVodUi();
-    } catch (e) { toast(e.message,"error"); }
-    finally { button.disabled = false; button.textContent = "Inspect & add to this profile"; }
-  });
-  const upload = $("#vod-upload-input");
-  if (upload) upload.onchange = async () => {
-    const file = upload.files?.[0]; if (!file) return;
-    const fd = new FormData(); fd.append("file", file);
-    try {
-      toast(`Uploading ${file.name}…`);
-      await api(`/api/vod/upload?profileId=${encodeURIComponent(p?.id || "")}`, { method:"POST", body:fd });
-      toast("Rerun video uploaded", "success"); await loadVodUi();
-    } catch (e) { toast(e.message,"error"); }
-    upload.value = "";
-  };
-  loadVodUi();
-  clearInterval(VOD_UI.timer);
-  VOD_UI.timer = setInterval(() => { if (S.page === "reruns") loadVodUi(); }, 2000);
-}
-
-function injectVodNav() {
-  const nav = $("#main-nav");
-  if (!nav || $("[data-page='reruns']", nav)) return;
-  const btn = document.createElement("button");
-  btn.className = "nav-item";
-  btn.dataset.page = "reruns";
-  btn.innerHTML = "<span>▶</span>Reruns / VOD";
-  const profiles = $("[data-page='profiles']", nav);
-  nav.insertBefore(btn, profiles || null);
-}
-
-const baseRenderPageForVod = renderPage;
-renderPage = function castNexusRenderPageWithVod() {
-  clearInterval(VOD_UI.timer); VOD_UI.timer = null;
-  if (S.page !== "reruns") return baseRenderPageForVod();
-  const root = $("#page-content"); if (!root) return;
-  $("#page-title").textContent = PAGE_TITLES.reruns;
-  $$(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.page === "reruns"));
-  stopMusicNowPolling();
-  root.innerHTML = renderVodPage();
-  wireVodPage();
-};
-
+function injectVodNav(){const nav=$("#main-nav");if(!nav||$("[data-page='reruns']",nav))return;const btn=document.createElement("button");btn.className="nav-item";btn.dataset.page="reruns";btn.innerHTML="<span>▶</span>Reruns / VOD";const profiles=$("[data-page='profiles']",nav);nav.insertBefore(btn,profiles||null);}
+const baseRenderPageForVod=renderPage;
+renderPage=function castNexusRenderPageWithVod(){clearInterval(VOD_UI.timer);VOD_UI.timer=null;if(S.page!=="reruns")return baseRenderPageForVod();const root=$("#page-content");if(!root)return;$("#page-title").textContent=PAGE_TITLES.reruns;$$('.nav-item').forEach(b=>b.classList.toggle("active",b.dataset.page==="reruns"));stopMusicNowPolling();root.innerHTML=renderVodPage();wireVodPage();};
 injectVodNav();

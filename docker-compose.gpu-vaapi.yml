@@ -1,0 +1,13 @@
+# Optional Linux Intel/AMD GPU access for CastNexus.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu-vaapi.yml up -d
+#
+# Requires a working /dev/dri device on the host. CastNexus probes the encoder
+# before using it and falls back to CPU x264 if the hardware encode fails.
+services:
+  dashboard:
+    devices:
+      - /dev/dri:/dev/dri
+  music24:
+    devices:
+      - /dev/dri:/dev/dri

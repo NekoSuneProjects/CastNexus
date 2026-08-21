@@ -19,6 +19,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./config/mediamtx.yml:/mediamtx.yml:ro
+      - ./dashboard/data/recordings:/recordings
 
   dashboard:
     image: ghcr.io/nekosuneprojects/castnexus-dashboard:${CASTNEXUS_IMAGE_TAG:-latest}
@@ -35,19 +36,26 @@ services:
       TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID:-}
       TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET:-}
       TWITCH_REDIRECT_URI: ${TWITCH_REDIRECT_URI:-}
+      MEDIAMTX_API: http://127.0.0.1:9997
+      MEDIAMTX_PLAYBACK: http://127.0.0.1:9996
+      RECORDINGS_DIR: /app/data/recordings
       RECONNECT_GRACE_MS: ${RECONNECT_GRACE_MS:-3600000}
       VOD_MAX_GB: ${VOD_MAX_GB:-20}
-      VOD_VIDEO_ENCODER: ${VOD_VIDEO_ENCODER:-libx264}
+      CASTNEXUS_VIDEO_ENCODER: ${CASTNEXUS_VIDEO_ENCODER:-auto}
+      VAAPI_DEVICE: ${VAAPI_DEVICE:-/dev/dri/renderD128}
       VOD_X264_PRESET: ${VOD_X264_PRESET:-veryfast}
       VOD_VIDEO_BITRATE: ${VOD_VIDEO_BITRATE:-6000k}
       VOD_VIDEO_MAXRATE: ${VOD_VIDEO_MAXRATE:-6500k}
       VOD_VIDEO_BUFSIZE: ${VOD_VIDEO_BUFSIZE:-12000k}
       VOD_AUDIO_BITRATE: ${VOD_AUDIO_BITRATE:-160k}
       VOD_FPS: ${VOD_FPS:-30}
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
+      YOUTUBE_REDIRECT_URI: ${YOUTUBE_REDIRECT_URI:-}
+      YOUTUBE_UPLOAD_ALLOWLIST: ${YOUTUBE_UPLOAD_ALLOWLIST:-}
+      YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT: ${YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT:-90}
       CASTNEXUS_CHANNEL: ${CASTNEXUS_CHANNEL:-stable}
 
-  # Always-available CastNexus Music 24/7 sidecar. It stays idle until an
-  # active Music profile exists and at least one track is uploaded.
   music24:
     image: ghcr.io/nekosuneprojects/castnexus-dashboard:${CASTNEXUS_IMAGE_TAG:-latest}
     container_name: castnexus-music24
@@ -63,12 +71,12 @@ services:
       DASHBOARD_PORT: ${DASHBOARD_PORT:-8090}
       STATE_FILE: /app/data/state.json
       MUSIC_DIR: /app/data/music
+      CASTNEXUS_VIDEO_ENCODER: ${CASTNEXUS_VIDEO_ENCODER:-auto}
+      VAAPI_DEVICE: ${VAAPI_DEVICE:-/dev/dri/renderD128}
       MUSIC24_POLL_MS: ${MUSIC24_POLL_MS:-2000}
       MUSIC24_NOW_POLL_MS: ${MUSIC24_NOW_POLL_MS:-750}
       CASTNEXUS_CHANNEL: ${CASTNEXUS_CHANNEL:-stable}
 
-  # --- Console mode only. This catches the real Twitch ingest address when
-  # the console receives it directly over HTTPS instead of a fresh DNS lookup.
   intercept:
     image: ghcr.io/nekosuneprojects/castnexus-intercept:${CASTNEXUS_IMAGE_TAG:-latest}
     container_name: castnexus-intercept

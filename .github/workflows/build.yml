@@ -45,9 +45,11 @@ jobs:
           node --check dashboard/music-engine.js
           node --check dashboard/profile-music.js
           node --check dashboard/profile-vod.js
+          node --check dashboard/gpu-encoder.js
+          node --check dashboard/twitch-api.js
+          node --check dashboard/mediamtx-recordings.js
+          node --check dashboard/youtube-upload.js
           node --check dashboard/destination-output.js
-          node --check dashboard/profile-music.test.js
-          node --check dashboard/profile-vod.test.js
           node --check dashboard/compositor.js
           node --check desktop/launcher.js
           for f in dashboard/public/app-*.js dashboard/public/build-info.js; do node --check "$f"; done
@@ -57,6 +59,18 @@ jobs:
 
       - name: Twitch HLS + VOD resolver smoke test
         run: node --test dashboard/profile-vod.test.js
+
+      - name: GPU encoder selection smoke test
+        run: node --test dashboard/gpu-encoder.test.js
+
+      - name: Twitch API discovery smoke test
+        run: node --test dashboard/twitch-api.test.js
+
+      - name: MediaMTX recording storage smoke test
+        run: node --test dashboard/mediamtx-recordings.test.js
+
+      - name: YouTube upload guard smoke test
+        run: node --test dashboard/youtube-upload.test.js
 
   docker:
     runs-on: ubuntu-latest
@@ -79,6 +93,36 @@ jobs:
             CASTNEXUS_REVISION=${{ github.sha }}
           cache-from: type=gha,scope=castnexus-ci-${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=castnexus-ci-${{ matrix.service }}
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate base and optional GPU compose files
+        shell: bash
+        env:
+          PI_IP: 127.0.0.1
+          TARGET_IPS: 127.0.0.2
+          GATEWAY_IP: 127.0.0.1
+        run: |
+          docker compose config >/dev/null
+          docker compose -f docker-compose.yml -f docker-compose.gpu-vaapi.yml config >/dev/null
+          docker compose -f docker-compose.yml -f docker-compose.gpu-nvidia.yml config >/dev/null
+
+      - name: Boot-test pinned MediaMTX recording config
+        shell: bash
+        run: |
+          set +e
+          timeout 5s docker run --rm \
+            -v "$PWD/config/mediamtx.yml:/mediamtx.yml:ro" \
+            bluenviron/mediamtx:1.19.2 /mediamtx.yml >mediamtx-boot.log 2>&1
+          code=$?
+          set -e
+          cat mediamtx-boot.log
+          if [ "$code" -ne 124 ]; then
+            echo "MediaMTX exited before the timeout; config is invalid or failed to boot (exit $code)." >&2
+            exit 1
+          fi
 
   desktop-smoke:
     runs-on: ubuntu-latest

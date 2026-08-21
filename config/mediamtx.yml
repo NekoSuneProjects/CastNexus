@@ -1,6 +1,6 @@
 logLevel: info
 
-# ingest from the PS5 (via ARP-spoof/DNAT intercept and/or DNS hijack)
+# ingest from the console/OBS/internal relay
 rtmp: yes
 rtmpAddress: :1935
 
@@ -25,8 +25,26 @@ webrtcAdditionalHosts:
 srt: yes
 srtAddress: :8890
 
+# Local-only Control API. CastNexus uses this to toggle recording on exact
+# public/<twitch-login> paths and to enumerate/delete recording segments.
 api: yes
 apiAddress: 127.0.0.1:9997
+
+# Local-only recording playback API. The dashboard authenticates users then
+# proxies MP4 playback/downloads instead of exposing this port publicly.
+playback: yes
+playbackAddress: 127.0.0.1:9996
+
+# Recording is OFF by default. CastNexus hot-patches only the authenticated
+# user's stable public/<login> path when they enable recording in the Studio.
+pathDefaults:
+  record: no
+  recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordPartDuration: 1s
+  recordMaxPartSize: 50M
+  recordSegmentDuration: 1h
+  recordDeleteAfter: 0s
 
 paths:
   all_others:
