@@ -7,18 +7,18 @@
 // the profile's previous compositor preference and therefore returns to the live
 // PC / console / music program.
 (function installProgramSceneRouting() {
-  const originalSetScene = globalThis.setScene;
-  const originalRenderPage = globalThis.renderPage;
-  const originalActivateProfile = globalThis.activateProfile;
-  const originalSnapshotActiveProfile = globalThis.snapshotActiveProfile;
+  const originalSetScene = setScene;
+  const originalRenderPage = renderPage;
+  const originalActivateProfile = activateProfile;
+  const originalSnapshotActiveProfile = snapshotActiveProfile;
 
   if (typeof originalSetScene !== "function" || typeof originalRenderPage !== "function") return;
 
-  function hasProgramScene(scene = globalThis.S?.scene) {
+  function hasProgramScene(scene = S?.scene) {
     return Boolean(scene && scene.kind && scene.kind !== "none");
   }
 
-  function preferredCompositor(profile = globalThis.activeProfile?.()) {
+  function preferredCompositor(profile = activeProfile?.()) {
     return Boolean(profile && profile.mode !== "music" && profile.compositorEnabled);
   }
 
@@ -33,22 +33,20 @@
   }
 
   async function setRuntimeCompositor(enabled) {
-    const result = await globalThis.api("/api/compositor", {
+    const result = await api("/api/compositor", {
       method: "POST",
       body: { enabled: Boolean(enabled) },
     });
-    globalThis.S.compositor = {
-      ...(globalThis.S.compositor || {}),
+    S.compositor = {
+      ...(S.compositor || {}),
       enabled: Boolean(result?.enabled),
     };
-    return globalThis.S.compositor.enabled;
+    return S.compositor.enabled;
   }
 
   function syncProgramUi() {
-    const state = globalThis.S;
-    if (!state) return;
-    const profile = globalThis.activeProfile?.();
-    const forcedScene = hasProgramScene(state.scene);
+    const profile = activeProfile?.();
+    const forcedScene = hasProgramScene(S.scene);
     const root = document.getElementById("page-content");
 
     // A program scene needs the normal compositor for PC / console / rerun
@@ -61,18 +59,18 @@
       toggle.title = "The active Program Scene temporarily requires the compositor";
     }
 
-    if (state.page !== "overview" || !state.status?.twitchLogin) return;
+    if (S.page !== "overview" || !S.status?.twitchLogin) return;
     const preview = root?.querySelector(".preview-frame iframe");
     if (!preview) return;
 
     let desired = null;
-    const login = encodeURIComponent(state.status.twitchLogin);
+    const login = encodeURIComponent(S.status.twitchLogin);
     if (profile?.mode === "music") {
       // Music 24/7 renders built-in program scenes in its own worker. The
       // master scene is the closest zero-latency dashboard representation while
       // that worker swaps its output path.
       if (forcedScene) desired = `/overlay/${login}/master`;
-    } else if (forcedScene || state.compositor?.enabled) {
+    } else if (forcedScene || S.compositor?.enabled) {
       // The compositor browser page is the same visual stack that is encoded
       // into the outgoing composited/<account> RTMP path.
       desired = `/overlay/${login}/compositor`;
@@ -84,7 +82,7 @@
   }
 
   // Keep the Overview preview honest after every normal page render.
-  globalThis.renderPage = function castNexusRenderPageWithProgramPreview() {
+  renderPage = function castNexusRenderPageWithProgramPreview() {
     const result = originalRenderPage.apply(this, arguments);
     queueMicrotask(syncProgramUi);
     return result;
@@ -94,22 +92,22 @@
   // profile. During a temporary Program Scene override that would accidentally
   // save "true" forever. Preserve the user's stored preference instead.
   if (typeof originalSnapshotActiveProfile === "function") {
-    globalThis.snapshotActiveProfile = async function castNexusSnapshotProgramSafe(showToast = false) {
-      const profile = globalThis.activeProfile?.();
+    snapshotActiveProfile = async function castNexusSnapshotProgramSafe(showToast = false) {
+      const profile = activeProfile?.();
       const savedPreference = profile?.compositorEnabled;
-      const forcedScene = hasProgramScene(globalThis.S?.scene);
+      const forcedScene = hasProgramScene(S?.scene);
       await originalSnapshotActiveProfile.call(this, showToast);
       if (forcedScene && profile && profile.mode !== "music" && profile.compositorEnabled !== savedPreference) {
         profile.compositorEnabled = savedPreference;
-        await globalThis.saveProfileStore();
+        await saveProfileStore();
       }
     };
   }
 
-  globalThis.setScene = async function castNexusSetProgramScene(scene) {
+  setScene = async function castNexusSetProgramScene(scene) {
     const requested = scene?.kind && scene.kind !== "none" ? scene : { kind: "none" };
     const nextScene = requested.kind === "none" ? null : requested;
-    const profile = globalThis.activeProfile?.();
+    const profile = activeProfile?.();
 
     try {
       // PC / console / rerun scenes must be baked into the outgoing program.
@@ -119,29 +117,29 @@
         await setRuntimeCompositor(true);
       }
 
-      await globalThis.api("/api/scenes/current", { method: "POST", body: requested });
-      globalThis.S.scene = nextScene;
+      await api("/api/scenes/current", { method: "POST", body: requested });
+      S.scene = nextScene;
 
       if (profile) {
         profile.scene = nextScene;
-        await globalThis.saveProfileStore();
+        await saveProfileStore();
       }
 
       if (profile?.mode !== "music" && !nextScene) {
         await setRuntimeCompositor(preferredCompositor(profile));
-      } else if (profile?.mode === "music" && globalThis.S.compositor?.enabled) {
+      } else if (profile?.mode === "music" && S.compositor?.enabled) {
         // Music24 already owns the video/audio compositor. Keeping the normal
         // live compositor enabled here would duplicate the music audio path.
         await setRuntimeCompositor(false);
       }
 
-      await globalThis.fetchCore();
-      globalThis.renderPage();
-      globalThis.toast(nextScene ? `Program: ${sceneLabel(nextScene)}` : "Program: Live capture", "success");
+      await fetchCore();
+      renderPage();
+      toast(nextScene ? `Program: ${sceneLabel(nextScene)}` : "Program: Live capture", "success");
     } catch (error) {
-      globalThis.toast(error.message, "error");
-      await globalThis.fetchCore().catch(() => {});
-      globalThis.renderPage();
+      toast(error.message, "error");
+      await fetchCore().catch(() => {});
+      renderPage();
     }
   };
 
@@ -149,27 +147,27 @@
   // Extend it so Music 24/7 gets its saved Program Scene too, and make sure a
   // saved PC/console scene re-applies its temporary compositor override.
   if (typeof originalActivateProfile === "function") {
-    globalThis.activateProfile = async function castNexusActivateProfileWithProgramScene(profileId) {
+    activateProfile = async function castNexusActivateProfileWithProgramScene(profileId) {
       await originalActivateProfile.call(this, profileId);
-      const profile = globalThis.activeProfile?.();
+      const profile = activeProfile?.();
       if (!profile || profile.id !== profileId) return;
 
       const savedScene = profile.scene && profile.scene.kind !== "none" ? profile.scene : null;
       try {
         if (profile.mode === "music") {
-          await globalThis.api("/api/scenes/current", {
+          await api("/api/scenes/current", {
             method: "POST",
             body: savedScene || { kind: "none" },
           });
-          globalThis.S.scene = savedScene;
-          if (globalThis.S.compositor?.enabled) await setRuntimeCompositor(false);
+          S.scene = savedScene;
+          if (S.compositor?.enabled) await setRuntimeCompositor(false);
         } else if (savedScene) {
           await setRuntimeCompositor(true);
         }
-        await globalThis.fetchCore();
-        globalThis.renderPage();
+        await fetchCore();
+        renderPage();
       } catch (error) {
-        globalThis.toast(error.message, "error");
+        toast(error.message, "error");
       }
     };
   }
