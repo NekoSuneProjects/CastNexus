@@ -29,6 +29,27 @@
     return `<div class="${className} music-art-tile" data-track-cover="${esc(track?.id || "")}">${artworkInner(track, options)}</div>`;
   }
 
+  function fitOneLine(el, minPx) {
+    if (!el || !el.clientWidth) return;
+    el.style.fontSize = "";
+    const computed = getComputedStyle(el);
+    let size = Number.parseFloat(computed.fontSize) || 14;
+    const floor = Math.min(size, Number(minPx) || 8);
+    el.style.fontSize = `${size}px`;
+    while (size > floor && el.scrollWidth > el.clientWidth + 1) {
+      size = Math.max(floor, size - .5);
+      el.style.fontSize = `${size}px`;
+    }
+  }
+
+  function fitNowCardText(card) {
+    if (!card) return;
+    requestAnimationFrame(() => {
+      fitOneLine(card.querySelector(".music-now-copy strong"), 10);
+      fitOneLine(card.querySelector(".music-now-artist"), 9);
+    });
+  }
+
   window.trackRow = function trackRow(t) {
     return `<div class="list-row track-item" data-track-id="${esc(t.id)}">${artworkTile(t,"track-icon",{localAvailable:Boolean(t.coverFilename)})}<div class="item-main"><strong>${esc(t.title || "Untitled")}</strong><span>${esc(t.artist || "Unknown artist")} · ${fmtDuration(t.durationS)}</span></div><span class="badge">${Math.max(0,Math.round((t.sizeBytes||0)/1024/1024*10)/10)} MB</span><div class="item-actions"><button class="icon-button" data-edit-track="${esc(t.id)}">✎</button><button class="icon-button" data-delete-track="${esc(t.id)}">×</button></div></div>`;
   };
@@ -66,6 +87,7 @@
           const localAvailable = Boolean(now.track.coverEmbedded || now.track.coverSource);
           card.innerHTML = `${artworkTile(now.track,"music-cover",{localAvailable})}<div class="music-now-copy"><strong>${esc(now.track.title||"Untitled")}</strong><div class="muted music-now-artist">${esc(now.track.artist||"Unknown artist")}</div><div class="progress"><span style="width:${pct}%"></span></div><div class="stat-sub">${fmtDuration(now.positionS)} / ${fmtDuration(now.durationS)}</div></div>`;
         }
+        fitNowCardText(card);
 
         // Remote artwork resolution is asynchronous. Refresh just the track
         // metadata occasionally and upgrade thumbnail slots in place instead
@@ -86,6 +108,8 @@
     S.musicNowTimer = setInterval(tick,1000);
   };
 
+  window.addEventListener("resize", () => fitNowCardText(document.querySelector("#music-now-card")));
+
   const style = document.createElement("style");
   style.textContent = `
     .music-art-tile{position:relative;overflow:hidden;isolation:isolate;background:linear-gradient(145deg,rgba(124,92,255,.15),rgba(56,232,255,.08));}
@@ -95,6 +119,7 @@
     .music-art-primary{z-index:2;}
     .track-icon.music-art-tile{padding:0;color:transparent;}
     .music-now-large .music-cover.music-art-tile{height:88px;flex:0 0 88px;padding:0;}
+    .music-now-copy strong,.music-now-artist{text-overflow:clip!important;}
     @media(max-width:540px){.music-now-large .music-cover.music-art-tile{height:68px;flex-basis:68px;}}
   `;
   document.head.appendChild(style);

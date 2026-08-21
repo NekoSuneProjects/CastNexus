@@ -8,6 +8,8 @@ const express = require("express");
 const multer = require("multer");
 const { safeSegment, profileById, activeProfileFor } = require("./profile-music");
 const { detectEncoder, globalEncoderArgs, videoEncoderArgs } = require("./gpu-encoder");
+const { liveInputArgs, liveMuxArgs, stableAudioArgs } = require("./rtmp-pipeline");
+const { profilePublishPath, RELAY_APP } = require("./profile-rtmp");
 
 const REMOTE_KINDS = new Set(["youtube", "twitch-vod"]);
 const VIDEO_MIME_PREFIXES = ["video/"];
@@ -82,6 +84,12 @@ function ytDlpBase(kind) {
   return args;
 }
 
+function remoteFormatFor(kind) {
+  if (kind === "youtube") return "bestvideo[height<=1080]+bestaudio/best[height<=1080]";
+  if (kind === "twitch-live" || kind === "twitch-vod") return "best[acodec!=none][vcodec!=none]/best";
+  return "best";
+}
+
 async function inspectRemote(kind, url) {
   try {
     const { stdout } = await capture(YTDLP_BIN, [...ytDlpBase(kind), "--dump-single-json", "--skip-download", url], { timeoutMs: 60_000 });
@@ -99,9 +107,8 @@ async function inspectRemote(kind, url) {
 }
 
 async function resolveRemote(kind, url) {
-  const format = kind === "youtube" ? "bestvideo[height<=1080]+bestaudio/best[height<=1080]" : "best";
   try {
-    const { stdout } = await capture(YTDLP_BIN, [...ytDlpBase(kind), "-g", "-f", format, url], { timeoutMs: 60_000 });
+    const { stdout } = await capture(YTDLP_BIN, [...ytDlpBase(kind), "-g", "-f", remoteFormatFor(kind), url], { timeoutMs: 60_000 });
     const urls = stdout.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     if (!urls.length) throw new Error("resolver returned no playable URL");
     return urls.slice(0, 2);
@@ -112,23 +119,34 @@ async function resolveRemote(kind, url) {
 
 function ffmpegArgsFor(source, outputUrl, options = {}) {
   const selected = options.forceCpu ? { id:"libx264", encoder:"libx264", hardware:false, label:"CPU · x264" } : detectEncoder();
-  const args = ["-hide_banner", "-loglevel", "warning", "-nostats", ...globalEncoderArgs(selected)];
   const isLive = source.kind === "twitch-live";
+  const isTwitch = source.kind === "twitch-live" || source.kind === "twitch-vod";
   const inputs = source.inputs || [];
+  const args = ["-hide_banner", "-loglevel", "warning", "-nostats"];
+  if (!isTwitch) args.push(...globalEncoderArgs(selected));
 
   for (const input of inputs) {
     if (!isLive) args.push("-re");
+    if (isTwitch) args.push(...liveInputArgs());
     args.push("-i", input);
   }
 
   args.push("-map", "0:v:0");
-  if (inputs.length > 1) args.push("-map", "1:a:0?");
-  else args.push("-map", "0:a:0?");
+  if (inputs.length > 1) args.push("-map", isTwitch ? "1:a:0" : "1:a:0?");
+  else args.push("-map", isTwitch ? "0:a:0" : "0:a:0?");
 
-  // Twitch's HLS/VOD output is already stream-compatible most of the time, so
-  // preserve it without a pointless encode. Uploaded/YouTube media is normalized.
-  if (source.kind === "twitch-live" || source.kind === "twitch-vod") {
-    args.push("-c:v", "copy", "-c:a", "copy");
+  // Twitch HLS is kept copy-light for video, but audio is always decoded and
+  // rebuilt as a continuous AAC stereo stream before MediaMTX sees it. Some
+  // Twitch HLS relays looked fine on video while copied audio disappeared or
+  // arrived with unusable timestamps at downstream YouTube RTMP ingest.
+  if (isTwitch) {
+    args.push(
+      "-c:v", "copy",
+      ...stableAudioArgs({
+        bitrate:process.env.VOD_RELAY_AUDIO_BITRATE || "160k",
+        sampleRate:process.env.VOD_RELAY_AUDIO_RATE || "48000",
+      })
+    );
   } else {
     const fps = Number(process.env.VOD_FPS || 30);
     let vf = "scale=1920:1080:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2";
@@ -151,7 +169,7 @@ function ffmpegArgsFor(source, outputUrl, options = {}) {
     );
   }
 
-  args.push("-f", "flv", "-flvflags", "no_duration_filesize", outputUrl);
+  args.push(...liveMuxArgs(outputUrl, "flv"), outputUrl);
   return args;
 }
 
@@ -206,6 +224,7 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
       startedAt:session.startedAt,
       error:session.error || null,
       encoder:session.encoder || null,
+      relayPath:session.relayPath || null,
     };
   }
 
@@ -233,8 +252,10 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
 
   async function startResolved(account, info, source, meta) {
     await stop(account.twitchUserId);
-    const outputUrl = `${rtmpOrigin}/relay/${encodeURIComponent(account.pcKey)}`;
-    const encoder = (source.kind === "twitch-live" || source.kind === "twitch-vod") ? { label:"Stream copy", hardware:false } : detectEncoder();
+    const relayPath = profilePublishPath(info.profile, RELAY_APP);
+    if (!relayPath) throw new Error("profile RTMP key is unavailable; reload the profile and try again");
+    const outputUrl = `${rtmpOrigin}/${relayPath}`;
+    const encoder = (source.kind === "twitch-live" || source.kind === "twitch-vod") ? { label:"Video copy · AAC audio", hardware:false } : detectEncoder();
     const session = {
       state:"starting",
       profileId:info.profile.id,
@@ -245,6 +266,7 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
       startedAt:new Date().toISOString(),
       error:null,
       encoder:encoder.label,
+      relayPath,
       child:null,
       manualStop:false,
       forceCpu:false,
@@ -470,8 +492,8 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
   return {
     createApiRouter, bucketFor, diskDir, publicStatus, stop, playItem, startTwitchLive,
     refreshTwitchCatalog, getTwitchCatalog, playTwitchCatalogItem, ownLiveStatus,
-    normalizeRemoteUrl, resolveRemote, inspectRemote, ffmpegArgsFor,
+    normalizeRemoteUrl, resolveRemote, inspectRemote, ffmpegArgsFor, remoteFormatFor,
   };
 }
 
-module.exports = { createProfileVodService, normalizeRemoteUrl, isYouTubeChallenge, ffmpegArgsFor };
+module.exports = { createProfileVodService, normalizeRemoteUrl, isYouTubeChallenge, ffmpegArgsFor, remoteFormatFor };

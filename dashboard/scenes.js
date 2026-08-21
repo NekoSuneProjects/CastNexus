@@ -297,15 +297,32 @@ function nowPlayingWidget(login, corner) {
   const pos = CORNER_CSS[corner] || CORNER_CSS.br;
   return `
     <style>
-      #cs-now-playing { position:fixed; ${pos} z-index:20; display:none; gap:12px; align-items:center; min-width:230px; max-width:340px; padding:11px 15px; border:1px solid rgba(0,240,255,.22); border-radius:10px; color:#fff; background:rgba(5,6,10,.72); backdrop-filter:blur(7px); box-shadow:0 0 28px rgba(0,240,255,.10); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
-      #cs-now-playing .np-icon { font-size:26px; color:#00f0ff; text-shadow:0 0 12px rgba(0,240,255,.6); }
+      #cs-now-playing { position:fixed; ${pos} z-index:20; display:none; gap:12px; align-items:center; min-width:230px; width:min(340px,calc(100vw - 48px)); max-width:340px; box-sizing:border-box; padding:11px 15px; border:1px solid rgba(0,240,255,.22); border-radius:10px; color:#fff; background:rgba(5,6,10,.72); backdrop-filter:blur(7px); box-shadow:0 0 28px rgba(0,240,255,.10); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
+      #cs-now-playing .np-icon { flex:0 0 auto; font-size:26px; color:#00f0ff; text-shadow:0 0 12px rgba(0,240,255,.6); }
+      #cs-now-playing .np-copy { min-width:0; flex:1 1 auto; overflow:hidden; }
       #cs-now-playing .np-k { font-size:9px; letter-spacing:.28em; text-transform:uppercase; color:#8aa0ad; }
-      #cs-now-playing .np-t { font-weight:750; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-      #cs-now-playing .np-a { font-size:11px; color:#c8c8d0; }
+      #cs-now-playing .np-t { width:100%; font-weight:750; font-size:13px; line-height:1.14; overflow:hidden; text-overflow:clip; white-space:nowrap; }
+      #cs-now-playing .np-a { width:100%; font-size:11px; line-height:1.2; color:#c8c8d0; overflow:hidden; text-overflow:clip; white-space:nowrap; }
     </style>
-    <aside id="cs-now-playing"><div class="np-icon">&#9835;</div><div style="min-width:0"><div class="np-k">Now playing</div><div id="cs-np-title" class="np-t">&mdash;</div><div id="cs-np-artist" class="np-a"></div></div></aside>
+    <aside id="cs-now-playing"><div class="np-icon">&#9835;</div><div class="np-copy"><div class="np-k">Now playing</div><div id="cs-np-title" class="np-t">&mdash;</div><div id="cs-np-artist" class="np-a"></div></div></aside>
     <script>
       (function () {
+        function fitOneLine(el, maxPx, minPx) {
+          if (!el || !el.clientWidth) return;
+          var size = Number(maxPx) || parseFloat(getComputedStyle(el).fontSize) || 13;
+          var floor = Math.min(size, Number(minPx) || 8);
+          el.style.fontSize = size + "px";
+          while (size > floor && el.scrollWidth > el.clientWidth + 1) {
+            size = Math.max(floor, size - .5);
+            el.style.fontSize = size + "px";
+          }
+        }
+        function fitMeta() {
+          requestAnimationFrame(function () {
+            fitOneLine(document.getElementById("cs-np-title"), 13, 8);
+            fitOneLine(document.getElementById("cs-np-artist"), 11, 7);
+          });
+        }
         function poll() {
           fetch(${JSON.stringify(`/overlay/${encodeURIComponent(login)}/music/now.json`)}, { cache: "no-store" })
             .then(function (r) { return r.json(); })
@@ -316,10 +333,12 @@ function nowPlayingWidget(login, corner) {
               el.style.display = "flex";
               document.getElementById("cs-np-title").textContent = now.track.title || "Untitled";
               document.getElementById("cs-np-artist").textContent = now.track.artist || "";
+              fitMeta();
             })
             .catch(function () {});
         }
         poll();
+        window.addEventListener("resize", fitMeta);
         window.__rnNowPlayingTimer && clearInterval(window.__rnNowPlayingTimer);
         window.__rnNowPlayingTimer = setInterval(poll, 2000);
       })();
