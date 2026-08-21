@@ -93,13 +93,22 @@ function openBuiltinModal(key) {
   const cfg = S.overlayConfig[key] || {};
   const common = `<div><label>Title</label><input id="bi-title" value="${esc(cfg.title || "")}"></div><div><label>Accent</label><input id="bi-accent" type="color" value="${esc(cfg.accent || "#7c5cff")}"></div><div class="full"><label>Subtitle</label><input id="bi-subtitle" value="${esc(cfg.subtitle || "")}"></div><div class="full"><label>Background image URL</label><input id="bi-bg" value="${esc(cfg.backgroundUrl || "")}" placeholder="https://…"></div>`;
   let extra = "";
-  if (key === "startingSoon") extra = `<div><label>Countdown target</label><input id="bi-countdown" type="datetime-local" value="${cfg.countdownAt ? esc(new Date(cfg.countdownAt).toISOString().slice(0,16)) : ""}"></div><div><label>Countdown label</label><input id="bi-countdown-label" value="${esc(cfg.countdownLabel || "Live in")}"></div>`;
+  if (key === "startingSoon") extra = `
+    <div><label>Countdown from now (minutes)</label><input id="bi-countdown-minutes" type="number" min="0" max="1440" step="1" value="${Number(cfg.countdownMinutes || 0)}" placeholder="10"></div>
+    <div><label>Countdown label</label><input id="bi-countdown-label" value="${esc(cfg.countdownLabel || "Live in")}"></div>
+    <div class="full"><label>Or fixed countdown target</label><input id="bi-countdown" type="datetime-local" value="${cfg.countdownAt ? esc(new Date(cfg.countdownAt).toISOString().slice(0,16)) : ""}"></div>
+    <div class="callout full">Set minutes to <strong>10</strong> and every time you switch to Starting Soon, CastNexus starts a fresh 10-minute countdown. Set it to 0 to use the fixed target instead.</div>`;
   if (key === "ending") extra = `<div><label>Twitch</label><input id="bi-twitch" value="${esc(cfg.twitch || "")}"></div><div><label>YouTube</label><input id="bi-youtube" value="${esc(cfg.youtube || "")}"></div><div><label>X / Twitter</label><input id="bi-twitter" value="${esc(cfg.twitter || "")}"></div><div><label>Discord</label><input id="bi-discord" value="${esc(cfg.discord || "")}"></div>`;
   modalShell(`Edit ${key === "startingSoon" ? "Starting Soon" : key === "brb" ? "BRB" : "Ending"}`, "BUILT-IN SCENE", `<div class="form-grid">${common}${extra}</div><div id="modal-error" class="form-error"></div>`, `<button class="btn btn-ghost" data-modal-close>Cancel</button><button class="btn btn-primary" id="bi-save">Save scene</button>`, true);
   $$('[data-modal-close]').forEach(b => b.onclick = closeModal);
   $("#bi-save").onclick = async () => {
     const next = { title:$("#bi-title").value.trim(), subtitle:$("#bi-subtitle").value.trim(), accent:$("#bi-accent").value, backgroundUrl:$("#bi-bg").value.trim() };
-    if (key === "startingSoon") { const v=$("#bi-countdown").value; next.countdownAt=v ? new Date(v).toISOString() : ""; next.countdownLabel=$("#bi-countdown-label").value.trim(); }
+    if (key === "startingSoon") {
+      const v=$("#bi-countdown").value;
+      next.countdownMinutes=Math.max(0,Math.min(1440,Number($("#bi-countdown-minutes").value)||0));
+      next.countdownAt=v ? new Date(v).toISOString() : "";
+      next.countdownLabel=$("#bi-countdown-label").value.trim();
+    }
     if (key === "ending") for (const k of ["twitch","youtube","twitter","discord"]) next[k] = $("#bi-"+k).value.trim();
     try { await api("/api/overlays/config", { method:"POST", body:{ [key]:next } }); closeModal(); await refreshAndRender(); toast("Scene saved", "success"); } catch(e){ $("#modal-error").textContent=e.message; }
   };
