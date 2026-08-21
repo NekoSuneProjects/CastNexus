@@ -1,0 +1,18 @@
+services:
+  dns:
+    profiles: ["vps-console"]
+    environment:
+      DNS_PUBLIC_MODE: "true"
+      DNS_REDIRECT_IP: ${PUBLIC_IP:?PUBLIC_IP is required for VPS console mode}
+      DNS_REDIRECT_IPV6: ${PUBLIC_IPV6:-}
+      DNS_ALLOWED_CLIENTS: ${VPS_ALLOWED_CLIENTS:-}
+      DNS_ALLOW_ANY: ${VPS_ALLOW_ANY:-false}
+
+  intercept:
+    profiles: ["vps-console"]
+    environment:
+      INTERCEPT_MODE: vps
+      VPS_ALLOWED_CLIENTS: ${VPS_ALLOWED_CLIENTS:-}
+      VPS_ALLOW_ANY: ${VPS_ALLOW_ANY:-false}
+      VPS_RTMP_PORT: ${VPS_RTMP_PORT:-1935}
+      VPS_RTMP_WAIT_SECONDS: ${VPS_RTMP_WAIT_SECONDS:-60}

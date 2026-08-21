@@ -1,6 +1,9 @@
 {
-  "name": "nekosune-ps5-dns",
+  "name": "castnexus-dns",
   "private": true,
+  "scripts": {
+    "test": "node --test server.test.js"
+  },
   "dependencies": {
     "dns-packet": "5.6.1"
   }

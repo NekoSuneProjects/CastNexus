@@ -1,16 +1,22 @@
 services:
-  # --- Console mode only: DNS hijack + ARP-spoof/DNAT intercept.
-  # Start these helpers with: docker compose --profile console up -d
+  # --- Console capture helpers.
+  # LAN: docker compose --profile console up -d
+  # VPS/public: use docker-compose.vps.yml with --profile vps-console.
   dns:
     image: ghcr.io/nekosuneprojects/castnexus-dns:${CASTNEXUS_IMAGE_TAG:-latest}
     container_name: castnexus-dns
     restart: unless-stopped
     network_mode: host
-    profiles: ["console"]
+    profiles: ["console", "vps-console"]
     environment:
       PI_IP: ${PI_IP}
-      DNS_UPSTREAM: 1.1.1.1
-      DNS_LOG_ALL: "true"
+      DNS_REDIRECT_IP: ${DNS_REDIRECT_IP:-}
+      DNS_REDIRECT_IPV6: ${DNS_REDIRECT_IPV6:-}
+      DNS_PUBLIC_MODE: ${DNS_PUBLIC_MODE:-false}
+      DNS_ALLOWED_CLIENTS: ${DNS_ALLOWED_CLIENTS:-}
+      DNS_ALLOW_ANY: ${DNS_ALLOW_ANY:-false}
+      DNS_UPSTREAM: ${DNS_UPSTREAM:-1.1.1.1}
+      DNS_LOG_ALL: ${DNS_LOG_ALL:-true}
 
   mediamtx:
     image: bluenviron/mediamtx:1.19.2
@@ -79,13 +85,20 @@ services:
     container_name: castnexus-intercept
     network_mode: host
     restart: unless-stopped
-    profiles: ["console"]
+    depends_on:
+      - mediamtx
+    profiles: ["console", "vps-console"]
     cap_add:
       - NET_ADMIN
       - NET_RAW
     environment:
+      INTERCEPT_MODE: ${INTERCEPT_MODE:-lan}
       PI_IP: ${PI_IP}
-      TARGET_IPS: ${TARGET_IPS}
-      GATEWAY_IP: ${GATEWAY_IP}
+      TARGET_IPS: ${TARGET_IPS:-}
+      GATEWAY_IP: ${GATEWAY_IP:-}
+      VPS_ALLOWED_CLIENTS: ${VPS_ALLOWED_CLIENTS:-}
+      VPS_ALLOW_ANY: ${VPS_ALLOW_ANY:-false}
+      VPS_RTMP_PORT: ${VPS_RTMP_PORT:-1935}
+      VPS_RTMP_WAIT_SECONDS: ${VPS_RTMP_WAIT_SECONDS:-60}
 
 networks: {}
