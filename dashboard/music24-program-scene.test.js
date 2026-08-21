@@ -29,26 +29,34 @@ const profile = {
   },
 };
 
-test("Music 24/7 uses spectrum scene while Program Scene is None", () => {
+test("Music 24/7 permanent Program page contains music and master layers", () => {
   const acc = account(null);
   assert.equal(activeProgramScene(acc), null);
-  assert.equal(programSceneUrl(acc, profile), musicSceneUrl(acc, profile));
-  assert.match(programSceneUrl(acc, profile), /\/overlay\/tester\/music\/radio/);
+
+  const url = new URL(programSceneUrl(acc, profile));
+  assert.equal(url.pathname, "/music-program.html");
+  assert.equal(url.searchParams.get("music"), musicSceneUrl(acc, profile));
+  assert.equal(url.searchParams.get("master"), "http://127.0.0.1:8090/overlay/tester/master");
 });
 
-test("Music 24/7 switches its existing renderer to master Program Scene", () => {
-  const acc = account({ kind: "builtin", name: "startingSoon" });
-  assert.deepEqual(activeProgramScene(acc), { kind: "builtin", name: "startingSoon" });
-  assert.match(programSceneUrl(acc, profile), /\/overlay\/tester\/master$/);
+test("Program page URL never changes when Music scene changes", () => {
+  const live = programSceneUrl(account(null), profile);
+  const starting = programSceneUrl(account({ kind: "builtin", name: "startingSoon" }), profile);
+  const brb = programSceneUrl(account({ kind: "builtin", name: "brb" }), profile);
+  const ending = programSceneUrl(account({ kind: "builtin", name: "ending" }), profile);
+
+  assert.equal(starting, live);
+  assert.equal(brb, live);
+  assert.equal(ending, live);
 });
 
-test("switching between built-in scenes keeps master worker signature stable", () => {
+test("Music worker signature is identical for None, Starting Soon, BRB and Ending", () => {
+  const live = musicWorkerSignature(account(null), profile);
   const starting = musicWorkerSignature(account({ kind: "builtin", name: "startingSoon" }), profile);
   const brb = musicWorkerSignature(account({ kind: "builtin", name: "brb" }), profile);
   const ending = musicWorkerSignature(account({ kind: "builtin", name: "ending" }), profile);
-  const live = musicWorkerSignature(account(null), profile);
 
-  assert.equal(starting, brb);
-  assert.equal(brb, ending);
-  assert.notEqual(starting, live, "entering/leaving Program Scene mode should restart renderer once");
+  assert.equal(starting, live, "entering Program Scene mode must not restart Music24");
+  assert.equal(brb, live, "BRB must stay on the same Music24 worker");
+  assert.equal(ending, live, "Ending must stay on the same Music24 worker");
 });
