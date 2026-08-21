@@ -89,12 +89,23 @@ assert.match(verticalScene, /rn-layout-vertical/);
 assert.match(verticalScene, /rn-audio-only/);
 assert.match(verticalScene, /\/overlay\/tester\/music\/radio-b/);
 
-const sourceArgs = destinationFfmpegArgs("rtmp://source/live", { url:"rtmp://example/live/key", layout:"source" });
-assert.ok(sourceArgs.includes("copy"), "source layout should remain stream-copy");
-const verticalArgs = destinationFfmpegArgs("rtmp://source/live", { url:"rtmp://example/live/key2", layout:"vertical" });
-assert.ok(verticalArgs.includes("-filter_complex"));
-assert.match(verticalArgs[verticalArgs.indexOf("-filter_complex") + 1], /1080:1920/);
-assert.ok(verticalArgs.includes("libx264"));
+// This test validates layout construction, not host capacity. Disable the
+// software-host safety clamp here so the full 1080x1920 vertical transform is
+// still covered; rtmp-pipeline.test.js separately verifies CPU-only VPS/ARM
+// hosts are intentionally clamped in auto mode.
+const oldSafeMode = process.env.CASTNEXUS_CPU_SAFE_MODE;
+process.env.CASTNEXUS_CPU_SAFE_MODE = "false";
+try {
+  const sourceArgs = destinationFfmpegArgs("rtmp://source/live", { url:"rtmp://example/live/key", layout:"source" });
+  assert.ok(sourceArgs.includes("copy"), "source layout should remain stream-copy");
+  const verticalArgs = destinationFfmpegArgs("rtmp://source/live", { url:"rtmp://example/live/key2", layout:"vertical" });
+  assert.ok(verticalArgs.includes("-filter_complex"));
+  assert.match(verticalArgs[verticalArgs.indexOf("-filter_complex") + 1], /1080:1920/);
+  assert.ok(verticalArgs.includes("libx264"));
+} finally {
+  if (oldSafeMode === undefined) delete process.env.CASTNEXUS_CPU_SAFE_MODE;
+  else process.env.CASTNEXUS_CPU_SAFE_MODE = oldSafeMode;
+}
 
 fs.rmSync(root, { recursive: true, force: true });
 console.log("profile music isolation + dual-format smoke tests passed");

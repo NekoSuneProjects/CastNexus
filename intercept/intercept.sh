@@ -41,8 +41,6 @@ run_lan_mode() {
   for target_ip in "${targets[@]}"; do
     [[ -n "$target_ip" ]] || continue
 
-    # Any plain RTMP connection this console opens, no matter what IP it thinks
-    # it is dialing, lands on the local MediaMTX relay instead.
     iptables -t nat -C PREROUTING -s "$target_ip" -p tcp --dport 1935 -j DNAT --to-destination "${pi_ip}:1935" 2>/dev/null \
       || iptables -t nat -A PREROUTING -s "$target_ip" -p tcp --dport 1935 -j DNAT --to-destination "${pi_ip}:1935"
 
@@ -72,7 +70,12 @@ run_vps_mode() {
   fi
 
   log "VPS/public mode: console DNS should resolve Twitch ingest to this server; no ARP spoofing or gateway IP is used"
-  log "VPS/public mode: protecting TCP/$port for ${allow_any} = true -> any client; allowed list: ${allowed:-<none>}"
+  if truthy "$allow_any"; then
+    log "VPS/public mode: TCP/$port ACL = ANY CLIENT (VPS_ALLOW_ANY=true)"
+    log "VPS/public mode: warning: public RTMP is unrestricted; use VPS_ALLOWED_CLIENTS for a home WAN IP/CIDR when possible"
+  else
+    log "VPS/public mode: TCP/$port ACL = ${allowed}"
+  fi
 
   if truthy "$DRY_RUN"; then
     log "dry-run validation passed"
@@ -87,8 +90,6 @@ run_vps_mode() {
 
   cleanup_chain "$chain" "$port"
   iptables -w -N "$chain"
-  # CastNexus itself uses loopback RTMP for compositor, profile routing and
-  # destination fan-out. Never block those internal connections.
   iptables -w -A "$chain" -s 127.0.0.0/8 -j ACCEPT
 
   if truthy "$allow_any"; then
@@ -107,8 +108,6 @@ run_vps_mode() {
 
   iptables -w -I INPUT 1 -p tcp --dport "$port" -j "$chain"
 
-  # MediaMTX normally starts beside this container. Wait for the real public
-  # RTMP listener so the gateway can't sit in a misleading "active" state.
   local ready=0
   for _ in $(seq 1 "$wait_seconds"); do
     if ss -ltnH | awk '{print $4}' | grep -Eq "(^|:)$port$"; then

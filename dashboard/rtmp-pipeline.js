@@ -12,10 +12,23 @@ function envBool(value, fallback = null) {
   return fallback;
 }
 
-function piSafeMode({ arch = process.arch, hardwareEncoder = false, setting = process.env.CASTNEXUS_PI_SAFE_MODE } = {}) {
+function safeModeSetting() {
+  if (process.env.CASTNEXUS_CPU_SAFE_MODE != null && process.env.CASTNEXUS_CPU_SAFE_MODE !== "") {
+    return process.env.CASTNEXUS_CPU_SAFE_MODE;
+  }
+  return process.env.CASTNEXUS_PI_SAFE_MODE;
+}
+
+function piSafeMode({ arch = process.arch, hardwareEncoder = false, setting = safeModeSetting() } = {}) {
   const explicit = envBool(setting, null);
   if (explicit !== null) return explicit;
-  return isArmArch(arch) && !hardwareEncoder;
+
+  // "auto" used to protect only ARM/Raspberry Pi. Real VPS logs showed the
+  // same Chromium CDP JPEG + software x264 overload on an amd64 CPU-only host
+  // (1920x1080@30 repeatedly stalled the frame pump). Safe mode is really a
+  // software-render/encode protection, so auto now applies to every host that
+  // has no working hardware encoder. GPU-backed hosts keep the requested size.
+  return !hardwareEncoder;
 }
 
 function cpuX264Preset({ arch = process.arch, hardwareEncoder = false, explicit = null } = {}) {
@@ -28,12 +41,14 @@ function positiveInt(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
 }
 
-function piSafeRenderConfig(layout, desired) {
+function safeRenderConfig(layout, desired) {
   const vertical = layout === "vertical";
-  const safeWidth = positiveInt(process.env.CASTNEXUS_PI_SAFE_WIDTH, 960);
-  const safeHeight = positiveInt(process.env.CASTNEXUS_PI_SAFE_HEIGHT, 540);
-  const safeFps = positiveInt(process.env.CASTNEXUS_PI_SAFE_FPS, 20);
-  const jpegQuality = Math.max(35, Math.min(80, positiveInt(process.env.CASTNEXUS_PI_JPEG_QUALITY, 60)));
+  // Keep the original PI_* variables as backwards-compatible aliases. New
+  // CPU_* names describe the actual behaviour on Pi, bare-metal x64 and VPS.
+  const safeWidth = positiveInt(process.env.CASTNEXUS_CPU_SAFE_WIDTH || process.env.CASTNEXUS_PI_SAFE_WIDTH, 960);
+  const safeHeight = positiveInt(process.env.CASTNEXUS_CPU_SAFE_HEIGHT || process.env.CASTNEXUS_PI_SAFE_HEIGHT, 540);
+  const safeFps = positiveInt(process.env.CASTNEXUS_CPU_SAFE_FPS || process.env.CASTNEXUS_PI_SAFE_FPS, 20);
+  const jpegQuality = Math.max(35, Math.min(80, positiveInt(process.env.CASTNEXUS_CPU_JPEG_QUALITY || process.env.CASTNEXUS_PI_JPEG_QUALITY, 60)));
 
   const targetWidth = vertical ? safeHeight : safeWidth;
   const targetHeight = vertical ? safeWidth : safeHeight;
@@ -46,6 +61,10 @@ function piSafeRenderConfig(layout, desired) {
   };
 }
 
+function piSafeRenderConfig(layout, desired) {
+  return safeRenderConfig(layout, desired);
+}
+
 function safeCanvas(layout, { arch = process.arch, hardwareEncoder = false, width = null, height = null, fps = 30 } = {}) {
   const vertical = layout === "vertical";
   const desired = {
@@ -55,12 +74,10 @@ function safeCanvas(layout, { arch = process.arch, hardwareEncoder = false, widt
   };
   if (!piSafeMode({ arch, hardwareEncoder })) return desired;
 
-  // CDP JPEG capture + software Chromium + x264 at 720p30 is too expensive on
-  // CPU-only Raspberry Pi hosts. The old 1280x720@30 safe mode still allowed
-  // FFmpeg's image2pipe queue to back up until the compositor watchdog killed
-  // the radio stream. Use a lower browser/render surface and frame rate on ARM
-  // software encode; users can override the values with CASTNEXUS_PI_SAFE_*.
-  return piSafeRenderConfig(layout, desired);
+  // Browser screencast + software x264 can overload both small ARM boards and
+  // CPU-only VPS instances. Clamp the render surface before Chromium starts so
+  // the watchdog does not repeatedly kill the same 1080p30 workload.
+  return safeRenderConfig(layout, desired);
 }
 
 function liveInputArgs() {
@@ -91,8 +108,10 @@ function liveMuxArgs(url, format = null) {
 module.exports = {
   isArmArch,
   envBool,
+  safeModeSetting,
   piSafeMode,
   cpuX264Preset,
+  safeRenderConfig,
   piSafeRenderConfig,
   safeCanvas,
   liveInputArgs,
