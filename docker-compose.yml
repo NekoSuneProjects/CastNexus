@@ -1,9 +1,8 @@
 services:
-  # --- PS5 mode only: DNS hijack + ARP-spoof/DNAT intercept, so the console's
-  # own broadcast is caught without configuring anything on the console beyond
-  # its DNS server. Not needed for OBS/streaming-software sources, which push
-  # straight to mediamtx below with a normal server URL + stream key. Started
-  # only when the "console" profile is active (`docker compose --profile console up -d`).
+  # --- Console mode only: DNS hijack + ARP-spoof/DNAT intercept, so the
+  # console's own broadcast is caught without configuring anything beyond
+  # its DNS server. Start these helpers with:
+  #   docker compose --profile console up -d
   dns:
     image: ghcr.io/nekosunevr/consoledns/dns:latest
     container_name: nekosune-ps5-dns
@@ -14,6 +13,7 @@ services:
       PI_IP: ${PI_IP}
       DNS_UPSTREAM: 1.1.1.1
       DNS_LOG_ALL: "true"
+
   mediamtx:
     image: bluenviron/mediamtx:1.19.2
     container_name: nekosune-ps5-mediamtx
@@ -21,6 +21,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./config/mediamtx.yml:/mediamtx.yml:ro
+
   dashboard:
     image: ghcr.io/nekosunevr/consoledns/dashboard:latest
     container_name: nekosune-ps5-dashboard
@@ -36,10 +37,34 @@ services:
       TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID:-}
       TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET:-}
       TWITCH_REDIRECT_URI: ${TWITCH_REDIRECT_URI:-}
-  # --- PS5 mode only (see "dns" above for why). This is the piece that makes
-  # console capture reliable, since the real ingest address is often handed to
-  # the PS5 directly over HTTPS rather than a fresh DNS lookup that "dns" could
-  # catch alone.
+
+  # Always-available sidecar for the Music 24/7 profile. It stays idle until
+  # the dashboard's active RestreamNode profile is mode=music and the account
+  # has at least one uploaded track. Then it:
+  #   music scene -> headless Chromium -> FFmpeg + music audio -> MediaMTX
+  # and publishes into the normal PC ingest path, so the existing destination
+  # fan-out treats it exactly like any other source.
+  music24:
+    image: ghcr.io/nekosunevr/consoledns/dashboard:latest
+    container_name: nekosune-music24
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+      - dashboard
+    command: ["node", "music24.js"]
+    volumes:
+      - ./dashboard/data:/app/data:ro
+    environment:
+      DASHBOARD_PORT: ${DASHBOARD_PORT:-8090}
+      STATE_FILE: /app/data/state.json
+      MUSIC_DIR: /app/data/music
+      MUSIC24_POLL_MS: ${MUSIC24_POLL_MS:-2000}
+      MUSIC24_NOW_POLL_MS: ${MUSIC24_NOW_POLL_MS:-750}
+
+  # --- Console mode only (see "dns" above). This catches the real ingest
+  # address when the console receives it directly over HTTPS rather than via
+  # a fresh DNS lookup.
   intercept:
     image: ghcr.io/nekosunevr/consoledns/intercept:latest
     container_name: nekosune-ps5-intercept
@@ -53,4 +78,5 @@ services:
       PI_IP: ${PI_IP}
       TARGET_IPS: ${TARGET_IPS}
       GATEWAY_IP: ${GATEWAY_IP}
+
 networks: {}
