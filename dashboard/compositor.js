@@ -47,6 +47,8 @@ class Compositor extends EventEmitter {
     this.frameCount=0;
     this.framesDropped=0;
     this.lastFrameAt=null;
+    this.latestFrame=null;
+    this.framePumpTimer=null;
     this.browser=null;
     this.browserProfileDir=null;
     this.page=null;
@@ -104,7 +106,6 @@ class Compositor extends EventEmitter {
     await this._openScene();
     this._spawnFfmpeg();
     await this._startScreencast();
-    this.lastFrameAt=null;
     this._startWatchdog();
     this._startMusicPoll();
     const enc=this.forceCpu?CPU_PROFILE:this.encoder;
@@ -144,21 +145,50 @@ class Compositor extends EventEmitter {
   }
 
   async _startScreencast(){
+    this._stopFramePump();
+    this.latestFrame=null;
     this.client=await this.page.target().createCDPSession();
     const cdp=this.client;
+    let firstCapture=true;
     this.client.on("Page.screencastFrame",({data,sessionId})=>{
       cdp.send("Page.screencastFrameAck",{sessionId}).catch(()=>{});
-      const ffmpeg=this.ffmpeg;
-      if(!ffmpeg)return;
-      const stdin=ffmpeg.stdin;
-      if(!stdin.writable)return;
-      if(stdin.writableLength>256*1024){this.framesDropped++;return;}
-      this.frameCount++;
-      this.lastFrameAt=Date.now();
-      if(this.debug&&this.frameCount===1)this.logger.log(`[compositor:${this.accountId}] first Chromium frame (${Buffer.byteLength(data,"base64")} bytes)`);
-      stdin.write(Buffer.from(data,"base64"));
+      try{
+        this.latestFrame=Buffer.from(data,"base64");
+        if(this.debug&&firstCapture){
+          firstCapture=false;
+          this.logger.log(`[compositor:${this.accountId}] first Chromium frame (${this.latestFrame.length} bytes)`);
+        }
+      }catch{}
     });
     await this.client.send("Page.startScreencast",{format:"jpeg",quality:this.video.screencastQuality,maxWidth:this.video.width,maxHeight:this.video.height});
+    this._startFramePump();
+  }
+
+  _startFramePump(){
+    this._stopFramePump();
+    const interval=Math.max(10,Math.round(1000/Math.max(1,Number(this.video.fps||30))));
+    const pump=()=>{
+      const ffmpeg=this.ffmpeg;
+      const frame=this.latestFrame;
+      if(!ffmpeg||!frame)return;
+      const stdin=ffmpeg.stdin;
+      if(!stdin?.writable)return;
+      if(stdin.writableLength>256*1024){this.framesDropped++;return;}
+      try{
+        stdin.write(frame);
+        this.frameCount++;
+        this.lastFrameAt=Date.now();
+      }catch(err){
+        if(err?.code!=="EPIPE")this.logger.warn(`[compositor:${this.accountId}] frame pump error: ${err.message}`);
+      }
+    };
+    this.framePumpTimer=setInterval(pump,interval);
+    pump();
+  }
+
+  _stopFramePump(){
+    if(this.framePumpTimer){clearInterval(this.framePumpTimer);this.framePumpTimer=null;}
+    this.latestFrame=null;
   }
 
   _fifoPath(name){return path.join(this.runtimeDir,`${name}.fifo`);}
@@ -300,10 +330,15 @@ class Compositor extends EventEmitter {
   _startWatchdog(){
     this._stopWatchdog();
     this.watchdogTimer=setInterval(()=>{
-      if(this.state!=="running"||!this.lastFrameAt)return;
-      const idle=Date.now()-this.lastFrameAt,timeout=Number(process.env.COMPOSITOR_WATCHDOG_MS||15000);
+      if(this.state!=="running")return;
+      const timeout=Number(process.env.COMPOSITOR_WATCHDOG_MS||15000);
+      if(!this.lastFrameAt){
+        if(this.frameCount===0)this.logger.warn(`[compositor:${this.accountId}] watchdog: waiting for first frame`);
+        return;
+      }
+      const idle=Date.now()-this.lastFrameAt;
       if(idle>timeout){
-        this.logger.warn(`[compositor:${this.accountId}] watchdog: no frames for ${idle}ms, forcing reconnect`);
+        this.logger.warn(`[compositor:${this.accountId}] watchdog: frame pump stalled for ${idle}ms, forcing reconnect`);
         this._stopWatchdog();
         this._scheduleReconnect();
       }
@@ -339,6 +374,7 @@ class Compositor extends EventEmitter {
 
   async _teardown(){
     this._stopWatchdog();
+    this._stopFramePump();
     this._stopMusicPoll();
     this._stopLiveAudioTap();
     if(this.musicAudioTap){
