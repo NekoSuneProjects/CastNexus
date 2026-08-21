@@ -7,6 +7,7 @@ on:
       - main
       - beta
       - "feature/**"
+      - "fix/**"
   workflow_dispatch:
 
 permissions:
@@ -38,6 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           node --check dashboard/server.js
+          node --check dashboard/server-entry.js
           node --check dashboard/overlays.js
           node --check dashboard/scenes.js
           node --check dashboard/music-scene.js
@@ -46,6 +48,7 @@ jobs:
           node --check dashboard/profile-music.js
           node --check dashboard/profile-vod.js
           node --check dashboard/profile-rtmp.js
+          node --check dashboard/profile-destinations.js
           node --check dashboard/cover-art.js
           node --check dashboard/rtmp-pipeline.js
           node --check dashboard/gpu-encoder.js
@@ -57,6 +60,35 @@ jobs:
           node --check desktop/launcher.js
           for f in dashboard/public/app-*.js dashboard/public/build-info.js; do node --check "$f"; done
 
+      - name: Embedded dashboard + Music 24/7 runtime smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOG=/tmp/castnexus-entry.log
+          STATE=/tmp/castnexus-entry-state.json
+          rm -f "$LOG" "$STATE"
+          DASHBOARD_PORT=18090 \
+          STATE_FILE="$STATE" \
+          MUSIC_DIR=/tmp/castnexus-entry-music \
+          MEDIAMTX_API=http://127.0.0.1:19997 \
+          node dashboard/server-entry.js >"$LOG" 2>&1 &
+          pid=$!
+          cleanup() { kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+          http_ready=0
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:18090/ >/dev/null 2>&1; then http_ready=1; break; fi
+            sleep .25
+          done
+          worker_ready=0
+          for i in $(seq 1 20); do
+            if grep -Fq "[music24] watching" "$LOG"; then worker_ready=1; break; fi
+            sleep .25
+          done
+          cat "$LOG"
+          test "$http_ready" -eq 1
+          test "$worker_ready" -eq 1
+
       - name: Profile music isolation + dual-format smoke test
         run: node --test dashboard/profile-music.test.js
 
@@ -65,6 +97,9 @@ jobs:
 
       - name: Profile RTMP isolation smoke test
         run: node --test dashboard/profile-rtmp.test.js
+
+      - name: Profile destination isolation smoke test
+        run: node --test dashboard/profile-destinations.test.js
 
       - name: Music 24/7 embeddable worker smoke test
         run: node --test dashboard/music24-module.test.js
@@ -126,6 +161,10 @@ jobs:
           docker compose config >/dev/null
           docker compose -f docker-compose.yml -f docker-compose.gpu-vaapi.yml config >/dev/null
           docker compose -f docker-compose.yml -f docker-compose.gpu-nvidia.yml config >/dev/null
+          if docker compose config --services | grep -qx music24; then
+            echo "Music 24/7 must be embedded in the dashboard runtime, not a separate sidecar." >&2
+            exit 1
+          fi
 
       - name: Boot-test pinned MediaMTX recording config
         shell: bash
