@@ -87,7 +87,6 @@ function musicApiUrl(endpoint, profileId = S.activeProfileId) {
 }
 
 function createProfile(mode, name) {
-  const enabledIds = (S.status?.destinations || []).filter(d => d.enabled).map(d => d.id);
   return {
     id: uuid(),
     name: name || MODE_LABELS[mode] || "Profile",
@@ -96,7 +95,6 @@ function createProfile(mode, name) {
     canvasMode: "landscape",
     sceneMusicEnabled: mode === "music",
     scene: S.scene || null,
-    destinationEnabledIds: enabledIds,
     compositorEnabled: mode === "music" ? false : true,
     musicAutostart: mode === "music",
     musicSettings: { ...S.musicSettings },
@@ -117,6 +115,7 @@ function normaliseProfiles() {
     if (!p.canvasMode || !["landscape", "vertical"].includes(p.canvasMode)) { p.canvasMode = "landscape"; dirty = true; }
     if (p.sceneMusicEnabled === undefined) { p.sceneMusicEnabled = p.mode === "music"; dirty = true; }
     if (!p.musicSettings) { p.musicSettings = { shuffle:false, loop:true, volume:.7 }; dirty = true; }
+    if (p.destinationEnabledIds !== undefined) { delete p.destinationEnabledIds; dirty = true; }
   }
   return dirty;
 }
@@ -207,10 +206,9 @@ async function saveProfileStore() {
 async function snapshotActiveProfile(showToast = false) {
   const p = activeProfile();
   if (!p) return;
-  const [status, sceneData, compositor, musicSettings] = await Promise.all([
-    api("/api/status"), api("/api/scenes/current"), api("/api/compositor"), api(musicApiUrl("/settings", p.id)),
+  const [sceneData, compositor, musicSettings] = await Promise.all([
+    api("/api/scenes/current"), api("/api/compositor"), api(musicApiUrl("/settings", p.id)),
   ]);
-  p.destinationEnabledIds = (status.destinations || []).filter(d => d.enabled).map(d => d.id);
   p.scene = sceneData.currentScene || null;
   p.compositorEnabled = !!compositor.enabled;
   p.musicSettings = { ...musicSettings };
@@ -237,7 +235,7 @@ async function activateProfile(profileId) {
     } catch {}
 
     // When leaving a 24/7 profile, publish the new active id first so the
-    // sidecar stops the old profile before another source is selected.
+    // embedded worker stops the old profile before another source is selected.
     if (previous?.mode === "music" && target.mode !== "music") {
       S.activeProfileId = target.id;
       await saveProfileStore();
@@ -246,20 +244,11 @@ async function activateProfile(profileId) {
 
     await api("/api/source-mode", { method:"POST", body:{ sourceMode: modeSource(target.mode) } });
 
-    // For every other switch, make the target profile authoritative before
-    // compositor/scene changes so server-side music resolves to the correct
-    // isolated profile library immediately.
+    // The server now exposes the target profile's own destination list as soon
+    // as activeProfileId changes. No global destination toggle replay is needed.
     if (!(previous?.mode === "music" && target.mode !== "music")) {
       S.activeProfileId = target.id;
       await saveProfileStore();
-    }
-
-    const status = await api("/api/status");
-    for (const dest of status.destinations || []) {
-      const wanted = (target.destinationEnabledIds || []).includes(dest.id);
-      if (wanted !== !!dest.enabled) {
-        await api(`/api/destinations/${encodeURIComponent(dest.id)}/toggle`, { method:"POST", body:{ enabled:wanted } });
-      }
     }
 
     const compositorWanted = target.mode === "music" ? false : !!target.compositorEnabled;
