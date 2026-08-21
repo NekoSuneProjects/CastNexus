@@ -4,9 +4,8 @@
 #   docker compose -f docker-compose.yml -f docker-compose.gpu-nvidia.yml up -d
 #
 # CastNexus probes h264_nvenc before using it and automatically falls back to
-# CPU x264 if the driver/runtime/encoder probe fails.
+# CPU x264 if the driver/runtime/encoder probe fails. Music 24/7 is embedded in
+# the dashboard service, so the same GPU grant covers the radio compositor too.
 services:
   dashboard:
-    gpus: all
-  music24:
     gpus: all
