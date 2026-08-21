@@ -138,7 +138,7 @@ async function waitForPath(name, timeoutMs = 30000) {
       PUPPETEER_EXECUTABLE_PATH:chrome,
       MUSIC24_POLL_MS:"250",
       MUSIC24_NOW_POLL_MS:"250",
-      MUSIC24_START_TIMEOUT_MS:"20000",
+      MUSIC24_START_TIMEOUT_MS:"60000",
       MUSIC24_EMBED_START_DELAY_MS:"100",
       MUSIC24_WIDTH:"320",
       MUSIC24_HEIGHT:"180",
@@ -162,8 +162,8 @@ async function waitForPath(name, timeoutMs = 30000) {
 
   try {
     const profilePath = `profile/${profileId}/${profileKey}`;
-    const profileReady = await waitForPath(profilePath, 30000);
-    const publicReady = profileReady ? await waitForPath(`public/${login}`, 15000) : false;
+    const profileReady = await waitForPath(profilePath, 65000);
+    const publicReady = profileReady ? await waitForPath(`public/${login}`, 20000) : false;
 
     if (!profileReady || !publicReady) {
       const items = await mediaPaths();
