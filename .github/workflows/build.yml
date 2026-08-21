@@ -30,6 +30,10 @@ jobs:
         working-directory: dashboard
         run: npm ci
 
+      - name: Install DNS dependencies
+        working-directory: dns
+        run: npm install
+
       - name: Install desktop build tools
         working-directory: desktop
         run: npm install
@@ -58,8 +62,29 @@ jobs:
           node --check dashboard/youtube-upload.js
           node --check dashboard/destination-output.js
           node --check dashboard/compositor.js
+          node --check dns/server.js
           node --check desktop/launcher.js
+          bash -n intercept/intercept.sh
           for f in dashboard/public/app-*.js dashboard/public/build-info.js; do node --check "$f"; done
+
+      - name: VPS/public DNS gateway tests
+        working-directory: dns
+        run: npm test
+
+      - name: VPS intercept configuration smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          INTERCEPT_MODE=vps \
+          VPS_ALLOWED_CLIENTS=203.0.113.7/32 \
+          INTERCEPT_DRY_RUN=true \
+          bash intercept/intercept.sh | tee /tmp/vps-intercept.log
+          grep -Fq "dry-run validation passed" /tmp/vps-intercept.log
+          if INTERCEPT_MODE=vps INTERCEPT_DRY_RUN=true bash intercept/intercept.sh >/tmp/vps-unsafe.log 2>&1; then
+            cat /tmp/vps-unsafe.log
+            echo "VPS intercept must reject an accidental unrestricted public RTMP listener." >&2
+            exit 1
+          fi
 
       - name: Embedded dashboard + Music 24/7 runtime smoke test
         shell: bash
@@ -158,14 +183,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Validate base and optional GPU compose files
+      - name: Validate base, VPS and optional GPU compose files
         shell: bash
         env:
           PI_IP: 127.0.0.1
           TARGET_IPS: 127.0.0.2
           GATEWAY_IP: 127.0.0.1
+          PUBLIC_IP: 203.0.113.55
+          VPS_ALLOWED_CLIENTS: 198.51.100.20/32
         run: |
           docker compose config >/dev/null
+          docker compose -f docker-compose.yml -f docker-compose.vps.yml --profile vps-console config >/dev/null
           docker compose -f docker-compose.yml -f docker-compose.gpu-vaapi.yml config >/dev/null
           docker compose -f docker-compose.yml -f docker-compose.gpu-nvidia.yml config >/dev/null
           if docker compose config --services | grep -qx music24; then
