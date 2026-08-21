@@ -19,6 +19,7 @@ const NOW_POLL_MS = Number(process.env.MUSIC24_NOW_POLL_MS || 750);
 const START_TIMEOUT_MS = Number(process.env.MUSIC24_START_TIMEOUT_MS || 15000);
 
 const workers = new Map();
+const lastStatus = new Map();
 let shuttingDown = false;
 let serviceStarted = false;
 let reconcileTimer = null;
@@ -81,7 +82,7 @@ function spawnSilenceFeed(accountId, profileId) {
 class Music24Worker {
   constructor(account, profile) {
     this.accountId=account.twitchUserId;this.account=account;this.profile=profile;this.signature=musicWorkerSignature(account,profile);
-    this.silence=null;this.compositor=null;this.now=null;this.nowFetchedAt=0;this.nowTimer=null;this.running=false;this.stopping=false;this.outputPath=null;
+    this.silence=null;this.compositor=null;this.now=null;this.nowFetchedAt=0;this.nowTimer=null;this.running=false;this.stopping=false;this.outputPath=null;this.phase="idle";this.error=null;
   }
   update(account,profile){this.account=account;this.profile=profile;}
   getNow(){if(!this.now)return null;const now={...this.now};if(now.mode==="playing"&&now.track)now.positionS=Math.max(0,Number(now.positionS||0)+(Date.now()-this.nowFetchedAt)/1000);return now;}
@@ -92,7 +93,7 @@ class Music24Worker {
   async start(){
     if(this.running||this.stopping)return;
     const outputPath=profilePublishPath(this.profile);if(!outputPath)throw new Error("active Music profile has no valid RTMP key yet");
-    this.running=true;this.outputPath=outputPath;this.startNowPoll();
+    this.running=true;this.phase="starting";this.error=null;this.outputPath=outputPath;lastStatus.set(this.accountId,{state:"starting",profileId:this.profile.id,outputPath,error:null});this.startNowPoll();
     const startSilence=()=>{if(!this.running||this.stopping)return;const feed=spawnSilenceFeed(this.accountId,this.profile.id);this.silence=feed;feed.child.once("exit",code=>{if(this.silence?.child===feed.child)this.silence=null;if(this.running&&!this.stopping&&!shuttingDown){console.warn(`[music24:${this.accountId}:${this.profile.id}] silence feed exited (${code}); restarting`);setTimeout(startSilence,1500);}});};
     try{
       startSilence();const silencePath=this.silence?.streamName;
@@ -102,10 +103,11 @@ class Music24Worker {
       this.compositor=new Compositor({accountId:`music24-${this.accountId}-${sanitizeSegment(this.profile.id)}`,pageUrl:musicSceneUrl(this.account,this.profile),audioSourceUrl:`${RTMP_ORIGIN}/${silencePath}`,outputUrl,getMusicNow:()=>this.getNow(),musicFilePathFor:id=>this.musicFilePathFor(id),video,runtimeDir:path.join("/tmp","castnexus-music24",sanitizeSegment(this.accountId),sanitizeSegment(this.profile.id)),logger:console});
       await this.compositor.start();
       if(!(await waitForMediaPath(outputPath))){const status=this.compositor?.status?.();throw new Error(`Music 24/7 publisher did not become live${status?.error?`: ${status.error}`:""}`);}
+      this.phase="live";this.error=null;lastStatus.set(this.accountId,{state:"live",profileId:this.profile.id,outputPath,error:null,video});
       console.log(`[music24:${this.accountId}:${this.profile.id}] ON AIR ${video.width}x${video.height}@${video.fps} -> ${outputPath}`);
-    }catch(err){await this.stop();throw err;}
+    }catch(err){this.phase="error";this.error=err.message;lastStatus.set(this.accountId,{state:"error",profileId:this.profile.id,outputPath,error:err.message});await this.stop({preserveStatus:true});throw err;}
   }
-  async stop(){if(this.stopping)return;this.stopping=true;this.running=false;this.stopNowPoll();if(this.compositor){try{await this.compositor.stop();}catch{}this.compositor=null;}if(this.silence?.child){const child=this.silence.child;child.removeAllListeners("exit");try{child.kill("SIGTERM");}catch{}this.silence=null;}this.outputPath=null;this.stopping=false;console.log(`[music24:${this.accountId}:${this.profile?.id}] stopped`);}
+  async stop({preserveStatus=false}={}){if(this.stopping)return;this.stopping=true;this.running=false;this.stopNowPoll();if(this.compositor){try{await this.compositor.stop();}catch{}this.compositor=null;}if(this.silence?.child){const child=this.silence.child;child.removeAllListeners("exit");try{child.kill("SIGTERM");}catch{}this.silence=null;}this.outputPath=null;if(!preserveStatus){this.phase="idle";this.error=null;lastStatus.set(this.accountId,{state:"idle",profileId:this.profile?.id||null,outputPath:null,error:null});}this.stopping=false;console.log(`[music24:${this.accountId}:${this.profile?.id}] stopped`);}
 }
 
 async function reconcile(){
@@ -116,9 +118,15 @@ async function reconcile(){
     if(!ready)continue;
     desired.add(account.twitchUserId);const sig=musicWorkerSignature(account,profile);let worker=workers.get(account.twitchUserId);
     if(worker&&worker.signature!==sig){await worker.stop();workers.delete(account.twitchUserId);worker=null;}
-    if(!worker){worker=new Music24Worker(account,profile);workers.set(account.twitchUserId,worker);worker.start().catch(async err=>{console.error(`[music24:${account.twitchUserId}:${profile.id}] start failed: ${err.message}`);if(workers.get(account.twitchUserId)===worker)workers.delete(account.twitchUserId);try{await worker.stop();}catch{}});}else worker.update(account,profile);
+    if(!worker){worker=new Music24Worker(account,profile);workers.set(account.twitchUserId,worker);worker.start().catch(async err=>{console.error(`[music24:${account.twitchUserId}:${profile.id}] start failed: ${err.message}`);lastStatus.set(account.twitchUserId,{state:"error",profileId:profile.id,outputPath:worker.outputPath||null,error:err.message});if(workers.get(account.twitchUserId)===worker)workers.delete(account.twitchUserId);try{await worker.stop({preserveStatus:true});}catch{}});}else worker.update(account,profile);
   }
   for(const[accountId,worker]of[...workers.entries()])if(!desired.has(accountId)){await worker.stop();workers.delete(accountId);}
+}
+
+function statusFor(accountId){
+  const worker=workers.get(String(accountId));
+  if(worker)return {state:worker.phase||"starting",profileId:worker.profile?.id||null,outputPath:worker.outputPath||null,error:worker.error||null,running:!!worker.running};
+  return lastStatus.get(String(accountId))||{state:serviceStarted?"idle":"worker-offline",profileId:null,outputPath:null,error:null,running:false};
 }
 
 function startMusic24(){
@@ -138,10 +146,14 @@ async function shutdown(signal="shutdown",{exit=false}={}){
 }
 
 if(require.main===module){
-  process.on("SIGINT",()=>shutdown("SIGINT",{exit:true}));
-  process.on("SIGTERM",()=>shutdown("SIGTERM",{exit:true}));
-  process.on("unhandledRejection",err=>console.error("[music24] unhandled rejection",err));
-  startMusic24();
+  if(String(process.env.MUSIC24_STANDALONE || "").toLowerCase() !== "true"){
+    console.log("[music24] standalone sidecar is disabled; Music 24/7 now runs inside the CastNexus dashboard runtime. Set MUSIC24_STANDALONE=true only for a custom legacy deployment.");
+  }else{
+    process.on("SIGINT",()=>shutdown("SIGINT",{exit:true}));
+    process.on("SIGTERM",()=>shutdown("SIGTERM",{exit:true}));
+    process.on("unhandledRejection",err=>console.error("[music24] unhandled rejection",err));
+    startMusic24();
+  }
 }
 
-module.exports={startMusic24,shutdown,reconcile,Music24Worker,mediaPathReady,waitForMediaPath,profileMusicState,musicWorkerSignature};
+module.exports={startMusic24,shutdown,reconcile,statusFor,Music24Worker,mediaPathReady,waitForMediaPath,profileMusicState,musicWorkerSignature};
