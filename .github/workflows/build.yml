@@ -51,6 +51,7 @@ jobs:
           node --check dashboard/profile-destinations.js
           node --check dashboard/cover-art.js
           node --check dashboard/rtmp-pipeline.js
+          node --check dashboard/public-republish-runtime.js
           node --check dashboard/gpu-encoder.js
           node --check dashboard/twitch-api.js
           node --check dashboard/mediamtx-recordings.js
@@ -91,6 +92,9 @@ jobs:
 
       - name: CPU-only Chromium compositor regression test
         run: node --test dashboard/compositor.test.js
+
+      - name: Public RTMP republish regression test
+        run: node --test dashboard/public-republish-runtime.test.js
 
       - name: Profile music isolation + dual-format smoke test
         run: node --test dashboard/profile-music.test.js
