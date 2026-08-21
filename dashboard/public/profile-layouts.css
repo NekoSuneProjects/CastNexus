@@ -1,0 +1,60 @@
+/* Profile canvas + dual-format output UI */
+
+.preview-frame.preview-frame-vertical {
+  aspect-ratio: 9 / 16;
+  width: min(430px, 100%);
+  max-height: 72vh;
+  margin-inline: auto;
+}
+
+.music-monitor-frame-vertical {
+  width: min(470px, 100%);
+  margin-inline: auto;
+}
+
+.music-monitor-screen.vertical {
+  aspect-ratio: 9 / 16;
+  min-height: 0;
+}
+
+.music-scene-option {
+  margin: 0 0 10px;
+  border-color: rgba(56, 232, 255, .18);
+  background: rgba(56, 232, 255, .045);
+}
+
+.music-scene-option:has(input:checked) {
+  border-color: rgba(56, 232, 255, .36);
+  background: rgba(56, 232, 255, .085);
+}
+
+.destination-item {
+  flex-wrap: wrap;
+}
+
+.destination-item > .item-main {
+  min-width: 220px;
+}
+
+.destination-item > .badge {
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .music-program-layout {
+    grid-template-columns: 1fr;
+  }
+  .music-monitor-frame-vertical {
+    width: min(420px, 100%);
+  }
+}
+
+@media (max-width: 640px) {
+  .preview-frame.preview-frame-vertical,
+  .music-monitor-frame-vertical {
+    width: min(360px, 100%);
+  }
+  .destination-item > .item-main {
+    min-width: 150px;
+  }
+}
