@@ -226,6 +226,16 @@ async function activateProfile(profileId) {
   try {
     await snapshotActiveProfile(false);
 
+    // A rerun is a profile-owned program source. Never let Profile A's
+    // Twitch/VOD relay continue driving output after the user switches to B.
+    try {
+      const rerun = await api("/api/vod/status");
+      if (rerun?.state && rerun.state !== "idle") {
+        await api("/api/vod/stop", { method:"POST" });
+        await sleep(350);
+      }
+    } catch {}
+
     // When leaving a 24/7 profile, publish the new active id first so the
     // sidecar stops the old profile before another source is selected.
     if (previous?.mode === "music" && target.mode !== "music") {
