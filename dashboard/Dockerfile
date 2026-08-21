@@ -51,4 +51,6 @@ COPY . .
 EXPOSE 8090
 
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "server.js"]
+# server-entry starts the Studio plus the Music 24/7 worker in one runtime.
+# A reachable dashboard can therefore no longer exist without its radio worker.
+CMD ["node", "server-entry.js"]
