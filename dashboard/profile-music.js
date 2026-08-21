@@ -6,9 +6,11 @@ const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const express = require("express");
 const multer = require("multer");
+const { createCoverArtResolver } = require("./cover-art");
 
 const PROFILE_STORE_SYSTEM = "restreamnode-profile-store-v1";
 const FFMPEG_BIN = process.env.FFMPEG_BIN || "ffmpeg";
+const FFPROBE_BIN = process.env.FFPROBE_BIN || "ffprobe";
 
 function defaultMusicSettings() {
   return { shuffle: false, loop: true, volume: 0.7 };
@@ -83,9 +85,39 @@ function extractEmbeddedCover(audioPath, coverPath) {
   });
 }
 
+function probeAudioTags(filePath) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(FFPROBE_BIN, [
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_entries", "format_tags=title,artist,album",
+        filePath,
+      ], { stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      return resolve({});
+    }
+    let out = "";
+    child.stdout.on("data", chunk => { out += chunk; });
+    child.on("error", () => resolve({}));
+    child.on("close", () => {
+      try {
+        const tags = JSON.parse(out)?.format?.tags || {};
+        const lower = Object.fromEntries(Object.entries(tags).map(([k, v]) => [String(k).toLowerCase(), String(v || "").trim()]));
+        resolve({ title: lower.title || "", artist: lower.artist || "", album: lower.album || "" });
+      } catch {
+        resolve({});
+      }
+    });
+  });
+}
+
 function createProfileMusicService({ state, saveState, musicDir, maxBytes, musicEngine, events }) {
   const engines = new Map();
   const coverProbes = new Set();
+  const remoteCoverProbes = new Set();
+  const coverArt = createCoverArtResolver();
 
   function ensureCollections(account) {
     let dirty = false;
@@ -178,8 +210,53 @@ function createProfileMusicService({ state, saveState, musicDir, maxBytes, music
     return fs.existsSync(coverPath) ? coverPath : null;
   }
 
+  function remoteLookupKey(track) {
+    return [track?.title, track?.artist, track?.album].map(value => String(value || "").trim().toLowerCase()).join("|");
+  }
+
+  function clearRemoteCover(track) {
+    delete track.remoteCoverUrl;
+    delete track.remoteCoverProvider;
+    delete track.remoteCoverStoreUrl;
+    delete track.remoteCoverLookupKey;
+    delete track.remoteCoverChecked;
+  }
+
+  function queueRemoteCoverLookup(account, info, track) {
+    if (!track?.title || track.coverFilename) return;
+    const lookupKey = remoteLookupKey(track);
+    if (track.remoteCoverChecked === true && track.remoteCoverLookupKey === lookupKey) return;
+    const key = `${account.twitchUserId}:${info.profileId}:${track.id}:${lookupKey}`;
+    if (remoteCoverProbes.has(key)) return;
+    remoteCoverProbes.add(key);
+
+    coverArt.lookup({ title: track.title, artist: track.artist, album: track.album })
+      .then((result) => {
+        const fresh = bucketFor(account, info.profile.id, { create: false, migrate: false });
+        const current = fresh?.tracks.find(t => t.id === track.id);
+        if (!current || current.coverFilename || remoteLookupKey(current) !== lookupKey) return;
+        current.remoteCoverChecked = true;
+        current.remoteCoverLookupKey = lookupKey;
+        if (result?.url) {
+          current.remoteCoverUrl = result.url;
+          current.remoteCoverProvider = result.provider || "external";
+          if (result.storeUrl) current.remoteCoverStoreUrl = result.storeUrl;
+        } else {
+          delete current.remoteCoverUrl;
+          delete current.remoteCoverProvider;
+          delete current.remoteCoverStoreUrl;
+        }
+        saveState(state);
+      })
+      .catch(() => {})
+      .finally(() => remoteCoverProbes.delete(key));
+  }
+
   function queueCoverProbe(account, info, track) {
-    if (!track?.filename || track.coverChecked === true) return;
+    if (!track?.filename || track.coverChecked === true) {
+      if (track && !track.coverFilename) queueRemoteCoverLookup(account, info, track);
+      return;
+    }
     const key = `${account.twitchUserId}:${info.profileId}:${track.id}`;
     if (coverProbes.has(key)) return;
     coverProbes.add(key);
@@ -194,9 +271,14 @@ function createProfileMusicService({ state, saveState, musicDir, maxBytes, music
         const current = fresh?.tracks.find(t => t.id === track.id);
         if (!current) return;
         current.coverChecked = true;
-        if (found) current.coverFilename = coverFilename;
-        else delete current.coverFilename;
+        if (found) {
+          current.coverFilename = coverFilename;
+          clearRemoteCover(current);
+        } else {
+          delete current.coverFilename;
+        }
         saveState(state);
+        if (!found) queueRemoteCoverLookup(account, fresh, current);
       })
       .catch(() => {})
       .finally(() => coverProbes.delete(key));
@@ -236,7 +318,10 @@ function createProfileMusicService({ state, saveState, musicDir, maxBytes, music
       const storedTrack = info.tracks.find(t => t.id === now.track.id);
       if (storedTrack) {
         if (storedTrack.coverChecked !== true) queueCoverProbe(account, info, storedTrack);
+        else if (!storedTrack.coverFilename) queueRemoteCoverLookup(account, info, storedTrack);
         now.track.coverEmbedded = Boolean(coverPathFor(account, info.profile.id, storedTrack.id));
+        now.track.coverRemoteUrl = storedTrack.remoteCoverUrl || null;
+        now.track.coverRemoteProvider = storedTrack.remoteCoverProvider || null;
       }
     }
     return now;
@@ -278,14 +363,18 @@ function createProfileMusicService({ state, saveState, musicDir, maxBytes, music
         const info = bucketFor(req.account, req.musicProfileId || req.query.profileId);
         if (!info) return res.status(404).json({ error: "unknown profile" });
         const filePath = path.join(diskDir(req.account, info.profileId), req.file.filename);
-        const durationS = await musicEngine.probeDurationSeconds(filePath);
+        const [durationS, tags] = await Promise.all([
+          musicEngine.probeDurationSeconds(filePath),
+          probeAudioTags(filePath),
+        ]);
         const trackId = crypto.randomUUID();
         const coverFilename = coverFilenameFor(trackId);
         const embeddedCover = await extractEmbeddedCover(filePath, path.join(diskDir(req.account, info.profileId), coverFilename));
         const track = {
           id: trackId,
-          title: path.basename(req.file.originalname, path.extname(req.file.originalname)),
-          artist: "",
+          title: tags.title || path.basename(req.file.originalname, path.extname(req.file.originalname)),
+          artist: tags.artist || "",
+          album: tags.album || "",
           filename: req.file.filename,
           sizeBytes: req.file.size,
           durationS,
@@ -295,6 +384,7 @@ function createProfileMusicService({ state, saveState, musicDir, maxBytes, music
         };
         info.tracks.push(track);
         saveState(state);
+        if (!embeddedCover) queueRemoteCoverLookup(req.account, info, track);
         engineFor(req.account, info.profile.id)?.refresh();
         res.json({ ok: true, profileId: info.profile.id, track: { ...track, coverEmbedded: embeddedCover } });
       });
@@ -305,10 +395,14 @@ function createProfileMusicService({ state, saveState, musicDir, maxBytes, music
       if (!info) return res.status(404).json({ error: "unknown profile" });
       const track = info.tracks.find(t => t.id === req.params.id);
       if (!track) return res.status(404).json({ error: "unknown track in this profile" });
-      const { title, artist } = req.body || {};
-      if (title !== undefined && String(title).trim()) track.title = String(title).trim();
-      if (artist !== undefined) track.artist = String(artist).trim();
+      const { title, artist, album } = req.body || {};
+      let metadataChanged = false;
+      if (title !== undefined && String(title).trim() && String(title).trim() !== track.title) { track.title = String(title).trim(); metadataChanged = true; }
+      if (artist !== undefined && String(artist).trim() !== String(track.artist || "")) { track.artist = String(artist).trim(); metadataChanged = true; }
+      if (album !== undefined && String(album).trim() !== String(track.album || "")) { track.album = String(album).trim(); metadataChanged = true; }
+      if (metadataChanged && !track.coverFilename) clearRemoteCover(track);
       saveState(state);
+      if (metadataChanged && !track.coverFilename) queueRemoteCoverLookup(req.account, info, track);
       res.json({ ok: true, profileId: info.profile.id, track });
     });
 
@@ -367,4 +461,13 @@ function createProfileMusicService({ state, saveState, musicDir, maxBytes, music
   };
 }
 
-module.exports = { createProfileMusicService, PROFILE_STORE_SYSTEM, activeProfileFor, profileById, defaultMusicSettings, safeSegment, extractEmbeddedCover };
+module.exports = {
+  createProfileMusicService,
+  PROFILE_STORE_SYSTEM,
+  activeProfileFor,
+  profileById,
+  defaultMusicSettings,
+  safeSegment,
+  extractEmbeddedCover,
+  probeAudioTags,
+};
