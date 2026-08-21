@@ -66,6 +66,9 @@ jobs:
       - name: Profile RTMP isolation smoke test
         run: node --test dashboard/profile-rtmp.test.js
 
+      - name: Music 24/7 embeddable worker smoke test
+        run: node --test dashboard/music24-module.test.js
+
       - name: Cover artwork fallback smoke test
         run: node --test dashboard/cover-art.test.js
 
