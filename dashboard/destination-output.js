@@ -1,7 +1,7 @@
 "use strict";
 
 const { detectEncoder, globalEncoderArgs, encoderFilterSuffix, videoEncoderArgs } = require("./gpu-encoder");
-const { cpuX264Preset, liveInputArgs, liveMuxArgs, safeCanvas, stableAudioArgs } = require("./rtmp-pipeline");
+const { cpuX264Preset, liveInputArgs, liveMuxArgs, piSafeMode, safeCanvas, stableAudioArgs } = require("./rtmp-pipeline");
 
 const OUTPUT_LAYOUTS = ["source", "landscape", "vertical"];
 
@@ -39,17 +39,30 @@ function destinationFfmpegArgs(sourceUrl, destination, options = {}) {
   const width = canvas.width;
   const height = canvas.height;
   const fps = String(canvas.fps);
-  const piSafe = width <= 1280 && height <= 1280;
-  const bitrate = process.env.DESTINATION_VIDEO_BITRATE || (piSafe ? "4000k" : "6000k");
+  const cpuSafe = !profile.hardware && piSafeMode({ hardwareEncoder:false });
+  const lowResolution = width <= 1280 && height <= 1280;
+  const bitrate = process.env.DESTINATION_VIDEO_BITRATE || (lowResolution ? "4000k" : "6000k");
   const maxrate = process.env.DESTINATION_VIDEO_MAXRATE || bitrate;
-  const bufsize = process.env.DESTINATION_VIDEO_BUFSIZE || (piSafe ? "8000k" : "12000k");
-  const filter = [
-    "[0:v]split=2[bg0][fg0]",
-    `[bg0]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},gblur=sigma=28[bg]`,
-    `[fg0]scale=${width}:${height}:force_original_aspect_ratio=decrease[fg]`,
-    "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[vbase]",
-    encoderFilterSuffix(profile, "vbase", "v"),
-  ].join(";");
+  const bufsize = process.env.DESTINATION_VIDEO_BUFSIZE || (lowResolution ? "8000k" : "12000k");
+
+  // The pretty blurred-fill layout is expensive in software because it scales,
+  // crops, Gaussian-blurs and overlays every frame before x264. On CPU-only Pi
+  // and VPS deployments this can be the difference between realtime and a
+  // steadily growing RTMP buffer. Use one scale + pad pass in safe mode; retain
+  // the blurred fill when a working hardware encoder is available (or safe mode
+  // was explicitly disabled).
+  const filter = cpuSafe
+    ? [
+        `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[vbase]`,
+        encoderFilterSuffix(profile, "vbase", "v"),
+      ].join(";")
+    : [
+        "[0:v]split=2[bg0][fg0]",
+        `[bg0]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},gblur=sigma=28[bg]`,
+        `[fg0]scale=${width}:${height}:force_original_aspect_ratio=decrease[fg]`,
+        "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[vbase]",
+        encoderFilterSuffix(profile, "vbase", "v"),
+      ].join(";");
 
   return [
     ...input,

@@ -121,6 +121,9 @@ jobs:
       - name: Public RTMP republish regression test
         run: node --test dashboard/public-republish-runtime.test.js
 
+      - name: Program Scene routing regression test
+        run: node --test dashboard/program-scene-routing.test.js
+
       - name: Profile music isolation + dual-format smoke test
         run: node --test dashboard/profile-music.test.js
 
@@ -135,6 +138,9 @@ jobs:
 
       - name: Music 24/7 embeddable worker smoke test
         run: node --test dashboard/music24-module.test.js
+
+      - name: Music 24/7 Program Scene regression test
+        run: node --test dashboard/music24-program-scene.test.js
 
       - name: Cover artwork fallback smoke test
         run: node --test dashboard/cover-art.test.js
