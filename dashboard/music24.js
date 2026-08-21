@@ -6,15 +6,17 @@ const { spawn } = require("node:child_process");
 const { Compositor } = require("./compositor");
 const { detectEncoder } = require("./gpu-encoder");
 const { safeCanvas } = require("./rtmp-pipeline");
+const { activeProfileFor, profilePublishPath, validRtmpKey } = require("./profile-rtmp");
 
 const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, "data", "state.json");
 const MUSIC_DIR = process.env.MUSIC_DIR || path.join(path.dirname(STATE_FILE), "music");
 const DASHBOARD_PORT = Number(process.env.DASHBOARD_PORT || 8090);
 const DASHBOARD_ORIGIN = process.env.DASHBOARD_INTERNAL_ORIGIN || `http://127.0.0.1:${DASHBOARD_PORT}`;
 const RTMP_ORIGIN = process.env.MEDIA_RTMP_ORIGIN || "rtmp://127.0.0.1:1935";
-const PROFILE_STORE_SYSTEM = "restreamnode-profile-store-v1";
+const MEDIAMTX_API = process.env.MEDIAMTX_API || "http://127.0.0.1:9997";
 const POLL_MS = Number(process.env.MUSIC24_POLL_MS || 2000);
 const NOW_POLL_MS = Number(process.env.MUSIC24_NOW_POLL_MS || 750);
+const START_TIMEOUT_MS = Number(process.env.MUSIC24_START_TIMEOUT_MS || 15000);
 
 const workers = new Map();
 let shuttingDown = false;
@@ -22,12 +24,6 @@ let shuttingDown = false;
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 function sanitizeSegment(value) { return String(value || "unknown").replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 120); }
 function readState() { try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch { return null; } }
-function profileStoreFor(account) { return (account?.overlays || []).find(o => o?.config?.system === PROFILE_STORE_SYSTEM) || null; }
-function activeProfileFor(account) {
-  const store = profileStoreFor(account)?.config;
-  if (!store || !Array.isArray(store.profiles)) return null;
-  return store.profiles.find(p => p.id === store.activeProfileId) || null;
-}
 function profileMusicState(account, profile) {
   if (!account || !profile?.id) return null;
   const key = sanitizeSegment(profile.id);
@@ -55,24 +51,48 @@ function musicSceneUrl(account, profile) {
 }
 function musicWorkerSignature(account, profile) {
   const v = profileVideo(profile);
-  return JSON.stringify({ login: account.twitchLogin, pcKey: account.pcKey, profileId: profile?.id, canvasMode: profile?.canvasMode || "landscape", video:v, visual: profile?.musicVisual || {} });
+  return JSON.stringify({ login:account.twitchLogin, profileId:profile?.id, rtmpKey:profile?.rtmpKey || null, canvasMode:profile?.canvasMode || "landscape", video:v, visual:profile?.musicVisual || {} });
 }
+
+async function mediaPathReady(pathName) {
+  try {
+    const response = await fetch(`${MEDIAMTX_API}/v3/paths/list`, { cache:"no-store" });
+    if (!response.ok) return false;
+    const data = await response.json();
+    return (data.items || []).some(item => item.ready && item.name === pathName);
+  } catch {
+    return false;
+  }
+}
+
+async function waitForMediaPath(pathName, timeoutMs = START_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  while (!shuttingDown && Date.now() < deadline) {
+    if (await mediaPathReady(pathName)) return true;
+    await sleep(250);
+  }
+  return false;
+}
+
 function spawnSilenceFeed(accountId, profileId) {
   const streamName = `music-silence/${sanitizeSegment(accountId)}-${sanitizeSegment(profileId)}`;
   const outputUrl = `${RTMP_ORIGIN}/${streamName}`;
   const args = [
     "-hide_banner", "-loglevel", "warning", "-nostats",
     "-re", "-f", "lavfi", "-i", "color=c=black:s=16x16:r=1",
-    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+    "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
     "-map", "0:v:0", "-map", "1:a:0",
     "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
     "-pix_fmt", "yuv420p", "-g", "2", "-b:v", "32k",
-    "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+    "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
     "-f", "flv", "-flvflags", "no_duration_filesize", "-rtmp_live", "live", outputUrl,
   ];
-  const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
-  child.stderr.on("data", chunk => { const line = chunk.toString().trim(); if (line && /error|failed|cannot/i.test(line)) console.warn(`[music24:${accountId}:${profileId}] silence ffmpeg: ${line}`); });
-  return { child, outputUrl };
+  const child = spawn("ffmpeg", args, { stdio:["ignore", "ignore", "pipe"] });
+  child.stderr.on("data", chunk => {
+    const line = chunk.toString().trim();
+    if (line && /error|failed|cannot/i.test(line)) console.warn(`[music24:${accountId}:${profileId}] silence ffmpeg: ${line}`);
+  });
+  return { child, outputUrl, streamName };
 }
 
 class Music24Worker {
@@ -88,6 +108,7 @@ class Music24Worker {
     this.nowTimer = null;
     this.running = false;
     this.stopping = false;
+    this.outputPath = null;
   }
   update(account, profile) { this.account = account; this.profile = profile; }
   getNow() {
@@ -105,9 +126,10 @@ class Music24Worker {
   async pollNow() {
     try {
       const url = `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(this.account.twitchLogin)}/music/${encodeURIComponent(this.profile.id)}/now.json`;
-      const res = await fetch(url, { cache: "no-store" });
+      const res = await fetch(url, { cache:"no-store" });
       if (!res.ok) return;
-      this.now = await res.json(); this.nowFetchedAt = Date.now();
+      this.now = await res.json();
+      this.nowFetchedAt = Date.now();
     } catch {}
   }
   startNowPoll() { this.stopNowPoll(); this.pollNow(); this.nowTimer = setInterval(() => this.pollNow(), NOW_POLL_MS); }
@@ -115,7 +137,13 @@ class Music24Worker {
 
   async start() {
     if (this.running || this.stopping) return;
-    this.running = true; this.startNowPoll();
+    const outputPath = profilePublishPath(this.profile);
+    if (!outputPath) throw new Error("active Music profile has no valid RTMP key yet");
+
+    this.running = true;
+    this.outputPath = outputPath;
+    this.startNowPoll();
+
     const startSilence = () => {
       if (!this.running || this.stopping) return;
       const feed = spawnSilenceFeed(this.accountId, this.profile.id);
@@ -128,33 +156,53 @@ class Music24Worker {
         }
       });
     };
-    startSilence();
-    await sleep(1000);
-    if (!this.running || this.stopping) return;
 
-    const silenceUrl = `${RTMP_ORIGIN}/music-silence/${sanitizeSegment(this.accountId)}-${sanitizeSegment(this.profile.id)}`;
-    const outputUrl = `${RTMP_ORIGIN}/live/${encodeURIComponent(this.account.pcKey)}`;
-    const video = profileVideo(this.profile);
-    this.compositor = new Compositor({
-      accountId: `music24-${this.accountId}-${sanitizeSegment(this.profile.id)}`,
-      pageUrl: musicSceneUrl(this.account, this.profile),
-      audioSourceUrl: silenceUrl,
-      outputUrl,
-      getMusicNow: () => this.getNow(),
-      musicFilePathFor: trackId => this.musicFilePathFor(trackId),
-      video,
-      runtimeDir: path.join("/tmp", "castnexus-music24", sanitizeSegment(this.accountId), sanitizeSegment(this.profile.id)),
-      logger: console,
-    });
-    await this.compositor.start();
-    console.log(`[music24:${this.accountId}:${this.profile.id}] started ${video.width}x${video.height}@${video.fps} -> live/${this.account.pcKey}`);
+    try {
+      startSilence();
+      const silencePath = this.silence?.streamName;
+      if (!silencePath || !(await waitForMediaPath(silencePath))) throw new Error("MediaMTX did not receive the Music 24/7 audio feed in time");
+      if (!this.running || this.stopping) return;
+
+      const silenceUrl = `${RTMP_ORIGIN}/${silencePath}`;
+      const outputUrl = `${RTMP_ORIGIN}/${outputPath}`;
+      const video = profileVideo(this.profile);
+      this.compositor = new Compositor({
+        accountId:`music24-${this.accountId}-${sanitizeSegment(this.profile.id)}`,
+        pageUrl:musicSceneUrl(this.account, this.profile),
+        audioSourceUrl:silenceUrl,
+        outputUrl,
+        getMusicNow:() => this.getNow(),
+        musicFilePathFor:trackId => this.musicFilePathFor(trackId),
+        video,
+        runtimeDir:path.join("/tmp", "castnexus-music24", sanitizeSegment(this.accountId), sanitizeSegment(this.profile.id)),
+        logger:console,
+      });
+      await this.compositor.start();
+
+      if (!(await waitForMediaPath(outputPath))) {
+        const status = this.compositor?.status?.();
+        throw new Error(`Music 24/7 publisher did not become live${status?.error ? `: ${status.error}` : ""}`);
+      }
+      console.log(`[music24:${this.accountId}:${this.profile.id}] ON AIR ${video.width}x${video.height}@${video.fps} -> ${outputPath}`);
+    } catch (err) {
+      await this.stop();
+      throw err;
+    }
   }
 
   async stop() {
     if (this.stopping) return;
-    this.stopping = true; this.running = false; this.stopNowPoll();
+    this.stopping = true;
+    this.running = false;
+    this.stopNowPoll();
     if (this.compositor) { try { await this.compositor.stop(); } catch {} this.compositor = null; }
-    if (this.silence?.child) { const child = this.silence.child; child.removeAllListeners("exit"); try { child.kill("SIGTERM"); } catch {} this.silence = null; }
+    if (this.silence?.child) {
+      const child = this.silence.child;
+      child.removeAllListeners("exit");
+      try { child.kill("SIGTERM"); } catch {}
+      this.silence = null;
+    }
+    this.outputPath = null;
     this.stopping = false;
     console.log(`[music24:${this.accountId}:${this.profile?.id}] stopped`);
   }
@@ -164,26 +212,41 @@ async function reconcile() {
   const state = readState();
   if (!state?.accounts) return;
   const desired = new Set();
+
   for (const account of Object.values(state.accounts)) {
     const profile = activeProfileFor(account);
     const musicState = profileMusicState(account, profile);
     const wantsMusic = profile?.mode === "music" && profile?.musicAutostart !== false;
     const hasTracks = (musicState?.tracks.length || 0) > 0;
-    const ready = wantsMusic && hasTracks && account.pcKey && account.twitchLogin;
+    const ready = wantsMusic && hasTracks && validRtmpKey(profile?.rtmpKey) && account.twitchLogin;
     if (!ready) continue;
 
     desired.add(account.twitchUserId);
     const sig = musicWorkerSignature(account, profile);
     let worker = workers.get(account.twitchUserId);
-    if (worker && worker.signature !== sig) { await worker.stop(); workers.delete(account.twitchUserId); worker = null; }
+    if (worker && worker.signature !== sig) {
+      await worker.stop();
+      workers.delete(account.twitchUserId);
+      worker = null;
+    }
+
     if (!worker) {
-      worker = new Music24Worker(account, profile); workers.set(account.twitchUserId, worker);
-      worker.start().catch(err => console.error(`[music24:${account.twitchUserId}:${profile.id}] start failed: ${err.message}`));
-    } else worker.update(account, profile);
+      worker = new Music24Worker(account, profile);
+      workers.set(account.twitchUserId, worker);
+      worker.start().catch(async err => {
+        console.error(`[music24:${account.twitchUserId}:${profile.id}] start failed: ${err.message}`);
+        if (workers.get(account.twitchUserId) === worker) workers.delete(account.twitchUserId);
+        try { await worker.stop(); } catch {}
+      });
+    } else {
+      worker.update(account, profile);
+    }
   }
+
   for (const [accountId, worker] of [...workers.entries()]) {
     if (desired.has(accountId)) continue;
-    await worker.stop(); workers.delete(accountId);
+    await worker.stop();
+    workers.delete(accountId);
   }
 }
 
