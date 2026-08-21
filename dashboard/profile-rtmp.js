@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const profileDestinations = require("./profile-destinations");
 
 const PROFILE_STORE_SYSTEM = "restreamnode-profile-store-v1";
 const PROFILE_APP = process.env.PROFILE_APP || "profile";
@@ -59,6 +60,14 @@ function ensureProfileRtmpKeys(account, { legacyKey = null } = {}) {
     else profile.rtmpKey = generateProfileRtmpKey();
     dirty = true;
   }
+
+  // Destination URLs/keys are private server-side state. Migrate the former
+  // account-global list into one bucket per existing profile, then install a
+  // non-enumerable compatibility accessor so the existing REST/runtime code
+  // automatically reads and writes the currently selected profile's list.
+  if (profileDestinations.ensure(account)) dirty = true;
+  profileDestinations.installActiveAccessor(account);
+
   return dirty;
 }
 
