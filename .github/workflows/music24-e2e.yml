@@ -84,12 +84,19 @@ jobs:
       - name: RTMP readiness fallback test
         run: node --test dashboard/music24-readiness.test.js
 
-      - name: Publish a real Music 24/7 profile end-to-end
+      - name: Publish a real Pi-safe Music 24/7 profile end-to-end
         env:
           PUPPETEER_EXECUTABLE_PATH: ${{ steps.runtime.outputs.chrome }}
           MEDIAMTX_API: http://127.0.0.1:9997
           MEDIA_RTMP_ORIGIN: rtmp://127.0.0.1:1935
           COMPOSITOR_DEBUG: "true"
+          # Force the ARM-safe path on the x64 CI runner so this workflow tests
+          # the same reduced Chromium/JPEG/x264 workload used on a CPU-only Pi.
+          CASTNEXUS_PI_SAFE_MODE: "true"
+          CASTNEXUS_PI_SAFE_WIDTH: "960"
+          CASTNEXUS_PI_SAFE_HEIGHT: "540"
+          CASTNEXUS_PI_SAFE_FPS: "20"
+          CASTNEXUS_PI_JPEG_QUALITY: "60"
         run: node dashboard/music24-live.integration.js
 
       - name: MediaMTX logs
