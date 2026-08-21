@@ -4,10 +4,9 @@
 #
 # Requires a working /dev/dri device on the host. CastNexus probes the encoder
 # before using it and falls back to CPU x264 if the hardware encode fails.
+# Music 24/7 now runs inside the dashboard service, so this one device mapping
+# covers normal destinations, VODs and the radio compositor.
 services:
   dashboard:
-    devices:
-      - /dev/dri:/dev/dri
-  music24:
     devices:
       - /dev/dri:/dev/dri
