@@ -11,6 +11,14 @@ const buildInfo = require("./build-info.json");
 const isWin = process.platform === "win32";
 const baseDir = process.pkg ? path.dirname(process.execPath) : __dirname;
 
+// Desktop release bundles keep MediaMTX, yt-dlp nightly and Deno next to the
+// CastNexus executable. Put that directory first so dashboard/profile-vod.js
+// resolves those known binaries before anything installed globally.
+process.env.PATH = `${baseDir}${path.delimiter}${process.env.PATH || ""}`;
+const bundledYtDlp = path.join(baseDir, isWin ? "yt-dlp.exe" : "yt-dlp");
+const bundledDeno = path.join(baseDir, isWin ? "deno.exe" : "deno");
+if (fs.existsSync(bundledYtDlp)) process.env.YTDLP_BIN = bundledYtDlp;
+
 function detectLanIp() {
   for (const iface of Object.values(os.networkInterfaces())) {
     for (const addr of iface || []) {
@@ -169,6 +177,10 @@ console.log(`[CastNexus] ${buildInfo.version} (${buildInfo.channel})`);
 console.log(`[CastNexus] LAN IP: ${lanIp}`);
 console.log(`[CastNexus] data directory: ${dataDir}`);
 console.log(`[CastNexus] starting MediaMTX: ${mediamtxBin}`);
+if (fs.existsSync(bundledYtDlp)) console.log(`[CastNexus] yt-dlp: ${bundledYtDlp}`);
+else console.warn("[CastNexus] bundled yt-dlp not found; Twitch/YouTube VOD URL resolving needs yt-dlp in PATH.");
+if (fs.existsSync(bundledDeno)) console.log(`[CastNexus] Deno: ${bundledDeno}`);
+else console.warn("[CastNexus] bundled Deno not found; YouTube URL resolving may be incomplete.");
 checkForUpdate();
 
 const mtx = spawn(mediamtxBin, [configPath], { stdio:"inherit" });
@@ -188,7 +200,7 @@ setTimeout(() => {
 
   const url = `http://localhost:${process.env.DASHBOARD_PORT}`;
   console.log(`[CastNexus] Studio ready at ${url}`);
-  console.log("[CastNexus] desktop mode includes the dashboard/media relay. Console DNS/intercept remains Docker/Linux-specific.");
+  console.log("[CastNexus] desktop mode includes dashboard/media relay, profile VOD reruns and yt-dlp/Deno URL resolving. Console DNS/intercept remains Docker/Linux-specific.");
 
   if (process.env.NO_OPEN_BROWSER !== "true") {
     if (isWin) execFile("cmd", ["/c","start","",url]);

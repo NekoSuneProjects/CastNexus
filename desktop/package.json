@@ -14,7 +14,16 @@
       "../dashboard/public/**/*"
     ],
     "scripts": [
-      "../dashboard/*.js"
+      "../dashboard/server.js",
+      "../dashboard/overlays.js",
+      "../dashboard/scenes.js",
+      "../dashboard/music-scene.js",
+      "../dashboard/music-engine.js",
+      "../dashboard/profile-music.js",
+      "../dashboard/profile-vod.js",
+      "../dashboard/destination-output.js",
+      "../dashboard/compositor.js",
+      "../dashboard/events.js"
     ]
   },
   "devDependencies": {

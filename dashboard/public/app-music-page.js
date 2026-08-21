@@ -1,7 +1,5 @@
-// Dedicated CastNexus Music 24/7 page.
-// Loaded after app-pages-b.js so this specialized control-room layout replaces
-// the generic two-card renderer while keeping the same IDs/events expected by
-// app-runtime.js.
+// Dedicated CastNexus profile music / Music 24/7 page.
+// Every profile owns an isolated server-side music bucket and file path.
 
 window.renderMusic = function renderMusic() {
   const p = activeProfile();
@@ -11,49 +9,55 @@ window.renderMusic = function renderMusic() {
   const programUrl = profileMusicUrl(p);
   const trackCount = S.tracks.length;
   const volume = Math.round((S.musicSettings.volume ?? .7) * 100);
+  const layout = p?.canvasMode === "vertical" ? "9:16 Vertical" : "16:9 Landscape";
+  const title = musicProfile ? "Music 24/7" : "Profile Music";
+  const description = musicProfile
+    ? `The ${p?.name || "active"} profile has its own isolated radio library. Docker broadcasts only these tracks.`
+    : `Music uploaded here belongs only to ${p?.name || "this profile"}. Use it for Starting Soon, BRB and Ending without touching another profile's playlist.`;
 
   return `
     ${pageHead(
-      "AUDIO AUTOMATION",
-      "Music 24/7",
-      "A proper always-on radio control room: monitor the program, manage playback, style the scene and let Docker keep it broadcasting.",
-      `<label class="btn btn-primary music-upload-button" style="margin:0"><input id="music-file-input" type="file" accept="audio/*" multiple hidden>＋ Upload music</label>`
+      "PROFILE AUDIO",
+      title,
+      description,
+      `<label class="btn btn-primary music-upload-button" style="margin:0"><input id="music-file-input" type="file" accept="audio/*" multiple hidden>＋ Upload to ${esc(p?.name || "profile")}</label>`
     )}
 
     <section class="music-studio-shell">
       <div class="card-panel music-program-card">
         <div class="music-card-heading">
           <div>
-            <div class="eyebrow">PROGRAM MONITOR</div>
-            <h3>CastNexus Radio</h3>
-            <p>The monitor below is the same 16:9 scene rendered by the 24/7 Docker broadcaster.</p>
+            <div class="eyebrow">PROFILE PROGRAM MONITOR</div>
+            <h3>${esc(p?.name || "CastNexus")} · ${layout}</h3>
+            <p>This preview and its audio path are tied to profile ID <code>${esc(p?.id || "legacy")}</code>. Switching profiles switches libraries instead of sharing one global playlist.</p>
           </div>
           <div class="music-status-cluster">
-            <span class="badge ${onAir ? "green" : "cyan"}">${onAir ? "● ON AIR" : musicProfile ? "24/7 PROFILE ACTIVE" : "PREVIEW MODE"}</span>
+            <span class="badge ${onAir ? "green" : "cyan"}">${onAir ? "● ON AIR" : musicProfile ? "24/7 PROFILE ACTIVE" : p?.sceneMusicEnabled ? "SCENE MUSIC ARMED" : "PREVIEW MODE"}</span>
             <span class="badge">${trackCount} TRACK${trackCount === 1 ? "" : "S"}</span>
+            <span class="badge ${p?.canvasMode === "vertical" ? "purple" : ""}">${p?.canvasMode === "vertical" ? "9:16" : "16:9"}</span>
           </div>
         </div>
 
         <div class="music-program-layout">
           <div class="music-monitor-column">
-            <div class="music-monitor-frame">
+            <div class="music-monitor-frame ${p?.canvasMode === "vertical" ? "music-monitor-frame-vertical" : ""}">
               <div class="music-monitor-topline">
-                <span><i class="music-monitor-dot ${onAir ? "live" : ""}"></i>${onAir ? "LIVE PROGRAM" : "PROGRAM PREVIEW"}</span>
-                <span>16:9 · 30 FPS</span>
+                <span><i class="music-monitor-dot ${onAir ? "live" : ""}"></i>${onAir ? "LIVE PROGRAM" : "PROFILE PREVIEW"}</span>
+                <span>${p?.canvasMode === "vertical" ? "9:16 · 1080×1920" : "16:9 · 1920×1080"} · 30 FPS</span>
               </div>
-              <div class="music-monitor-screen">
-                <iframe src="${esc(programUrl)}" allow="autoplay; fullscreen" title="CastNexus music program preview"></iframe>
+              <div class="music-monitor-screen ${p?.canvasMode === "vertical" ? "vertical" : ""}">
+                <iframe src="${esc(programUrl)}" allow="autoplay; fullscreen" title="CastNexus profile music preview"></iframe>
               </div>
             </div>
 
             <div class="music-monitor-toolbar">
               <div class="music-monitor-facts">
-                <span><strong>Renderer</strong> Chromium + FFmpeg</span>
+                <span><strong>Profile</strong> ${esc(p?.name || "—")}</span>
+                <span><strong>Storage</strong> isolated profile path</span>
                 <span><strong>Spectrum</strong> Web Audio · 48 bands</span>
-                <span><strong>Mode</strong> ${musicProfile ? "Automatic 24/7" : "Preview only"}</span>
               </div>
               <div class="page-actions">
-                <button class="btn btn-ghost btn-sm" data-copy="${esc(programUrl)}">Copy scene URL</button>
+                <button class="btn btn-ghost btn-sm" data-copy="${esc(programUrl)}">Copy profile music URL</button>
                 <button class="btn btn-ghost btn-sm" data-open-url="${esc(programUrl)}">Open full scene ↗</button>
               </div>
             </div>
@@ -64,14 +68,14 @@ window.renderMusic = function renderMusic() {
               <div class="card-title-row">
                 <div>
                   <div class="eyebrow">CURRENT TRACK</div>
-                  <h3>Now playing</h3>
+                  <h3>Now playing · ${esc(p?.name || "profile")}</h3>
                 </div>
                 <span id="music-now-mode" class="badge">SYNCING</span>
               </div>
               <div id="music-now-card" class="music-now music-now-large">
                 <div class="music-cover">♫</div>
                 <div class="music-now-copy">
-                  <strong>Waiting for music engine…</strong>
+                  <strong>Waiting for profile music engine…</strong>
                   <div class="muted music-now-artist">—</div>
                   <div class="progress"><span></span></div>
                   <div class="stat-sub">00:00 / 00:00</div>
@@ -82,28 +86,34 @@ window.renderMusic = function renderMusic() {
             <section class="music-side-panel music-playback-panel">
               <div class="card-title-row">
                 <div>
-                  <div class="eyebrow">AUTOMATION</div>
+                  <div class="eyebrow">PROFILE AUTOMATION</div>
                   <h3>Playback</h3>
                 </div>
                 <span class="badge purple">${volume}%</span>
               </div>
 
+              ${!musicProfile ? `<label class="music-option music-scene-option">
+                <input id="profile-scene-music" type="checkbox" ${p?.sceneMusicEnabled ? "checked" : ""}>
+                <span class="music-option-icon">♪</span>
+                <span><strong>Play on standby scenes</strong><small>Starting Soon · BRB · Ending only. Gameplay stays untouched.</small></span>
+              </label>` : ""}
+
               <div class="music-toggle-grid">
                 <label class="music-option">
                   <input id="music-shuffle" type="checkbox" ${S.musicSettings.shuffle ? "checked" : ""}>
                   <span class="music-option-icon">⤨</span>
-                  <span><strong>Shuffle</strong><small>Randomise the library order</small></span>
+                  <span><strong>Shuffle</strong><small>Randomise only this profile's library</small></span>
                 </label>
                 <label class="music-option">
                   <input id="music-loop" type="checkbox" ${S.musicSettings.loop ? "checked" : ""}>
                   <span class="music-option-icon">↻</span>
-                  <span><strong>Loop forever</strong><small>Keep the station running continuously</small></span>
+                  <span><strong>Loop forever</strong><small>Continue this profile's playlist</small></span>
                 </label>
               </div>
 
               <div class="music-volume-control">
                 <div class="music-volume-label-row">
-                  <label for="music-volume">Master volume</label>
+                  <label for="music-volume">Profile music volume</label>
                   <strong id="music-volume-label">${volume}%</strong>
                 </div>
                 <input id="music-volume" type="range" min="0" max="1" step="0.01" value="${Number(S.musicSettings.volume ?? .7)}">
@@ -118,9 +128,9 @@ window.renderMusic = function renderMusic() {
       <div class="card-panel music-appearance-card">
         <div class="music-card-heading compact">
           <div>
-            <div class="eyebrow">SCENE DESIGN</div>
-            <h3>Radio appearance</h3>
-            <p>Saved to this profile and reloaded automatically by the 24/7 renderer.</p>
+            <div class="eyebrow">PROFILE SCENE DESIGN</div>
+            <h3>Music appearance</h3>
+            <p>Saved to ${esc(p?.name || "this profile")} and never reused by another profile unless you copy the settings yourself.</p>
           </div>
           <span class="badge cyan">PROFILE VISUALS</span>
         </div>
@@ -152,40 +162,42 @@ window.renderMusic = function renderMusic() {
         </div>
 
         <div class="music-appearance-actions">
-          <button class="btn btn-primary btn-sm" data-action="save-music-visual">Save radio appearance</button>
-          <span class="muted">Changes reload the broadcaster automatically.</span>
+          <button class="btn btn-primary btn-sm" data-action="save-music-visual">Save profile music appearance</button>
+          <span class="muted">The profile renderer reloads these values automatically.</span>
         </div>
       </div>
 
       <div class="card-panel music-worker-card">
         <div class="music-card-heading compact">
           <div>
-            <div class="eyebrow">24/7 ENGINE</div>
-            <h3>Broadcaster status</h3>
+            <div class="eyebrow">${musicProfile ? "24/7 ENGINE" : "SCENE MUSIC"}</div>
+            <h3>${musicProfile ? "Broadcaster status" : "Profile isolation"}</h3>
           </div>
           <span class="badge ${onAir ? "green" : trackCount ? "cyan" : "yellow"}">${onAir ? "RUNNING" : trackCount ? "READY" : "NEEDS MUSIC"}</span>
         </div>
         <div class="music-worker-list">
           <div><span>Profile</span><strong>${esc(p?.name || "No profile")}</strong></div>
-          <div><span>Autostart</span><strong>${musicProfile ? "Enabled" : "Switch to Music profile"}</strong></div>
+          <div><span>Canvas</span><strong>${layout}</strong></div>
           <div><span>Library</span><strong>${trackCount} track${trackCount === 1 ? "" : "s"}</strong></div>
-          <div><span>Loop</span><strong>${S.musicSettings.loop ? "On" : "Off"}</strong></div>
+          <div><span>Scene music</span><strong>${musicProfile ? "Always for radio" : p?.sceneMusicEnabled ? "Standby / BRB / Ending" : "Off"}</strong></div>
           <div><span>Shuffle</span><strong>${S.musicSettings.shuffle ? "On" : "Off"}</strong></div>
         </div>
         <div class="callout ${trackCount ? "" : "warn"}">${trackCount
-          ? "The music24 worker can start automatically when this Music profile is active. No OBS window needs to stay open."
-          : "Upload at least one audio track before the 24/7 broadcaster can start."}</div>
+          ? musicProfile
+            ? "The music24 worker uses only this profile's files. Switching to another Music profile switches to that profile's separate library."
+            : "When scene music is enabled, only this profile's files are used on Starting Soon, BRB and Ending. Your normal gameplay/program audio is not replaced."
+          : "Upload at least one audio track into this profile's library."}</div>
       </div>
     </section>
 
     <div class="section-title music-library-title">
-      <span>Library · ${trackCount} tracks</span>
-      <span class="muted">MP3 · FLAC · OGG · WAV · M4A</span>
+      <span>${esc(p?.name || "Profile")} library · ${trackCount} tracks</span>
+      <span class="muted">Isolated per profile · MP3 · FLAC · OGG · WAV · M4A</span>
     </div>
     <section class="card-panel music-library-card">
       <div class="list-stack">${trackCount
         ? S.tracks.map(trackRow).join("")
-        : `<div class="empty-state music-empty-state"><div class="music-empty-icon">♫</div><strong>Your radio is empty</strong><span>Upload music to start building the CastNexus 24/7 station.</span></div>`}
+        : `<div class="empty-state music-empty-state"><div class="music-empty-icon">♫</div><strong>${esc(p?.name || "This profile")} has no music yet</strong><span>Upload music here; other profile libraries will stay separate.</span></div>`}
       </div>
     </section>`;
 };

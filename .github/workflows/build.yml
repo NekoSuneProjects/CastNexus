@@ -42,9 +42,21 @@ jobs:
           node --check dashboard/scenes.js
           node --check dashboard/music-scene.js
           node --check dashboard/music24.js
+          node --check dashboard/music-engine.js
+          node --check dashboard/profile-music.js
+          node --check dashboard/profile-vod.js
+          node --check dashboard/destination-output.js
+          node --check dashboard/profile-music.test.js
+          node --check dashboard/profile-vod.test.js
           node --check dashboard/compositor.js
           node --check desktop/launcher.js
           for f in dashboard/public/app-*.js dashboard/public/build-info.js; do node --check "$f"; done
+
+      - name: Profile music isolation + dual-format smoke test
+        run: node --test dashboard/profile-music.test.js
+
+      - name: Twitch HLS + VOD resolver smoke test
+        run: node --test dashboard/profile-vod.test.js
 
   docker:
     runs-on: ubuntu-latest

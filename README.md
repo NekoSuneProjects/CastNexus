@@ -1,14 +1,14 @@
 # CastNexus
 
-**CastNexus** is a self-hosted broadcast control studio for restreaming one source to multiple destinations, adding browser/HTML overlays, switching broadcast profiles, and running an always-on music station.
+**CastNexus** is a self-hosted broadcast control studio for restreaming sources to multiple destinations, adding browser/HTML overlays, switching broadcast profiles, running an always-on music station, and rerunning authorized Twitch/YouTube/video content.
 
-It is designed around three workflows:
+It is designed around three main profile workflows:
 
-1. **PC Streaming** — OBS, Streamlabs or another RTMP encoder publishes to CastNexus.
+1. **PC Streaming** — OBS, Streamlabs or another RTMP encoder publishes to CastNexus, or the profile can use CastNexus's Twitch HLS / VOD rerun engine as its program source.
 2. **Console Streaming** — a supported console Twitch broadcast is intercepted on the network and routed through CastNexus.
-3. **Music 24/7** — Docker renders a full music scene with a live spectrum and continuously publishes uploaded music without needing OBS open.
+3. **Music 24/7** — Docker renders a full music scene with a live spectrum and continuously publishes the active profile's uploaded music without needing OBS open.
 
-CastNexus uses **MediaMTX** for ingest/playback, **FFmpeg** for destination fan-out and audio/video processing, and an optional **headless Chromium compositor** for server-side overlays.
+CastNexus uses **MediaMTX** for ingest/playback, **FFmpeg** for destination fan-out and audio/video processing, **yt-dlp nightly + Deno** for supported Twitch/YouTube URL resolving, and an optional **headless Chromium compositor** for server-side overlays.
 
 ---
 
@@ -17,11 +17,17 @@ CastNexus uses **MediaMTX** for ingest/playback, **FFmpeg** for destination fan-
 ### Broadcast sources
 
 - PC / OBS RTMP ingest using a CastNexus-generated key
-- Console Twitch capture using the existing DNS + ARP/DNAT interception system
-- independent PC and console source detection
+- Console Twitch capture using the DNS + ARP/DNAT interception system
+- **Twitch live HLS/m3u8 relay** for broadcasts you own/are authorized to relay
+- **Twitch VOD / past-broadcast reruns**
+- **YouTube video / past-livestream reruns**
+- **profile-scoped uploaded video reruns**
+- independent PC, console and internal rerun source detection
 - automatic source failover
 - configurable reconnect grace period
 - Docker Music 24/7 source
+
+The internal rerun engine publishes to `relay/<pc-key>`, while OBS remains on `live/<pc-key>`. They never publish to the same MediaMTX path.
 
 ### Restream destinations
 
@@ -35,7 +41,38 @@ Add as many per-account outputs as needed:
 - Kick
 - custom streaming servers
 
-Destinations can be enabled/disabled live from the Studio UI.
+Destinations can be enabled/disabled live from the Studio UI and can independently use Source/passthrough, 16:9 Landscape, or 9:16 Vertical output.
+
+### Reruns / VOD
+
+Each profile gets a separate VOD/rerun library.
+
+Supported inputs:
+
+- Twitch live channel name or URL → resolved HLS/m3u8 relay
+- Twitch VOD URL
+- YouTube video / past livestream URL
+- uploaded video file
+
+Uploaded rerun videos live under:
+
+```text
+data/vod/<account-id>/<profile-id>/
+```
+
+They are **rerun assets only**. They are not exposed as Overlay Studio backgrounds or scene-media choices.
+
+Remote Twitch/YouTube features require confirmation that you own the content or have permission to relay/rerun it.
+
+#### YouTube URL resolving
+
+CastNexus uses current **yt-dlp nightly** with **Deno**. The Docker dashboard image includes both, and Windows/Linux GitHub Release bundles include both beside the CastNexus executable.
+
+YouTube can apply additional challenges to VPS/datacenter/hosting-provider IP ranges. A normal home/residential connection is generally more reliable for URL resolving, although it cannot guarantee every URL will work.
+
+CastNexus intentionally does **not** request/import browser cookies. If YouTube returns a sign-in, cookie, anti-bot or related 403 challenge, CastNexus reports that condition and asks you to upload the video manually to the VOD library.
+
+See [`docs/VOD-RERUNS.md`](docs/VOD-RERUNS.md).
 
 ### Overlay Studio
 
@@ -51,6 +88,13 @@ Built-in scenes:
 - Live badge
 - Now Playing widget
 
+Starting Soon supports both:
+
+- a fixed date/time target
+- **relative countdown from activation**, e.g. `10` minutes
+
+With a 10-minute relative timer, every time Starting Soon is activated CastNexus creates a fresh target ten minutes from that moment.
+
 Custom overlays:
 
 - **Browser / iframe** — ideal for StreamElements, Streamlabs alerts, chat boxes and trusted browser widgets
@@ -62,13 +106,23 @@ Browser overlays use a sandbox that allows the JavaScript commonly required by a
 
 ### Music / Radio
 
+Music is isolated by profile. A PC Gaming profile can keep a creator-safe/NCS-style BRB library while a separate Radio profile contains an entirely different library.
+
+Each profile has its own:
+
+- track list and files
+- shuffle / loop / volume settings
+- playback timeline
+- visual settings
+
+PC/Console profiles can optionally play their own profile music only on Starting Soon / BRB / Ending scenes.
+
 The music scene includes:
 
 - 48 spectrum bars
 - Web Audio `AnalyserNode`
 - FFT size 256
-- smoothing 0.78
-- 30 FPS visualizer
+- smooth 30 FPS visualizer
 - procedural fallback spectrum
 - animated vinyl
 - title / artist metadata
@@ -76,11 +130,8 @@ The music scene includes:
 - elapsed + total time
 - clock
 - station name
-- custom accent
-- background image
-- cover/logo image
-
-The shared music engine keeps the Music scene and Now Playing widgets on the same authoritative track timeline.
+- custom accent/background/cover
+- dedicated 16:9 and 9:16 compositions
 
 ### Profiles
 
@@ -94,10 +145,12 @@ Profiles work like separate broadcast workspaces. Examples:
 A profile remembers its:
 
 - mode: PC / Console / Music
+- default canvas: 16:9 / 9:16
 - enabled destination IDs
 - current scene
 - compositor preference
-- music shuffle / loop / volume
+- isolated music library/settings
+- isolated VOD/rerun library
 - music visual settings
 
 Switch profiles from the top bar in CastNexus Studio.
@@ -112,14 +165,14 @@ The web dashboard is a responsive dark/glass broadcast control interface with:
 - Sources
 - Destinations
 - Overlay Studio
-- Music 24/7
+- Music / 24/7
+- **Reruns / VOD**
 - Profiles
 - Settings
 - live/reconnecting status
 - program preview
 - Twitch account avatar
 - profile switcher
-- modals and confirmations
 - update notifications
 
 Open it at:
@@ -169,7 +222,7 @@ For console capture helpers as well:
 docker compose --profile console up -d
 ```
 
-The existing `install.sh` can also be used for the Raspberry Pi deployment.
+The dashboard Docker image contains FFmpeg, Chromium, yt-dlp nightly and Deno, so Twitch/YouTube VOD resolving does not need separate helper containers.
 
 ---
 
@@ -178,8 +231,6 @@ The existing `install.sh` can also be used for the Raspberry Pi deployment.
 CastNexus deliberately separates test builds from production releases.
 
 ## Stable
-
-Stable Docker installs use:
 
 ```dotenv
 CASTNEXUS_IMAGE_TAG=latest
@@ -194,17 +245,9 @@ ghcr.io/nekosuneprojects/castnexus-dns:latest
 ghcr.io/nekosuneprojects/castnexus-intercept:latest
 ```
 
-A stable GitHub release uses a normal semantic-version tag such as:
-
-```text
-v1.2.0
-```
-
-Stable GitHub releases are normal releases and are marked as the latest release.
+Stable releases use normal semantic-version tags such as `v1.2.0` and are marked as the latest GitHub Release.
 
 ## Beta
-
-Beta Docker installs use:
 
 ```dotenv
 CASTNEXUS_IMAGE_TAG=beta
@@ -219,19 +262,13 @@ ghcr.io/nekosuneprojects/castnexus-dns:beta
 ghcr.io/nekosuneprojects/castnexus-intercept:beta
 ```
 
-Beta versions use prerelease tags such as:
-
-```text
-v1.3.0-beta.1
-```
-
-GitHub marks them as **Pre-release**, so they can be tested without replacing the stable/latest release.
+Beta versions use prerelease tags such as `v1.3.0-beta.1`. GitHub marks them as **Pre-release**, so they can be tested without replacing stable/latest.
 
 ---
 
 # Creating a release
 
-The release builder is:
+Release builder:
 
 ```text
 .github/workflows/release.yml
@@ -248,7 +285,7 @@ Channel: beta
 Version: 1.3.0
 ```
 
-If the version does not already contain a prerelease suffix, the workflow automatically creates a version similar to:
+If there is no prerelease suffix the workflow creates one similar to:
 
 ```text
 1.3.0-beta.<workflow run number>
@@ -261,9 +298,10 @@ The workflow then:
 3. updates the `:beta` Docker tags
 4. builds CastNexus Desktop for Windows x64
 5. builds CastNexus Desktop for Linux x64
-6. creates a GitHub **Pre-release**
-7. attaches the Windows/Linux downloads
-8. asks GitHub to generate release notes from the changes since the previous release
+6. bundles MediaMTX + yt-dlp nightly + Deno into desktop packages
+7. creates a GitHub **Pre-release**
+8. attaches the Windows/Linux downloads
+9. generates release notes
 
 ## Promote a stable release
 
@@ -274,18 +312,7 @@ Channel: stable
 Version: 1.3.0
 ```
 
-Stable release dispatches are intentionally blocked from non-`main` branches.
-
-The stable build:
-
-- publishes exact Docker version tags
-- updates Docker `:latest`
-- creates a normal GitHub Release
-- marks it as the latest release
-- attaches Windows/Linux desktop bundles
-- generates release notes
-
-You can also push normal `v*` tags. A tag containing a prerelease suffix is treated as beta; a normal `v1.2.3` tag is stable.
+Stable release dispatches are intentionally blocked from non-`main` branches. Stable builds update Docker `:latest`, create a normal GitHub Release and mark it as latest.
 
 ---
 
@@ -305,31 +332,22 @@ CASTNEXUS_IMAGE_TAG=beta CASTNEXUS_CHANNEL=beta docker compose pull
 docker compose up -d
 ```
 
-CastNexus embeds its version/channel into each release build. The Studio UI checks GitHub Releases periodically and displays an update notification when a newer release exists for the installed channel.
-
-Stable installations ignore beta/prerelease versions.
+CastNexus embeds its version/channel into each release build. Studio checks GitHub Releases and displays an update notification when a newer release exists for the installed channel. Stable installations ignore beta/prerelease versions.
 
 ---
 
 # Desktop — Windows and Linux
 
-Release assets are built for:
+Release assets:
 
 ```text
 CastNexus-Windows-x64.zip
 CastNexus-Linux-x64.tar.gz
 ```
 
+Each release bundle includes the CastNexus launcher, MediaMTX, yt-dlp nightly and Deno. **FFmpeg is still a desktop host prerequisite** for restream/VOD processing.
+
 See [`desktop/README.md`](desktop/README.md) for full desktop information.
-
-The desktop launcher:
-
-- starts MediaMTX
-- starts the bundled CastNexus dashboard
-- opens the Studio UI
-- checks for updates at startup
-- attempts a native Windows notification or Linux `notify-send` notification when a newer version exists
-- also gets the normal in-dashboard update notification
 
 Desktop application data is stored in:
 
@@ -337,9 +355,9 @@ Desktop application data is stored in:
 ~/.castnexus
 ```
 
-For upgrade compatibility, CastNexus automatically continues using the older `.nekosune-ps5-streamer` directory when that directory already exists and the new directory has not yet been created.
+For upgrade compatibility, CastNexus continues using the older `.nekosune-ps5-streamer` directory when it already exists and the new directory has not yet been created.
 
-> Desktop does not bundle the privileged console DNS/ARP interception containers. Use the Docker/Linux deployment for full console interception and the guaranteed Docker Music 24/7 worker.
+> Desktop does not bundle the privileged console DNS/ARP interception containers. Use Docker/Linux for full console interception and the guaranteed Docker Music 24/7 worker.
 
 ---
 
@@ -351,10 +369,23 @@ For upgrade compatibility, CastNexus automatically continues using the older `.n
 4. Copy the CastNexus RTMP server and generated PC key.
 5. In OBS choose a Custom streaming service.
 6. Paste the server + CastNexus key.
-7. Configure your Destinations.
+7. Configure Destinations.
 8. Start OBS.
 
 The generated PC ingest key is separate from the real Twitch stream key and can be rotated from CastNexus.
+
+## PC Twitch relay / VOD rerun
+
+Instead of OBS, a PC profile can open **Reruns / VOD** and start:
+
+- an authorized Twitch live HLS relay
+- a Twitch VOD
+- a YouTube VOD/past livestream
+- an uploaded video
+
+The internal source appears as **Rerun** and uses the same destination fan-out as a normal PC source.
+
+If OBS is already active, the rerun/relay remains standby rather than stealing the currently active program source.
 
 ---
 
@@ -380,19 +411,13 @@ The Twitch stream key is masked after it is saved.
 1. Start the normal Docker stack.
 2. Sign in to CastNexus.
 3. Create a **24/7 Music** profile.
-4. Open **Music 24/7**.
+4. Open **Music / 24/7**.
 5. Upload tracks.
 6. Configure shuffle / loop / volume.
-7. Configure the music scene accent, background, station name and cover.
+7. Configure music scene appearance.
 8. Enable the destinations you want.
 
-The `music24` service watches the active profile. When a Music profile is active and at least one track exists it automatically renders and publishes the station.
-
-Switching away from the Music profile stops its generated broadcast.
-
-### Important
-
-A Music profile publishes through the account's CastNexus PC ingest path. Do not leave OBS publishing with the same CastNexus PC key while activating Music 24/7, because two publishers cannot safely own the same MediaMTX path.
+The `music24` service watches the active profile. When a Music profile is active and has tracks it renders and publishes that profile's isolated station.
 
 ---
 
@@ -402,29 +427,17 @@ A Music profile publishes through the account's CastNexus PC ingest path. Do not
 
 Open **Overlay Studio → New overlay → Browser / iframe** and paste the widget/browser-source URL.
 
-Choose either:
-
-- full-screen
-- fixed width + height
-- X/Y position
-- transparent background
-
-Then either:
-
-- activate it through the CastNexus master scene switcher, or
-- copy its individual Browser Source URL into OBS.
+Choose full-screen or fixed width/height/X/Y positioning, then either activate it through the master scene switcher or copy its individual Browser Source URL into OBS.
 
 ## Custom HTML
 
-Use **HTML / CSS** for trusted code you own.
-
-Do not use the raw HTML mode simply to embed an unknown third-party script; use the sandboxed Browser / iframe option instead.
+Use **HTML / CSS** for trusted code you own. For unknown third-party scripts use the sandboxed Browser / iframe option instead.
 
 ---
 
 # Playback
 
-While an account is live CastNexus provides playback endpoints for:
+While an account is live CastNexus provides:
 
 - WebRTC / WHEP
 - HLS
@@ -437,11 +450,11 @@ The public playback path uses the Twitch login instead of exposing the raw strea
 
 # CI vs Release builds
 
-`.github/workflows/build.yml` is now **CI only**. It validates JavaScript, performs non-publishing Docker builds and smoke-packages the Linux desktop app.
+`.github/workflows/build.yml` is **CI only**. It validates JavaScript, profile isolation/VOD resolver logic, performs non-publishing Docker builds and smoke-packages the Linux desktop app.
 
 It does **not** publish `latest`.
 
-Only `.github/workflows/release.yml` promotes Docker images or creates GitHub Releases. This prevents an ordinary development push from accidentally replacing the production image.
+Only `.github/workflows/release.yml` promotes Docker images or creates GitHub Releases.
 
 ---
 
@@ -449,10 +462,13 @@ Only `.github/workflows/release.yml` promotes Docker images or creates GitHub Re
 
 ```text
 CastNexus/
-├── dashboard/                # Studio API/UI, overlays, compositor, music
-│   ├── public/               # modern CastNexus Studio frontend
+├── dashboard/
+│   ├── public/               # CastNexus Studio frontend
+│   ├── profile-music.js      # profile-isolated music service
+│   ├── profile-vod.js        # Twitch HLS + VOD/upload rerun service
+│   ├── destination-output.js # source / 16:9 / 9:16 destination encoder
 │   ├── music24.js            # always-on Docker music worker
-│   ├── music-scene.js        # spectrum/radio scene
+│   ├── music-scene.js        # landscape/vertical spectrum scene
 │   ├── scenes.js             # Starting Soon / BRB / Ending / Offline
 │   └── overlays.js           # browser, HTML, text and master overlays
 ├── desktop/                  # Windows/Linux launcher build
@@ -460,6 +476,8 @@ CastNexus/
 ├── intercept/                # console ARP/DNAT capture helper
 ├── config/                   # MediaMTX configuration
 ├── docs/
+│   ├── PROFILE-MUSIC-DUAL-FORMAT.md
+│   └── VOD-RERUNS.md
 ├── docker-compose.yml
 └── .github/workflows/
     ├── build.yml             # validation / CI

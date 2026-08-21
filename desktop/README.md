@@ -9,7 +9,14 @@ Release builds are produced for:
 - **Windows x64** — `CastNexus-Windows-x64.zip`
 - **Linux x64** — `CastNexus-Linux-x64.tar.gz`
 
-Each release bundle contains the CastNexus launcher plus a matching MediaMTX binary. The launcher starts MediaMTX, starts the bundled CastNexus dashboard, checks the configured GitHub Release channel for updates, and opens the Studio UI at `http://localhost:8090`.
+Each release bundle contains:
+
+- CastNexus launcher
+- MediaMTX
+- **yt-dlp nightly**
+- **Deno**
+
+The launcher starts MediaMTX, starts the bundled CastNexus dashboard, adds the bundled yt-dlp/Deno tools to the app runtime, checks the configured GitHub Release channel for updates, and opens Studio at `http://localhost:8090`.
 
 ## Update channels
 
@@ -30,7 +37,36 @@ Desktop updating is intentionally user-controlled: download the newer release bu
 - LL-HLS / RTSP / SRT / WebRTC playback
 - multi-destination FFmpeg restreaming
 - profiles, scenes and Browser Source overlays
+- profile-isolated music libraries
+- **Twitch live HLS/m3u8 relay** for broadcasts you are authorized to relay
+- **Twitch VOD reruns**
+- **YouTube video / past-livestream reruns**
+- **uploaded rerun-video library** scoped to each profile
+- yt-dlp nightly + Deno URL resolving
 - update notification system
+
+## Reruns / VOD
+
+Use the **Reruns / VOD** page in Studio.
+
+Each profile has its own rerun library. Uploaded videos are stored as rerun assets only; CastNexus does not expose those files as Overlay Studio backgrounds or scene media.
+
+Available inputs:
+
+1. Twitch live channel — CastNexus resolves Twitch's HLS/m3u8 feed and republishes it through the normal destination fan-out.
+2. Twitch VOD / past broadcast URL.
+3. YouTube video or past-livestream URL.
+4. Manually uploaded video file.
+
+Remote Twitch/YouTube content should only be used when you own the content or have permission to relay/rerun it.
+
+### YouTube and server IPs
+
+Current YouTube extraction can be sensitive to hosting/datacenter/VPS IP addresses. A normal home/residential connection is generally more reliable for URL resolving, although no connection type is guaranteed to avoid every YouTube challenge.
+
+CastNexus intentionally does **not** request or import browser cookies. If YouTube responds with a sign-in, cookie, anti-bot or similar challenge, CastNexus reports the URL as unavailable and asks you to upload the video manually to the profile VOD library instead.
+
+The release bundle includes current yt-dlp nightly and Deno, so a normal desktop release does not require you to install those two tools separately.
 
 ## Desktop limitations
 
@@ -40,7 +76,7 @@ The full Docker Music 24/7 sidecar is also designed for the Docker stack where C
 
 ## Prerequisite
 
-**FFmpeg must be installed and available on `PATH`** for restream destination pushes and other FFmpeg-backed features.
+**FFmpeg must be installed and available on `PATH`** for restream destination pushes, VOD playback/reruns and other FFmpeg-backed features.
 
 Windows users can install an FFmpeg build and add its `bin` directory to PATH. Linux users can use their distribution package manager, for example:
 
@@ -58,14 +94,21 @@ Extract the ZIP and run:
 CastNexus.exe
 ```
 
-Keep `mediamtx.exe` beside it.
+Keep these files beside it:
+
+```text
+CastNexus.exe
+mediamtx.exe
+yt-dlp.exe
+deno.exe
+```
 
 ### Linux
 
 Extract the archive and run:
 
 ```bash
-chmod +x CastNexus mediamtx
+chmod +x CastNexus mediamtx yt-dlp deno
 ./CastNexus
 ```
 
@@ -74,6 +117,18 @@ chmod +x CastNexus mediamtx
 New installs store data in:
 
 - Windows/Linux: `~/.castnexus`
+
+Profile VOD files live below the configured data directory in:
+
+```text
+vod/<account-id>/<profile-id>/
+```
+
+Profile music remains separate in:
+
+```text
+music/<account-id>/<profile-id>/
+```
 
 For compatibility, if the previous `.nekosune-ps5-streamer` directory exists and `.castnexus` does not, CastNexus continues using the legacy directory automatically so an upgrade does not appear to lose saved state.
 
@@ -84,6 +139,7 @@ Environment overrides:
 - `PI_IP` — override detected LAN IP
 - `DASHBOARD_PORT` — default `8090`
 - `MEDIAMTX_BIN` — override MediaMTX binary path
+- `YTDLP_BIN` — override bundled/system yt-dlp executable
 - `NO_OPEN_BROWSER=true` — do not automatically open the Studio UI
 
 ## Build locally
@@ -98,4 +154,4 @@ npx pkg . --targets node18-linux-x64 --output dist/CastNexus
 npx pkg . --targets node18-win-x64 --output dist/CastNexus.exe
 ```
 
-GitHub Release builds are handled by `.github/workflows/release.yml`, which stamps the selected version/channel into both the desktop launcher and the web UI before packaging.
+Local source builds do not automatically download MediaMTX/yt-dlp/Deno. GitHub Release builds are handled by `.github/workflows/release.yml`, which stamps the selected version/channel and assembles the complete runtime bundle.
