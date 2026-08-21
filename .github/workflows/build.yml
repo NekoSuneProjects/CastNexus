@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  MEDIAMTX_VERSION: v1.20.0
+  MEDIAMTX_VERSION: v1.19.2
 
 jobs:
   javascript:
