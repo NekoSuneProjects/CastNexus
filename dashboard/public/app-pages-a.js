@@ -38,7 +38,7 @@ function liveState() {
   if (S.status?.graceUntil && Date.now() < S.status.graceUntil) return { key:"grace", title:"Reconnecting", sub:"Outputs held during grace window" };
   if (S.status?.live) {
     const p = activeProfile();
-    return { key:"live", title:"Live", sub: p?.mode === "music" ? "24/7 music engine is publishing" : `${S.status.activeSource || "source"} is driving output` };
+    return { key:"live", title:"Live", sub: p?.mode === "music" ? "24/7 music engine is publishing" : `${sourceLabel()} is driving output` };
   }
   return { key:"idle", title:"Idle", sub: activeProfile()?.mode === "music" && !S.tracks.length ? "Add music to start 24/7" : "Waiting for a source" };
 }
@@ -76,6 +76,14 @@ function sourceLabel() {
   if (p?.mode === "music") return "Music engine";
   if (S.status?.activeSource === "console") return "Console";
   if (S.status?.activeSource === "pc") return "PC / OBS";
+  if (S.status?.activeSource === "rerun") {
+    const kind = S.status?.rerun?.kind;
+    if (kind === "twitch-live") return "Twitch HLS relay";
+    if (kind === "twitch-vod") return "Twitch VOD rerun";
+    if (kind === "youtube") return "YouTube VOD rerun";
+    if (kind === "upload") return "Uploaded VOD rerun";
+    return "Rerun / relay";
+  }
   return MODE_LABELS[p?.mode] || "None";
 }
 
@@ -118,8 +126,8 @@ function renderOverview() {
     <section class="grid grid-2">
       <div class="card-panel">
         <div class="card-title-row"><h3>Live / scene preview</h3><button class="btn btn-ghost btn-sm" data-open-url="${esc(preview)}">Open</button></div>
-        <p>${p?.mode === "music" ? "Spectrum + now-playing scene for this profile only." : S.status?.live ? "Current public playback feed." : "No source is live, so this shows your master overlay scene."}</p>
-        <div class="preview-frame ${p?.canvasMode === "vertical" ? "preview-frame-vertical" : ""}"><span class="preview-label">PROGRAM</span><iframe src="${esc(preview)}" allow="autoplay; fullscreen" loading="lazy"></iframe></div>
+        <p>${p?.mode === "music" ? "Spectrum + now-playing scene rendered from this profile's isolated music library." : S.status?.live ? `Current public playback feed from ${esc(sourceLabel())}.` : "No source is live, so this shows your master overlay scene."}</p>
+        <div class="preview-frame ${p?.canvasMode === "vertical" ? "preview-frame-vertical" : ""}"><span class="preview-label">PROGRAM · ${p?.canvasMode === "vertical" ? "9:16" : "16:9"}</span><iframe src="${esc(preview)}" allow="autoplay; fullscreen" loading="lazy"></iframe></div>
       </div>
       <div class="card-panel">
         <div class="card-title-row"><h3>Master overlay URL</h3><span class="badge purple">OBS BROWSER SOURCE</span></div>
@@ -156,20 +164,21 @@ function renderSources() {
   const pcEnabled = p?.mode === "pc";
   const musicEnabled = p?.mode === "music";
   return `
-    ${pageHead("INPUT ROUTING", "Sources", "Three purpose-built source modes. Profiles remember which workflow and canvas you want and can be switched from the top bar.")}
+    ${pageHead("INPUT ROUTING", "Sources", "Three purpose-built source modes. PC profiles can use OBS or the separate Twitch/VOD rerun engine.")}
     <section class="grid grid-3">
-      ${sourceModeCard("pc", "◫", "PC Streaming", "OBS, Streamlabs or any RTMP encoder publishes directly to CastNexus.", pcEnabled)}
+      ${sourceModeCard("pc", "◫", "PC Streaming", "OBS, Streamlabs, Twitch HLS relay or a VOD rerun can drive the same destination fan-out.", pcEnabled)}
       ${sourceModeCard("console", "⌁", "Console Streaming", "Intercept console broadcasting, then add CastNexus overlays and destinations.", consoleEnabled)}
-      ${sourceModeCard("music", "♫", "24/7 Music", "Docker renders this profile's own spectrum scene and music library continuously without OBS.", musicEnabled)}
+      ${sourceModeCard("music", "♫", "24/7 Music", "Docker renders your profile-isolated spectrum scene and publishes music continuously without OBS.", musicEnabled)}
     </section>
     <div class="section-title">Active source configuration</div>
     ${musicEnabled ? renderMusicSourceSetup() : consoleEnabled ? renderConsoleSourceSetup() : renderPcSourceSetup()}
+    ${pcEnabled ? `<div class="section-title">Alternative PC source</div><section class="card-panel"><div class="card-title-row"><div><h3>Twitch HLS / VOD reruns</h3><p>Relay an authorized Twitch live channel, rerun Twitch/YouTube VODs, or play uploaded profile videos without publishing through OBS.</p></div><span class="badge cyan">RELAY SOURCE</span></div><button class="btn btn-primary btn-sm" data-nav="reruns">Open Reruns / VOD</button></section>` : ""}
     <div class="section-title">Overlay compositor</div>
     <section class="card-panel">
-      <div class="card-title-row"><div><h3>Bake overlays into the outgoing video</h3><p>${musicEnabled ? "24/7 Music already uses its own headless renderer, so the normal live-feed compositor is disabled for this profile." : "Headless Chromium combines your live source with the master scene and this profile's scene music before fan-out."}</p></div>
+      <div class="card-title-row"><div><h3>Bake overlays into the outgoing video</h3><p>${musicEnabled ? "24/7 Music already uses its own headless renderer, so the normal live-feed compositor is disabled for this profile." : "Headless Chromium combines your active source with the master scene and widgets before fan-out to destinations."}</p></div>
         <label class="toggle"><input id="compositor-toggle" type="checkbox" ${S.compositor.enabled ? "checked" : ""} ${musicEnabled ? "disabled" : ""}><span class="toggle-track"></span></label>
       </div>
-      ${!musicEnabled ? `<div class="callout warn">The compositor adds CPU usage because it re-encodes video. Destination 9:16 conversion also requires transcoding.</div>` : ""}
+      ${!musicEnabled ? `<div class="callout warn">The compositor adds CPU usage because it re-encodes video. Leave it off if you only want OBS Browser Sources; turn it on when you want console/PC/rerun output with overlays baked in server-side.</div>` : ""}
     </section>`;
 }
 
