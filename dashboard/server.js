@@ -10,6 +10,7 @@ const events = require("./events");
 const musicEngine = require("./music-engine");
 const { Compositor } = require("./compositor");
 const { createProfileMusicService } = require("./profile-music");
+const { createProfileVodService } = require("./profile-vod");
 const { OUTPUT_LAYOUTS, normaliseLayout, destinationFfmpegArgs } = require("./destination-output");
 
 const PORT = Number(process.env.DASHBOARD_PORT || 8090);
@@ -17,12 +18,16 @@ const MEDIAMTX_API = process.env.MEDIAMTX_API || "http://127.0.0.1:9997";
 const MEDIA_HOST = process.env.PI_IP || "127.0.0.1";
 const CONSOLE_APP = process.env.CONSOLE_APP || "app";
 const PC_APP = process.env.PC_APP || "live";
+const RELAY_APP = process.env.RELAY_APP || "relay";
 const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, "data", "state.json");
 const MUSIC_DIR = process.env.MUSIC_DIR || path.join(path.dirname(STATE_FILE), "music");
+const VOD_DIR = process.env.VOD_DIR || path.join(path.dirname(STATE_FILE), "vod");
 const MUSIC_MAX_BYTES = Number(process.env.MUSIC_MAX_MB || 50) * 1024 * 1024;
+const VOD_MAX_BYTES = Number(process.env.VOD_MAX_GB || 20) * 1024 * 1024 * 1024;
 const POLL_MS = 1500;
 const RECONNECT_GRACE_MS = Number(process.env.RECONNECT_GRACE_MS || 60 * 60 * 1000);
 const DASHBOARD_ORIGIN = `http://127.0.0.1:${PORT}`;
+const RTMP_ORIGIN = process.env.MEDIA_RTMP_ORIGIN || "rtmp://127.0.0.1:1935";
 
 const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID || "";
 const TWITCH_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET || "";
@@ -89,6 +94,7 @@ function getAccount(id) {
   if (!Array.isArray(account.musicTracks)) { account.musicTracks = []; dirty = true; }
   if (!account.musicSettings) { account.musicSettings = defaultMusicSettings(); dirty = true; }
   if (!account.musicProfiles || typeof account.musicProfiles !== "object" || Array.isArray(account.musicProfiles)) { account.musicProfiles = {}; dirty = true; }
+  if (!account.vodProfiles || typeof account.vodProfiles !== "object" || Array.isArray(account.vodProfiles)) { account.vodProfiles = {}; dirty = true; }
   if (account.currentScene === undefined) { account.currentScene = null; dirty = true; }
   if (account.compositorEnabled === undefined) { account.compositorEnabled = false; dirty = true; }
   for (const dest of account.destinations) {
@@ -110,6 +116,15 @@ const profileMusic = createProfileMusicService({
   maxBytes: MUSIC_MAX_BYTES,
   musicEngine,
   events,
+});
+
+const profileVod = createProfileVodService({
+  state,
+  saveState,
+  vodDir: VOD_DIR,
+  maxBytes: VOD_MAX_BYTES,
+  probeDurationSeconds: musicEngine.probeDurationSeconds,
+  rtmpOrigin: RTMP_ORIGIN,
 });
 
 function findDestination(account, id) {
@@ -252,13 +267,18 @@ function stopRepublish(accountId) {
 function matchAccountForPath(pathName) {
   const appName = pathName.split("/")[0];
   const key = pathName.split("/").pop();
-  if (appName === PC_APP) {
+
+  // Both OBS/encoder input and CastNexus's internal Twitch/VOD relay use the
+  // generated PC key, but live under separate MediaMTX applications so they
+  // never publish to the same path.
+  if (appName === PC_APP || appName === RELAY_APP) {
     const account = Object.values(state.accounts).find(a => a.pcKey && a.pcKey === key);
     if (!account) return null;
     const mode = account.sourceMode || "both";
     if (mode !== "both" && mode !== "pc") return null;
-    return { account: getAccount(account.twitchUserId), source: "pc" };
+    return { account: getAccount(account.twitchUserId), source: appName === RELAY_APP ? "rerun" : "pc" };
   }
+
   const account = Object.values(state.accounts).find(a => a.streamKey && a.streamKey === key);
   if (!account) return null;
   if (appName !== CONSOLE_APP) {
@@ -481,6 +501,7 @@ app.get("/auth/twitch/callback", async (req, res) => {
         musicTracks: [],
         musicSettings: defaultMusicSettings(),
         musicProfiles: {},
+        vodProfiles: {},
         currentScene: null,
         compositorEnabled: false,
         createdAt: new Date().toISOString(),
@@ -592,6 +613,7 @@ app.delete("/api/overlays/:id", requireAuth, (req, res) => {
 });
 
 app.use("/api/music", requireAuth, profileMusic.createApiRouter());
+app.use("/api/vod", requireAuth, profileVod.createApiRouter());
 
 const SCENE_KINDS = ["none", "builtin", "custom"];
 const BUILTIN_SCENE_NAMES = ["startingSoon", "brb", "ending"];
@@ -603,6 +625,10 @@ app.post("/api/scenes/current", requireAuth, (req, res) => {
   if (kind === "builtin") {
     if (!BUILTIN_SCENE_NAMES.includes(name)) return res.status(400).json({ error: `name must be one of ${BUILTIN_SCENE_NAMES.join(", ")}` });
     scene = { kind, name };
+    if (name === "startingSoon") {
+      const minutes = Number(req.account.overlayConfig?.startingSoon?.countdownMinutes || 0);
+      if (Number.isFinite(minutes) && minutes > 0) scene.countdownAt = new Date(Date.now() + minutes * 60_000).toISOString();
+    }
   } else if (kind === "custom") {
     const overlay = req.account.overlays.find(o => o.id === overlayId && (o.type === "text" || o.type === "html" || o.type === "music"));
     if (!overlay) return res.status(404).json({ error: "unknown overlay" });
@@ -643,12 +669,14 @@ function playbackUrlsFor(req, account) {
 
 function sourcesStatusFor(account) {
   const mode = account.sourceMode || "both";
+  const pcEnabled = mode === "pc" || mode === "both";
   const sources = {
     console: { enabled: mode === "console" || mode === "both", live: false },
-    pc: { enabled: mode === "pc" || mode === "both", live: false },
+    pc: { enabled: pcEnabled, live: false },
+    rerun: { enabled: pcEnabled, live: false },
   };
   for (const live of liveSessions.values()) {
-    if (live.accountId === account.twitchUserId) sources[live.source].live = true;
+    if (live.accountId === account.twitchUserId && sources[live.source]) sources[live.source].live = true;
   }
   return { sources, activeSource: activeSourceFor(account.twitchUserId) };
 }
@@ -667,6 +695,7 @@ app.get("/api/status", requireAuth, (req, res) => {
     live: !!activeSource,
     sources,
     activeSource,
+    rerun: profileVod.publicStatus(account.twitchUserId),
     graceUntil: graceState.get(account.twitchUserId)?.deadline ?? null,
     pcServer: `rtmp://${MEDIA_HOST}:1935/${PC_APP}`,
     pcKey: account.pcKey,
