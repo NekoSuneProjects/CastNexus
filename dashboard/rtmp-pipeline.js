@@ -40,7 +40,7 @@ function liveInputArgs() {
   return ["-thread_queue_size", String(process.env.RTMP_INPUT_QUEUE || 1024), "-fflags", "+genpts+discardcorrupt"];
 }
 
-function stableAudioArgs({ bitrate = process.env.DESTINATION_AUDIO_BITRATE || "128k", sampleRate = process.env.DESTINATION_AUDIO_RATE || "48000" } = {}) {
+function stableAudioArgs({ bitrate = process.env.DESTINATION_AUDIO_BITRATE || "128k", sampleRate = process.env.DESTINATION_AUDIO_RATE || "44100" } = {}) {
   return [
     "-af", "aresample=async=1:first_pts=0",
     "-c:a", "aac",
