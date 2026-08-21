@@ -10,7 +10,11 @@ const { CPU_PROFILE, detectEncoder, globalEncoderArgs, encoderFilterSuffix, vide
 const { cpuX264Preset, liveMuxArgs } = require("./rtmp-pipeline");
 
 function buildChromiumGpuArgs(gpuEnabled) {
-  if (!gpuEnabled) return ["--disable-gpu", "--disable-software-rasterizer"];
+  // CPU-only hosts still need Chromium's software rasterizer in order to
+  // produce compositor frames. Disabling both GPU and software rasterization
+  // can leave Page.startScreencast() alive but with no frames at all, which in
+  // turn leaves FFmpeg waiting forever and Music 24/7 stuck at Idle.
+  if (!gpuEnabled) return ["--disable-gpu"];
   return ["--ignore-gpu-blocklist", "--enable-gpu-rasterization", "--enable-zero-copy", "--use-gl=egl", "--disable-frame-rate-limit"];
 }
 
@@ -68,7 +72,16 @@ class Compositor extends EventEmitter {
 
   status(){
     const enc=this.forceCpu?CPU_PROFILE:this.encoder;
-    return {state:this.state,error:this.error,frameCount:this.frameCount,framesDropped:this.framesDropped,lastFrameAt:this.lastFrameAt,encoder:enc.label,hardwareEncoder:!!enc.hardware};
+    return {
+      state:this.state,
+      error:this.error,
+      frameCount:this.frameCount,
+      framesDropped:this.framesDropped,
+      lastFrameAt:this.lastFrameAt,
+      firstFrameReady:!!this.latestFrame,
+      encoder:enc.label,
+      hardwareEncoder:!!enc.hardware,
+    };
   }
 
   async start(){
@@ -161,6 +174,16 @@ class Compositor extends EventEmitter {
       }catch{}
     });
     await this.client.send("Page.startScreencast",{format:"jpeg",quality:this.video.screencastQuality,maxWidth:this.video.width,maxHeight:this.video.height});
+
+    const firstFrameTimeout=Math.max(1000,Number(process.env.COMPOSITOR_FIRST_FRAME_TIMEOUT_MS||10000));
+    const deadline=Date.now()+firstFrameTimeout;
+    while(!this.latestFrame&&this.shouldRun&&Date.now()<deadline){
+      await new Promise(resolve=>setTimeout(resolve,50));
+    }
+    if(!this.latestFrame){
+      throw new Error(`Chromium did not produce a compositor frame within ${firstFrameTimeout}ms`);
+    }
+
     this._startFramePump();
   }
 
@@ -421,4 +444,4 @@ class Compositor extends EventEmitter {
   }
 }
 
-module.exports={Compositor,defaultVideoConfig};
+module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs};
