@@ -71,10 +71,15 @@ function activeProgramScene(account) {
 }
 
 function programSceneUrl(account, profile) {
-  if (activeProgramScene(account)) {
-    return `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/master`;
-  }
-  return musicSceneUrl(account, profile);
+  // Music 24/7 always loads one permanent two-layer page:
+  //   bottom = normal spectrum / now-playing music scene
+  //   top    = transparent master Program Scene (SSE-driven)
+  // None simply clears the top layer, so FFmpeg/Chromium never restart when
+  // moving between Music -> Starting Soon -> BRB -> Ending -> Music.
+  const music = musicSceneUrl(account, profile);
+  const master = `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/master`;
+  const params = new URLSearchParams({ music, master });
+  return `${DASHBOARD_ORIGIN}/music-program.html?${params.toString()}`;
 }
 
 function musicWorkerSignature(account, profile) {
@@ -85,10 +90,8 @@ function musicWorkerSignature(account, profile) {
     canvasMode:profile?.canvasMode || "landscape",
     video:profileVideo(profile),
     visual:profile?.musicVisual || {},
-    // The master page receives scene-to-scene updates over SSE, so a worker
-    // restart is needed only when entering or leaving Program Scene mode.
-    // Starting Soon -> BRB -> Ending stays on the same browser page.
-    programSceneMode:activeProgramScene(account) ? "master" : "music",
+    // currentScene is deliberately excluded. Scene changes are delivered over
+    // SSE inside the permanent master iframe and must never restart the worker.
   });
 }
 
