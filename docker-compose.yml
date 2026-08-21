@@ -13,14 +13,12 @@ services:
       DNS_LOG_ALL: "true"
 
   mediamtx:
-    image: bluenviron/mediamtx:1.20.0
+    image: bluenviron/mediamtx:1.19.2
     container_name: castnexus-mediamtx
     network_mode: host
     restart: unless-stopped
     volumes:
       - ./config/mediamtx.yml:/mediamtx.yml:ro
-      # The dashboard sees this same host directory as /app/data/recordings.
-      # MediaMTX owns the recording files; CastNexus measures and manages them.
       - ./dashboard/data/recordings:/recordings
 
   dashboard:
@@ -58,8 +56,6 @@ services:
       YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT: ${YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT:-90}
       CASTNEXUS_CHANNEL: ${CASTNEXUS_CHANNEL:-stable}
 
-  # Always-available CastNexus Music 24/7 sidecar. It stays idle until an
-  # active Music profile exists and at least one track is uploaded.
   music24:
     image: ghcr.io/nekosuneprojects/castnexus-dashboard:${CASTNEXUS_IMAGE_TAG:-latest}
     container_name: castnexus-music24
@@ -81,8 +77,6 @@ services:
       MUSIC24_NOW_POLL_MS: ${MUSIC24_NOW_POLL_MS:-750}
       CASTNEXUS_CHANNEL: ${CASTNEXUS_CHANNEL:-stable}
 
-  # --- Console mode only. This catches the real Twitch ingest address when
-  # the console receives it directly over HTTPS instead of a fresh DNS lookup.
   intercept:
     image: ghcr.io/nekosuneprojects/castnexus-intercept:${CASTNEXUS_IMAGE_TAG:-latest}
     container_name: castnexus-intercept
