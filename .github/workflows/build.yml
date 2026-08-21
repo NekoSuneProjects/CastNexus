@@ -45,6 +45,7 @@ jobs:
           node --check dashboard/music-engine.js
           node --check dashboard/profile-music.js
           node --check dashboard/profile-vod.js
+          node --check dashboard/profile-rtmp.js
           node --check dashboard/cover-art.js
           node --check dashboard/rtmp-pipeline.js
           node --check dashboard/gpu-encoder.js
@@ -61,6 +62,9 @@ jobs:
 
       - name: Music playlist advancement regression test
         run: node --test dashboard/music-engine.test.js
+
+      - name: Profile RTMP isolation smoke test
+        run: node --test dashboard/profile-rtmp.test.js
 
       - name: Cover artwork fallback smoke test
         run: node --test dashboard/cover-art.test.js
