@@ -69,4 +69,14 @@ assert.equal(source[source.indexOf("-b:a") + 1], "128k");
 assert.equal(source[source.indexOf("-ar") + 1], "44100");
 assert.ok(source.includes("+genpts+discardcorrupt"));
 
+const forcedLandscape = destinationFfmpegArgs(
+  "rtmp://source/live",
+  { url:"rtmp://youtube.example/live/key2", layout:"landscape" },
+  { forceCpu:true }
+);
+const forcedFilter = forcedLandscape[forcedLandscape.indexOf("-filter_complex") + 1];
+assert.match(forcedFilter, /pad=960:540/, "CPU-safe VPS output should use cheap letterbox/pillarbox padding");
+assert.doesNotMatch(forcedFilter, /gblur=/, "CPU-safe VPS output must avoid the expensive Gaussian blur filter");
+assert.equal(forcedLandscape[forcedLandscape.indexOf("-preset") + 1], "ultrafast");
+
 console.log("CPU-safe RTMP pipeline tests passed");
