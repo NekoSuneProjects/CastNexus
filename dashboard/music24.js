@@ -4,6 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { Compositor } = require("./compositor");
+const { detectEncoder } = require("./gpu-encoder");
+const { safeCanvas } = require("./rtmp-pipeline");
 
 const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, "data", "state.json");
 const MUSIC_DIR = process.env.MUSIC_DIR || path.join(path.dirname(STATE_FILE), "music");
@@ -34,9 +36,14 @@ function profileMusicState(account, profile) {
   return { profileId: key, tracks: [], settings: {} };
 }
 function profileVideo(profile) {
-  return profile?.canvasMode === "vertical"
-    ? { width: 1080, height: 1920, fps: 30 }
-    : { width: 1920, height: 1080, fps: 30 };
+  const vertical = profile?.canvasMode === "vertical";
+  const detected = detectEncoder();
+  return safeCanvas(vertical ? "vertical" : "landscape", {
+    hardwareEncoder: detected.hardware,
+    width: Number(process.env.MUSIC24_WIDTH || (vertical ? 1080 : 1920)),
+    height: Number(process.env.MUSIC24_HEIGHT || (vertical ? 1920 : 1080)),
+    fps: Number(process.env.MUSIC24_FPS || 30),
+  });
 }
 function musicSceneUrl(account, profile) {
   const params = new URLSearchParams();
@@ -47,7 +54,8 @@ function musicSceneUrl(account, profile) {
   return `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/music/${encodeURIComponent(profile.id)}${query ? `?${query}` : ""}`;
 }
 function musicWorkerSignature(account, profile) {
-  return JSON.stringify({ login: account.twitchLogin, pcKey: account.pcKey, profileId: profile?.id, canvasMode: profile?.canvasMode || "landscape", visual: profile?.musicVisual || {} });
+  const v = profileVideo(profile);
+  return JSON.stringify({ login: account.twitchLogin, pcKey: account.pcKey, profileId: profile?.id, canvasMode: profile?.canvasMode || "landscape", video:v, visual: profile?.musicVisual || {} });
 }
 function spawnSilenceFeed(accountId, profileId) {
   const streamName = `music-silence/${sanitizeSegment(accountId)}-${sanitizeSegment(profileId)}`;
@@ -55,11 +63,11 @@ function spawnSilenceFeed(accountId, profileId) {
   const args = [
     "-hide_banner", "-loglevel", "warning", "-nostats",
     "-re", "-f", "lavfi", "-i", "color=c=black:s=16x16:r=1",
-    "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
     "-map", "0:v:0", "-map", "1:a:0",
     "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
     "-pix_fmt", "yuv420p", "-g", "2", "-b:v", "32k",
-    "-c:a", "aac", "-b:a", "64k", "-ar", "44100", "-ac", "2",
+    "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
     "-f", "flv", "-flvflags", "no_duration_filesize", "-rtmp_live", "live", outputUrl,
   ];
   const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
@@ -126,6 +134,7 @@ class Music24Worker {
 
     const silenceUrl = `${RTMP_ORIGIN}/music-silence/${sanitizeSegment(this.accountId)}-${sanitizeSegment(this.profile.id)}`;
     const outputUrl = `${RTMP_ORIGIN}/live/${encodeURIComponent(this.account.pcKey)}`;
+    const video = profileVideo(this.profile);
     this.compositor = new Compositor({
       accountId: `music24-${this.accountId}-${sanitizeSegment(this.profile.id)}`,
       pageUrl: musicSceneUrl(this.account, this.profile),
@@ -133,13 +142,12 @@ class Music24Worker {
       outputUrl,
       getMusicNow: () => this.getNow(),
       musicFilePathFor: trackId => this.musicFilePathFor(trackId),
-      video: profileVideo(this.profile),
+      video,
       runtimeDir: path.join("/tmp", "castnexus-music24", sanitizeSegment(this.accountId), sanitizeSegment(this.profile.id)),
       logger: console,
     });
     await this.compositor.start();
-    const v = profileVideo(this.profile);
-    console.log(`[music24:${this.accountId}:${this.profile.id}] started ${v.width}x${v.height} -> live/${this.account.pcKey}`);
+    console.log(`[music24:${this.accountId}:${this.profile.id}] started ${video.width}x${video.height}@${video.fps} -> live/${this.account.pcKey}`);
   }
 
   async stop() {
