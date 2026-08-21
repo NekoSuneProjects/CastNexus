@@ -16,7 +16,8 @@ RUN python3 -m venv /opt/yt-dlp \
     && /opt/yt-dlp/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/yt-dlp/bin/pip install --no-cache-dir --upgrade --pre yt-dlp \
     && ln -sf /opt/yt-dlp/bin/yt-dlp /usr/local/bin/yt-dlp \
-    && DENO_INSTALL=/usr/local curl -fsSL https://deno.land/install.sh | sh \
+    && export DENO_INSTALL=/usr/local \
+    && curl -fsSL https://deno.land/install.sh | sh \
     && yt-dlp --version \
     && deno --version
 
