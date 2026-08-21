@@ -3,10 +3,12 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { spawn } = require("node:child_process");
 const express = require("express");
 const multer = require("multer");
 
 const PROFILE_STORE_SYSTEM = "restreamnode-profile-store-v1";
+const FFMPEG_BIN = process.env.FFMPEG_BIN || "ffmpeg";
 
 function defaultMusicSettings() {
   return { shuffle: false, loop: true, volume: 0.7 };
@@ -36,8 +38,54 @@ function profileById(account, profileId) {
   return profilesFor(account).find(p => p.id === profileId) || null;
 }
 
+function coverFilenameFor(trackId) {
+  return `${safeSegment(trackId)}.cover.jpg`;
+}
+
+function extractEmbeddedCover(audioPath, coverPath) {
+  return new Promise((resolve) => {
+    try { fs.unlinkSync(coverPath); } catch {}
+    fs.mkdirSync(path.dirname(coverPath), { recursive: true });
+
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      if (!ok) {
+        try { fs.unlinkSync(coverPath); } catch {}
+      }
+      resolve(Boolean(ok));
+    };
+
+    let child;
+    try {
+      child = spawn(FFMPEG_BIN, [
+        "-hide_banner", "-loglevel", "error", "-y",
+        "-i", audioPath,
+        "-map", "0:v:0",
+        "-frames:v", "1",
+        "-c:v", "mjpeg",
+        "-q:v", "3",
+        coverPath,
+      ], { stdio: ["ignore", "ignore", "ignore"] });
+    } catch {
+      return finish(false);
+    }
+
+    child.on("error", () => finish(false));
+    child.on("close", (code) => {
+      let good = code === 0;
+      if (good) {
+        try { good = fs.statSync(coverPath).size > 0; } catch { good = false; }
+      }
+      finish(good);
+    });
+  });
+}
+
 function createProfileMusicService({ state, saveState, musicDir, maxBytes, musicEngine, events }) {
   const engines = new Map();
+  const coverProbes = new Set();
 
   function ensureCollections(account) {
     let dirty = false;
@@ -122,6 +170,38 @@ function createProfileMusicService({ state, saveState, musicDir, maxBytes, music
     return track ? path.join(diskDir(account, info.profileId), track.filename) : null;
   }
 
+  function coverPathFor(account, profileId, trackId) {
+    const info = bucketFor(account, profileId, { create: false });
+    const track = info?.tracks.find(t => t.id === trackId);
+    if (!track?.coverFilename) return null;
+    const coverPath = path.join(diskDir(account, info.profileId), track.coverFilename);
+    return fs.existsSync(coverPath) ? coverPath : null;
+  }
+
+  function queueCoverProbe(account, info, track) {
+    if (!track?.filename || track.coverChecked === true) return;
+    const key = `${account.twitchUserId}:${info.profileId}:${track.id}`;
+    if (coverProbes.has(key)) return;
+    coverProbes.add(key);
+
+    const coverFilename = coverFilenameFor(track.id);
+    const audioPath = path.join(diskDir(account, info.profileId), track.filename);
+    const coverPath = path.join(diskDir(account, info.profileId), coverFilename);
+
+    extractEmbeddedCover(audioPath, coverPath)
+      .then((found) => {
+        const fresh = bucketFor(account, info.profile.id, { create: false, migrate: false });
+        const current = fresh?.tracks.find(t => t.id === track.id);
+        if (!current) return;
+        current.coverChecked = true;
+        if (found) current.coverFilename = coverFilename;
+        else delete current.coverFilename;
+        saveState(state);
+      })
+      .catch(() => {})
+      .finally(() => coverProbes.delete(key));
+  }
+
   function engineFor(account, profileId) {
     const info = bucketFor(account, profileId);
     if (!info) return null;
@@ -151,7 +231,15 @@ function createProfileMusicService({ state, saveState, musicDir, maxBytes, music
 
     const engine = engineFor(account, info.profile.id);
     engine?.ensureRunning();
-    return engine?.getNow() || { mode: "idle", track: null, positionS: 0, durationS: 0, volume: info.settings.volume ?? 0.7 };
+    const now = engine?.getNow() || { mode: "idle", track: null, positionS: 0, durationS: 0, volume: info.settings.volume ?? 0.7 };
+    if (now.track) {
+      const storedTrack = info.tracks.find(t => t.id === now.track.id);
+      if (storedTrack) {
+        if (storedTrack.coverChecked !== true) queueCoverProbe(account, info, storedTrack);
+        now.track.coverEmbedded = Boolean(coverPathFor(account, info.profile.id, storedTrack.id));
+      }
+    }
+    return now;
   }
 
   function hasTracks(account, profileId) {
@@ -191,19 +279,24 @@ function createProfileMusicService({ state, saveState, musicDir, maxBytes, music
         if (!info) return res.status(404).json({ error: "unknown profile" });
         const filePath = path.join(diskDir(req.account, info.profileId), req.file.filename);
         const durationS = await musicEngine.probeDurationSeconds(filePath);
+        const trackId = crypto.randomUUID();
+        const coverFilename = coverFilenameFor(trackId);
+        const embeddedCover = await extractEmbeddedCover(filePath, path.join(diskDir(req.account, info.profileId), coverFilename));
         const track = {
-          id: crypto.randomUUID(),
+          id: trackId,
           title: path.basename(req.file.originalname, path.extname(req.file.originalname)),
           artist: "",
           filename: req.file.filename,
           sizeBytes: req.file.size,
           durationS,
+          coverChecked: true,
+          ...(embeddedCover ? { coverFilename } : {}),
           addedAt: new Date().toISOString(),
         };
         info.tracks.push(track);
         saveState(state);
         engineFor(req.account, info.profile.id)?.refresh();
-        res.json({ ok: true, profileId: info.profile.id, track });
+        res.json({ ok: true, profileId: info.profile.id, track: { ...track, coverEmbedded: embeddedCover } });
       });
     });
 
@@ -227,6 +320,7 @@ function createProfileMusicService({ state, saveState, musicDir, maxBytes, music
       info.bucket.tracks = info.tracks.filter(t => t.id !== req.params.id);
       saveState(state);
       fs.unlink(path.join(diskDir(req.account, info.profileId), track.filename), () => {});
+      if (track.coverFilename) fs.unlink(path.join(diskDir(req.account, info.profileId), track.coverFilename), () => {});
       engineFor(req.account, info.profile.id)?.refresh();
       res.json({ ok: true, profileId: info.profile.id });
     });
@@ -266,10 +360,11 @@ function createProfileMusicService({ state, saveState, musicDir, maxBytes, music
     getNow,
     hasTracks,
     filePathFor,
+    coverPathFor,
     diskDir,
     engineFor,
     createApiRouter,
   };
 }
 
-module.exports = { createProfileMusicService, PROFILE_STORE_SYSTEM, activeProfileFor, profileById, defaultMusicSettings, safeSegment };
+module.exports = { createProfileMusicService, PROFILE_STORE_SYSTEM, activeProfileFor, profileById, defaultMusicSettings, safeSegment, extractEmbeddedCover };
