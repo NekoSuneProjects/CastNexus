@@ -109,7 +109,7 @@ function resolveSceneFragment(scene, account) {
   if (!scene || scene.kind === "none") return "";
   if (scene.kind === "builtin") {
     let fragment = "";
-    if (scene.name === "startingSoon") fragment = startingSoonFragment(cfg.startingSoon || {}, {}, account);
+    if (scene.name === "startingSoon") fragment = startingSoonFragment(cfg.startingSoon || {}, scene.countdownAt ? { at: scene.countdownAt } : {}, account);
     else if (scene.name === "brb") fragment = brbFragment(cfg.brb || {}, {}, account);
     else if (scene.name === "ending") fragment = endingFragment(cfg.ending || {}, {}, account);
     else if (scene.name === "offline") fragment = offlineFragment(cfg.offline || {}, {}, account);
