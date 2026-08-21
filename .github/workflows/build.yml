@@ -1,107 +1,83 @@
-name: build
+name: CastNexus CI
 
 on:
+  pull_request:
   push:
-    branches: [master]
+    branches:
+      - main
+      - beta
+      - "feature/**"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   MEDIAMTX_VERSION: v1.19.2
 
 jobs:
-  docker:
+  javascript:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      matrix:
-        # only the services we actually build a Dockerfile for - mediamtx
-        # is pulled from its own upstream image, not built here
-        service: [dns, intercept, dashboard]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Lowercase repo name
-        id: repo
-        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push ${{ matrix.service }}
-        uses: docker/build-push-action@v5
-        with:
-          context: ./${{ matrix.service }}
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/${{ steps.repo.outputs.name }}/${{ matrix.service }}:latest
-            ghcr.io/${{ steps.repo.outputs.name }}/${{ matrix.service }}:${{ github.sha }}
-
-  desktop:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [win-x64, linux-x64]
-    steps:
-      - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: Install dashboard dependencies
-        run: npm install --omit=dev
         working-directory: dashboard
+        run: npm ci
 
-      - name: Install desktop build dependencies
+      - name: Install desktop build tools
+        working-directory: desktop
         run: npm install
-        working-directory: desktop
 
-      - name: Build launcher for ${{ matrix.target }}
-        working-directory: desktop
-        run: |
-          set -euo pipefail
-          OUT="dist/launcher-${{ matrix.target }}"
-          if [ "${{ matrix.target }}" = "win-x64" ]; then OUT="${OUT}.exe"; fi
-          npx pkg . --targets "node18-${{ matrix.target }}" --output "$OUT"
-
-      - name: Download matching MediaMTX binary
+      - name: Syntax check server and browser modules
         shell: bash
         run: |
           set -euo pipefail
-          case "${{ matrix.target }}" in
-            win-x64) MTX_OS=windows; MTX_ARCH=amd64; EXT=zip ;;
-            linux-x64) MTX_OS=linux; MTX_ARCH=amd64; EXT=tar.gz ;;
-          esac
-          URL="https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VERSION}/mediamtx_${MEDIAMTX_VERSION}_${MTX_OS}_${MTX_ARCH}.${EXT}"
-          echo "downloading $URL"
-          curl -fL "$URL" -o "mediamtx.$EXT"
-          mkdir -p bundle
-          if [ "$EXT" = "zip" ]; then
-            unzip -o "mediamtx.$EXT" -d bundle
-          else
-            tar -xzf "mediamtx.$EXT" -C bundle
-          fi
+          node --check dashboard/server.js
+          node --check dashboard/overlays.js
+          node --check dashboard/scenes.js
+          node --check dashboard/music-scene.js
+          node --check dashboard/music24.js
+          node --check dashboard/compositor.js
+          node --check desktop/launcher.js
+          for f in dashboard/public/app-*.js dashboard/public/build-info.js; do node --check "$f"; done
 
-      - name: Assemble release folder
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p out
-          cp desktop/dist/launcher-${{ matrix.target }}* out/
-          cp bundle/mediamtx* out/ 2>/dev/null || true
-          cp desktop/README.md out/
-
-      - uses: actions/upload-artifact@v4
+  docker:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [dashboard, dns, intercept]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.service }} without publishing
+        uses: docker/build-push-action@v6
         with:
-          name: nekosune-ps5-streamer-${{ matrix.target }}
-          path: out/
+          context: ./${{ matrix.service }}
+          push: false
+          platforms: linux/amd64
+          build-args: |
+            CASTNEXUS_VERSION=0.0.0-ci
+            CASTNEXUS_CHANNEL=dev
+            CASTNEXUS_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=castnexus-ci-${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=castnexus-ci-${{ matrix.service }}
+
+  desktop-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --omit=dev
+        working-directory: dashboard
+      - run: npm install
+        working-directory: desktop
+      - name: Package Linux desktop smoke build
+        working-directory: desktop
+        run: npx pkg . --targets node18-linux-x64 --output dist/CastNexus
