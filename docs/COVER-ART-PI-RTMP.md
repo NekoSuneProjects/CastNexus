@@ -43,7 +43,7 @@ The new pipeline keeps video copy-light where possible but always normalizes liv
 - AAC
 - 128 kbps
 - stereo
-- 48 kHz
+- 44.1 kHz by default for YouTube-compatible stereo output
 - asynchronous audio timestamp correction
 
 The compositor also keeps its music input alive with generated PCM silence whenever no song is playing. This prevents the audio mixer from blocking the video output during standby or track changes.
@@ -71,7 +71,7 @@ CASTNEXUS_PI_SAFE_MODE=false
 ```dotenv
 RTMP_INPUT_QUEUE=1024
 DESTINATION_AUDIO_BITRATE=128k
-DESTINATION_AUDIO_RATE=48000
+DESTINATION_AUDIO_RATE=44100
 ```
 
 Optional live-transcode tuning:
@@ -91,4 +91,4 @@ COMPOSITOR_X264_PRESET=veryfast
 
 For CPU-only Raspberry Pi systems, leave the x264 preset unset so CastNexus can automatically select `ultrafast`.
 
-YouTube Live currently recommends H.264/RTMP(S), a two-second keyframe interval, CBR video and 128 kbps stereo audio. CastNexus' transcoded H.264 path already uses a two-second GOP; this change specifically makes the audio target deterministic and reduces ARM encode load so FFmpeg is more likely to remain realtime instead of starving YouTube of video frames.
+YouTube Live currently recommends H.264/RTMP(S), a two-second keyframe interval, CBR video and 128 kbps stereo audio at 44.1 kHz. CastNexus' transcoded H.264 path already uses a two-second GOP; this change specifically makes the audio target deterministic and reduces ARM encode load so FFmpeg is more likely to remain realtime instead of starving YouTube of video frames.
