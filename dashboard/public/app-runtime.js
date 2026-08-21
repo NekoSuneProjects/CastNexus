@@ -9,15 +9,15 @@ function wirePage() {
   $$('[data-add-profile-mode]',root).forEach(b=>b.onclick=()=>openProfileModal(b.dataset.addProfileMode));
   $$('[data-activate-profile]',root).forEach(b=>b.onclick=()=>activateProfile(b.dataset.activateProfile));
   $$('[data-edit-profile]',root).forEach(b=>b.onclick=()=>openProfileModal(null,S.profiles.find(p=>p.id===b.dataset.editProfile)));
-  $$('[data-delete-profile]',root).forEach(b=>b.onclick=async()=>{ const p=S.profiles.find(x=>x.id===b.dataset.deleteProfile); if(!p)return; if(!(await confirmAction("Delete profile",`Delete ${p.name}? This does not delete your music or destination definitions.`)))return; if(p.id===S.activeProfileId)return toast("Switch to another profile first","error"); S.profiles=S.profiles.filter(x=>x.id!==p.id); await saveProfileStore(); renderProfileSelect(); renderPage(); toast("Profile deleted","success"); });
+  $$('[data-delete-profile]',root).forEach(b=>b.onclick=async()=>{ const p=S.profiles.find(x=>x.id===b.dataset.deleteProfile); if(!p)return; if(!(await confirmAction("Delete profile",`Delete ${p.name}? Its isolated music files remain on disk until server cleanup/migration tooling removes them.`)))return; if(p.id===S.activeProfileId)return toast("Switch to another profile first","error"); S.profiles=S.profiles.filter(x=>x.id!==p.id); await saveProfileStore(); renderProfileSelect(); renderPage(); toast("Profile deleted","success"); });
   $$('[data-edit-dest]',root).forEach(b=>b.onclick=()=>openDestinationModal((S.status.destinations||[]).find(d=>d.id===b.dataset.editDest)));
-  $$('[data-delete-dest]',root).forEach(b=>b.onclick=async()=>{ const d=(S.status.destinations||[]).find(x=>x.id===b.dataset.deleteDest); if(!d)return; if(!(await confirmAction("Delete destination",`Remove ${d.name} from RestreamNode?`)))return; try{ await api(`/api/destinations/${encodeURIComponent(d.id)}`,{method:"DELETE"}); await refreshAndRender(); toast("Destination deleted","success"); }catch(e){toast(e.message,"error");} });
+  $$('[data-delete-dest]',root).forEach(b=>b.onclick=async()=>{ const d=(S.status.destinations||[]).find(x=>x.id===b.dataset.deleteDest); if(!d)return; if(!(await confirmAction("Delete destination",`Remove ${d.name} from CastNexus?`)))return; try{ await api(`/api/destinations/${encodeURIComponent(d.id)}`,{method:"DELETE"}); await refreshAndRender(); toast("Destination deleted","success"); }catch(e){toast(e.message,"error");} });
   $$('[data-dest-toggle]',root).forEach(i=>i.onchange=async()=>{ try{ await api(`/api/destinations/${encodeURIComponent(i.dataset.destToggle)}/toggle`,{method:"POST",body:{enabled:i.checked}}); const p=activeProfile(); if(p){const ids=new Set(p.destinationEnabledIds||[]); i.checked?ids.add(i.dataset.destToggle):ids.delete(i.dataset.destToggle); p.destinationEnabledIds=[...ids]; await saveProfileStore();} await fetchCore(); updateChrome(); renderPage(); }catch(e){toast(e.message,"error");} });
   $$('[data-edit-overlay]',root).forEach(b=>b.onclick=()=>openOverlayModal(visibleOverlays().find(o=>o.id===b.dataset.editOverlay)));
   $$('[data-delete-overlay]',root).forEach(b=>b.onclick=async()=>{ const o=visibleOverlays().find(x=>x.id===b.dataset.deleteOverlay); if(!o)return; if(!(await confirmAction("Delete overlay",`Delete ${o.name}?`)))return; try{ await api(`/api/overlays/${encodeURIComponent(o.id)}`,{method:"DELETE"}); await refreshAndRender(); toast("Overlay deleted","success"); }catch(e){toast(e.message,"error");} });
   $$('[data-activate-overlay]',root).forEach(b=>b.onclick=()=>setScene({kind:"custom",overlayId:b.dataset.activateOverlay}));
   $$('[data-edit-track]',root).forEach(b=>b.onclick=()=>openTrackModal(S.tracks.find(t=>t.id===b.dataset.editTrack)));
-  $$('[data-delete-track]',root).forEach(b=>b.onclick=async()=>{ const t=S.tracks.find(x=>x.id===b.dataset.deleteTrack); if(!t)return; if(!(await confirmAction("Delete track",`Remove ${t.title} from the music library?`)))return; try{await api(`/api/music/tracks/${encodeURIComponent(t.id)}`,{method:"DELETE"});await refreshAndRender();toast("Track deleted","success");}catch(e){toast(e.message,"error");} });
+  $$('[data-delete-track]',root).forEach(b=>b.onclick=async()=>{ const t=S.tracks.find(x=>x.id===b.dataset.deleteTrack); if(!t)return; if(!(await confirmAction("Delete track",`Remove ${t.title} from ${activeProfile()?.name || "this profile"}'s music library?`)))return; try{await api(musicApiUrl(`/tracks/${encodeURIComponent(t.id)}`, activeProfile()?.id),{method:"DELETE"});await refreshAndRender();toast("Track deleted","success");}catch(e){toast(e.message,"error");} });
 
   const comp=$("#compositor-toggle",root); if(comp)comp.onchange=async()=>{ try{await api("/api/compositor",{method:"POST",body:{enabled:comp.checked}});S.compositor.enabled=comp.checked;const p=activeProfile();if(p){p.compositorEnabled=comp.checked;await saveProfileStore();}toast(`Compositor ${comp.checked?"enabled":"disabled"}`,"success");}catch(e){comp.checked=!comp.checked;toast(e.message,"error");} };
 
@@ -26,6 +26,13 @@ function wirePage() {
   if(shuffle)shuffle.onchange=saveMusicSettings;
   if(loop)loop.onchange=saveMusicSettings;
   if(vol){ vol.oninput=()=>$("#music-volume-label").textContent=`${Math.round(Number(vol.value)*100)}%`; vol.onchange=saveMusicSettings; }
+
+  const sceneMusic=$("#profile-scene-music",root);
+  if(sceneMusic)sceneMusic.onchange=async()=>{
+    const p=activeProfile(); if(!p)return;
+    p.sceneMusicEnabled=sceneMusic.checked;
+    try{await saveProfileStore();toast(sceneMusic.checked?"Profile music enabled for standby/BRB/Ending":"Profile scene music disabled","success");}catch(e){sceneMusic.checked=!sceneMusic.checked;toast(e.message,"error");}
+  };
 
   $$('[data-action]',root).forEach(b=>{
     const a=b.dataset.action;
@@ -40,20 +47,22 @@ function wirePage() {
 }
 
 async function saveMusicSettings() {
+  const p=activeProfile();
   const body={ shuffle:!!$("#music-shuffle")?.checked, loop:!!$("#music-loop")?.checked, volume:Number($("#music-volume")?.value ?? S.musicSettings.volume) };
-  try{ const r=await api("/api/music/settings",{method:"POST",body}); S.musicSettings=r.musicSettings; const p=activeProfile();if(p){p.musicSettings={...S.musicSettings};await saveProfileStore();}toast("Music settings saved","success"); }catch(e){toast(e.message,"error");}
+  try{ const r=await api(musicApiUrl("/settings",p?.id),{method:"POST",body}); S.musicSettings=r.musicSettings; if(p){p.musicSettings={...S.musicSettings};await saveProfileStore();}toast(`Music settings saved for ${p?.name || "profile"}`,"success"); }catch(e){toast(e.message,"error");}
 }
 
 async function saveMusicVisual() {
   const p=activeProfile(); if(!p)return;
   p.musicVisual={ accent:$("#music-visual-accent").value, station:$("#music-visual-station").value.trim(), background:$("#music-visual-background").value.trim(), title:$("#music-visual-title").value.trim(), cover:$("#music-visual-cover").value.trim() };
-  try{await saveProfileStore();toast("Music appearance saved. The 24/7 renderer will reload it automatically.","success");renderPage();}catch(e){toast(e.message,"error");}
+  try{await saveProfileStore();toast("Music appearance saved. The profile renderer will reload it automatically.","success");renderPage();}catch(e){toast(e.message,"error");}
 }
 
 async function uploadMusic(files) {
   if(!files?.length)return;
+  const p=activeProfile();
   let ok=0;
-  for(const file of files){ const fd=new FormData();fd.append("file",file);try{await api("/api/music/tracks",{method:"POST",body:fd});ok++;toast(`Uploaded ${file.name}`,"success");}catch(e){toast(`${file.name}: ${e.message}`,"error");} }
+  for(const file of files){ const fd=new FormData();fd.append("file",file);try{await api(musicApiUrl("/tracks",p?.id),{method:"POST",body:fd});ok++;toast(`Uploaded ${file.name} to ${p?.name || "profile"}`,"success");}catch(e){toast(`${file.name}: ${e.message}`,"error");} }
   if(ok)await refreshAndRender();
 }
 
@@ -61,10 +70,12 @@ function startMusicNowPolling() {
   stopMusicNowPolling();
   const tick=async()=>{
     if(S.page!=="music"||!S.status?.twitchLogin)return;
+    const p=activeProfile();
     try{
-      const now=await api(`/overlay/${encodeURIComponent(S.status.twitchLogin)}/music/now.json`);
+      const profilePart=p?.id?`/${encodeURIComponent(p.id)}`:"";
+      const now=await api(`/overlay/${encodeURIComponent(S.status.twitchLogin)}/music${profilePart}/now.json`);
       const card=$("#music-now-card"), badge=$("#music-now-mode"); if(!card||!badge)return;
-      if(now?.mode!=="playing"||!now.track){badge.textContent="IDLE";badge.className="badge";card.innerHTML=`<div class="music-cover">♫</div><div><strong>No track playing</strong><div class="muted" style="font-size:.75rem;margin-top:4px">Upload music to start the engine.</div><div class="progress"><span style="width:0"></span></div><div class="stat-sub">00:00 / 00:00</div></div>`;return;}
+      if(now?.mode!=="playing"||!now.track){badge.textContent="IDLE";badge.className="badge";card.innerHTML=`<div class="music-cover">♫</div><div><strong>No track playing</strong><div class="muted" style="font-size:.75rem;margin-top:4px">This profile has its own isolated library.</div><div class="progress"><span style="width:0"></span></div><div class="stat-sub">00:00 / 00:00</div></div>`;return;}
       badge.textContent="PLAYING";badge.className="badge green";
       const pct=now.durationS?Math.max(0,Math.min(100,Number(now.positionS||0)/Number(now.durationS)*100)):0;
       card.innerHTML=`<div class="music-cover">♫</div><div><strong>${esc(now.track.title||"Untitled")}</strong><div class="muted" style="font-size:.75rem;margin-top:4px">${esc(now.track.artist||"Unknown artist")}</div><div class="progress"><span style="width:${pct}%"></span></div><div class="stat-sub">${fmtDuration(now.positionS)} / ${fmtDuration(now.durationS)}</div></div>`;
@@ -97,9 +108,7 @@ async function setupMode(mode) {
     S.status=await api("/api/status");
     S.overlays=(await api("/api/overlays")).overlays||[];
     await ensureProfileStore(mode);
-    // If an old system store existed, make the selected onboarding mode the
-    // active profile only when there are no meaningful profiles yet.
-    const p=activeProfile(); if(p){p.mode=mode;p.name=mode==="pc"?"PC Gaming":mode==="console"?"Console Gaming":"24/7 Music";p.color=PROFILE_COLORS[mode];p.musicAutostart=mode==="music";p.compositorEnabled=mode!=="music";await saveProfileStore();}
+    const p=activeProfile(); if(p){p.mode=mode;p.name=mode==="pc"?"PC Gaming":mode==="console"?"Console Gaming":"24/7 Music";p.color=PROFILE_COLORS[mode];p.musicAutostart=mode==="music";p.sceneMusicEnabled=mode==="music";p.compositorEnabled=mode!=="music";await saveProfileStore();}
     if(S.status.needsStreamKey){setView("streamkey-view");return;}
     await enterApp();
   }catch(e){error.textContent=e.message;}
@@ -109,6 +118,9 @@ async function enterApp() {
   await fetchCore();
   await ensureProfileStore(S.status.sourceMode==="console"?"console":"pc");
   loadProfileStoreFromOverlays();
+  // A brand-new account creates the profile after the first fetch; refresh so
+  // the newly created profile gets its own music bucket immediately.
+  if(S.activeProfileId) await fetchCore();
   setView("app-view");
   updateChrome();renderProfileSelect();renderPage();
   if(S.pollTimer)clearInterval(S.pollTimer);S.pollTimer=setInterval(pollStatus,2500);
@@ -126,7 +138,6 @@ async function boot() {
   }
 }
 
-// global UI wiring
 $$('[data-setup-mode]').forEach(b=>b.addEventListener("click",()=>setupMode(b.dataset.setupMode)));
 $("#streamkey-form")?.addEventListener("submit",async e=>{e.preventDefault();const err=$("#streamkey-error");err.textContent="";try{await api("/api/streamkey",{method:"POST",body:{streamKey:$("#streamkey-input").value.trim()}});await enterApp();}catch(ex){err.textContent=ex.message;}});
 $("#streamkey-back")?.addEventListener("click",()=>setView("setup-view"));
