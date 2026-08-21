@@ -268,9 +268,6 @@ function matchAccountForPath(pathName) {
   const appName = pathName.split("/")[0];
   const key = pathName.split("/").pop();
 
-  // Both OBS/encoder input and CastNexus's internal Twitch/VOD relay use the
-  // generated PC key, but live under separate MediaMTX applications so they
-  // never publish to the same path.
   if (appName === PC_APP || appName === RELAY_APP) {
     const account = Object.values(state.accounts).find(a => a.pcKey && a.pcKey === key);
     if (!account) return null;
@@ -355,6 +352,21 @@ async function pollLive() {
       startOutputsFor(account, otherPath);
       continue;
     }
+
+    // Normal OBS/console sources get the long reconnect grace. A generated
+    // rerun should finish cleanly when playback completes or errors. Looped
+    // VODs set their worker state to "restarting", so they retain the short
+    // path gap and are allowed to reconnect without dropping destinations.
+    if (account && live.source === "rerun") {
+      const rerunState = profileVod.publicStatus(live.accountId)?.state;
+      if (!["starting", "playing", "restarting"].includes(rerunState)) {
+        clearGrace(live.accountId);
+        stopOutputsFor(live.accountId);
+        console.log(`[dashboard] ${account.twitchLogin} rerun finished (${rerunState || "idle"}) - outputs stopped cleanly`);
+        continue;
+      }
+    }
+
     if (account) enterGrace(account, pathName, live.source);
   }
 
