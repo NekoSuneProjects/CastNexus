@@ -182,7 +182,7 @@ class Compositor extends EventEmitter {
   _startLiveAudioTap(){
     const fifo=this._fifoPath("live-audio");
     this._ensureFifo(fifo);
-    const child=spawn("ffmpeg",["-hide_banner","-loglevel","warning","-thread_queue_size","1024","-i",this.audioSourceUrl,"-vn","-af","aresample=async=1:first_pts=0","-f","s16le","-ar","48000","-ac","2",fifo]);
+    const child=spawn("ffmpeg",["-hide_banner","-loglevel","warning","-nostdin","-y","-thread_queue_size","1024","-i",this.audioSourceUrl,"-vn","-af","aresample=async=1:first_pts=0","-f","s16le","-ar","48000","-ac","2",fifo]);
     child.stderr.on("data",chunk=>{if(this.debug){const line=chunk.toString().trim();if(line)this.logger.log(`[compositor:${this.accountId}] live-audio: ${line}`);}});
     child.on("exit",()=>{
       if(this.liveAudioTap===child)this.liveAudioTap=null;
@@ -231,13 +231,13 @@ class Compositor extends EventEmitter {
       let filePath;
       try{filePath=this.musicFilePathFor(trackId);}catch{filePath=null;}
       if(filePath&&fs.existsSync(filePath)){
-        args=["-hide_banner","-loglevel","warning","-re","-ss",String(Math.max(0,now.positionS||0)),"-i",filePath,"-vn","-af","aresample=async=1:first_pts=0","-f","s16le","-ar","48000","-ac","2",fifo];
+        args=["-hide_banner","-loglevel","warning","-nostdin","-y","-re","-ss",String(Math.max(0,now.positionS||0)),"-i",filePath,"-vn","-af","aresample=async=1:first_pts=0","-f","s16le","-ar","48000","-ac","2",fifo];
       }else{
         this.currentMusicTrackId="__silence__";
-        args=["-hide_banner","-loglevel","warning","-re","-f","lavfi","-i","anullsrc=r=48000:cl=stereo","-f","s16le","-ar","48000","-ac","2",fifo];
+        args=["-hide_banner","-loglevel","warning","-nostdin","-y","-re","-f","lavfi","-i","anullsrc=r=48000:cl=stereo","-f","s16le","-ar","48000","-ac","2",fifo];
       }
     }else{
-      args=["-hide_banner","-loglevel","warning","-re","-f","lavfi","-i","anullsrc=r=48000:cl=stereo","-f","s16le","-ar","48000","-ac","2",fifo];
+      args=["-hide_banner","-loglevel","warning","-nostdin","-y","-re","-f","lavfi","-i","anullsrc=r=48000:cl=stereo","-f","s16le","-ar","48000","-ac","2",fifo];
     }
     const child=spawn("ffmpeg",args);
     child.stderr.on("data",chunk=>{if(this.debug){const line=chunk.toString().trim();if(line)this.logger.log(`[compositor:${this.accountId}] music-audio: ${line}`);}});
@@ -260,7 +260,7 @@ class Compositor extends EventEmitter {
     const maxrate=process.env.COMPOSITOR_VIDEO_MAXRATE||bitrate;
     const bufsize=process.env.COMPOSITOR_VIDEO_BUFSIZE||(this.video.width<=1280&&this.video.height<=1280?"8000k":"12000k");
     const filter=["[0:v]setsar=1[vbase]",encoderFilterSuffix(enc,"vbase","v"),"[1:a][2:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0[a]"].join(";");
-    const args=["-hide_banner",this.debug?"-loglevel":"-loglevel",this.debug?"info":"warning","-nostats",...globalEncoderArgs(enc),"-thread_queue_size","1024","-framerate",String(this.video.fps),"-use_wallclock_as_timestamps","1","-f","image2pipe","-vcodec","mjpeg","-i","-","-thread_queue_size","1024","-f","s16le","-ar","48000","-ac","2","-i",live,"-thread_queue_size","1024","-f","s16le","-ar","48000","-ac","2","-i",music,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,bitrate,maxrate,bufsize,x264Preset:process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
+    const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats",...globalEncoderArgs(enc),"-thread_queue_size","1024","-framerate",String(this.video.fps),"-use_wallclock_as_timestamps","1","-f","image2pipe","-vcodec","mjpeg","-i","-","-thread_queue_size","1024","-f","s16le","-ar","48000","-ac","2","-i",live,"-thread_queue_size","1024","-f","s16le","-ar","48000","-ac","2","-i",music,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,bitrate,maxrate,bufsize,x264Preset:process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
     if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg command: ffmpeg ${args.join(" ")}`);
     const started=Date.now();
     this.ffmpeg=spawn("ffmpeg",args,{stdio:["pipe","ignore","pipe"]});
