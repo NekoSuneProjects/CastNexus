@@ -59,6 +59,9 @@ jobs:
       - name: Profile music isolation + dual-format smoke test
         run: node --test dashboard/profile-music.test.js
 
+      - name: Music playlist advancement regression test
+        run: node --test dashboard/music-engine.test.js
+
       - name: Cover artwork fallback smoke test
         run: node --test dashboard/cover-art.test.js
 
