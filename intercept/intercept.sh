@@ -1,44 +1,134 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+MODE="${INTERCEPT_MODE:-lan}"
 IFACE="${IFACE:-eth0}"
-PI_IP="${PI_IP:?PI_IP required}"
-GATEWAY_IP="${GATEWAY_IP:?GATEWAY_IP required}"
-# comma or space separated list of console IPs to intercept, e.g. PS5+Xbox
-TARGET_IPS="${TARGET_IPS:?TARGET_IPS required (comma or space separated)}"
+DRY_RUN="${INTERCEPT_DRY_RUN:-false}"
 
-IFS=', ' read -r -a TARGETS <<< "$TARGET_IPS"
+log() { echo "[intercept] $*"; }
+truthy() { [[ "${1,,}" == "1" || "${1,,}" == "true" || "${1,,}" == "yes" || "${1,,}" == "on" ]]; }
 
-echo "[intercept] routing [${TARGETS[*]}] <-> $GATEWAY_IP through $PI_IP on $IFACE"
-
-sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
-[[ "$(cat /proc/sys/net/ipv4/ip_forward)" == "1" ]] || {
-  echo "[intercept] net.ipv4.ip_forward is not enabled on the host and this container can't set it — run: sudo sysctl -w net.ipv4.ip_forward=1"
-  exit 1
+cleanup_chain() {
+  local chain="${1:-CASTNEXUS_VPS_RTMP}"
+  local port="${2:-1935}"
+  while iptables -w -D INPUT -p tcp --dport "$port" -j "$chain" 2>/dev/null; do :; done
+  iptables -w -F "$chain" 2>/dev/null || true
+  iptables -w -X "$chain" 2>/dev/null || true
 }
 
-PIDS=()
-cleanup() {
-  echo "[intercept] stopping"
-  for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
+run_lan_mode() {
+  local pi_ip="${PI_IP:?PI_IP required in LAN mode}"
+  local gateway_ip="${GATEWAY_IP:?GATEWAY_IP required in LAN mode}"
+  local target_ips="${TARGET_IPS:?TARGET_IPS required in LAN mode (comma or space separated)}"
+  local targets=()
+  IFS=', ' read -r -a targets <<< "$target_ips"
+
+  log "LAN mode: routing [${targets[*]}] <-> $gateway_ip through $pi_ip on $IFACE"
+
+  sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+  [[ "$(cat /proc/sys/net/ipv4/ip_forward)" == "1" ]] || {
+    log "net.ipv4.ip_forward is not enabled on the host and this container can't set it — run: sudo sysctl -w net.ipv4.ip_forward=1"
+    exit 1
+  }
+
+  local pids=()
+  cleanup_lan() {
+    log "stopping LAN intercept"
+    for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
+  }
+  trap cleanup_lan EXIT TERM INT
+
+  for target_ip in "${targets[@]}"; do
+    [[ -n "$target_ip" ]] || continue
+
+    # Any plain RTMP connection this console opens, no matter what IP it thinks
+    # it is dialing, lands on the local MediaMTX relay instead.
+    iptables -t nat -C PREROUTING -s "$target_ip" -p tcp --dport 1935 -j DNAT --to-destination "${pi_ip}:1935" 2>/dev/null \
+      || iptables -t nat -A PREROUTING -s "$target_ip" -p tcp --dport 1935 -j DNAT --to-destination "${pi_ip}:1935"
+
+    arpspoof -i "$IFACE" -t "$target_ip" "$gateway_ip" &
+    pids+=("$!")
+    arpspoof -i "$IFACE" -t "$gateway_ip" "$target_ip" &
+    pids+=("$!")
+    log "arpspoof running for $target_ip"
+  done
+
+  log "all LAN targets active (pids: ${pids[*]})"
+  wait -n
 }
-trap cleanup EXIT TERM INT
 
-for TARGET_IP in "${TARGETS[@]}"; do
-  [[ -n "$TARGET_IP" ]] || continue
+run_vps_mode() {
+  local port="${VPS_RTMP_PORT:-1935}"
+  local allowed="${VPS_ALLOWED_CLIENTS:-}"
+  local allow_any="${VPS_ALLOW_ANY:-false}"
+  local wait_seconds="${VPS_RTMP_WAIT_SECONDS:-60}"
+  local chain="CASTNEXUS_VPS_RTMP"
+  local clients=()
+  IFS=', ' read -r -a clients <<< "$allowed"
 
-  # Any RTMP connection this console opens, no matter what IP it thinks
-  # it's dialing, lands on our own relay instead.
-  iptables -t nat -C PREROUTING -s "$TARGET_IP" -p tcp --dport 1935 -j DNAT --to-destination "${PI_IP}:1935" 2>/dev/null \
-    || iptables -t nat -A PREROUTING -s "$TARGET_IP" -p tcp --dport 1935 -j DNAT --to-destination "${PI_IP}:1935"
+  if ! truthy "$allow_any" && [[ ${#clients[@]} -eq 0 ]]; then
+    log "VPS mode refuses to expose RTMP without VPS_ALLOWED_CLIENTS. Set your home WAN IP/CIDR, or explicitly set VPS_ALLOW_ANY=true."
+    exit 1
+  fi
 
-  arpspoof -i "$IFACE" -t "$TARGET_IP" "$GATEWAY_IP" &
-  PIDS+=("$!")
-  arpspoof -i "$IFACE" -t "$GATEWAY_IP" "$TARGET_IP" &
-  PIDS+=("$!")
+  log "VPS/public mode: console DNS should resolve Twitch ingest to this server; no ARP spoofing or gateway IP is used"
+  log "VPS/public mode: protecting TCP/$port for ${allow_any} = true -> any client; allowed list: ${allowed:-<none>}"
 
-  echo "[intercept] arpspoof running for $TARGET_IP"
-done
+  if truthy "$DRY_RUN"; then
+    log "dry-run validation passed"
+    return 0
+  fi
 
-echo "[intercept] all targets active (pids: ${PIDS[*]})"
-wait -n
+  cleanup_vps() {
+    log "stopping VPS/public intercept"
+    cleanup_chain "$chain" "$port"
+  }
+  trap cleanup_vps EXIT TERM INT
+
+  cleanup_chain "$chain" "$port"
+  iptables -w -N "$chain"
+  # CastNexus itself uses loopback RTMP for compositor, profile routing and
+  # destination fan-out. Never block those internal connections.
+  iptables -w -A "$chain" -s 127.0.0.0/8 -j ACCEPT
+
+  if truthy "$allow_any"; then
+    iptables -w -A "$chain" -j ACCEPT
+  else
+    local count=0
+    for client in "${clients[@]}"; do
+      [[ -n "$client" ]] || continue
+      iptables -w -A "$chain" -s "$client" -j ACCEPT
+      count=$((count + 1))
+      log "VPS RTMP allow $client"
+    done
+    [[ "$count" -gt 0 ]] || { log "no valid VPS_ALLOWED_CLIENTS entries were provided"; exit 1; }
+    iptables -w -A "$chain" -j DROP
+  fi
+
+  iptables -w -I INPUT 1 -p tcp --dport "$port" -j "$chain"
+
+  # MediaMTX normally starts beside this container. Wait for the real public
+  # RTMP listener so the gateway can't sit in a misleading "active" state.
+  local ready=0
+  for _ in $(seq 1 "$wait_seconds"); do
+    if ss -ltnH | awk '{print $4}' | grep -Eq "(^|:)$port$"; then
+      ready=1
+      break
+    fi
+    sleep 1
+  done
+  if [[ "$ready" -ne 1 ]]; then
+    log "TCP/$port is not listening after ${wait_seconds}s; MediaMTX/public RTMP is not ready"
+    exit 1
+  fi
+
+  log "VPS/public console RTMP gateway active on TCP/$port"
+  log "plain RTMP only: RTMPS/TLS cannot be transparently impersonated with DNS redirection"
+  while true; do sleep 3600; done
+}
+
+case "${MODE,,}" in
+  lan|local) run_lan_mode ;;
+  vps|public) run_vps_mode ;;
+  *) log "unknown INTERCEPT_MODE=$MODE (expected lan or vps)"; exit 1 ;;
+esac
