@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CastNexus Music Program</title>
+  <style>
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
+    iframe{position:fixed;inset:0;width:100%;height:100%;border:0;display:block}
+    #music-layer{z-index:0;background:#000}
+    #scene-layer{z-index:1;background:transparent;pointer-events:none}
+  </style>
+</head>
+<body>
+  <iframe id="music-layer" title="Music scene" allow="autoplay; fullscreen"></iframe>
+  <iframe id="scene-layer" title="Program scene" allow="autoplay; fullscreen"></iframe>
+  <script>
+    (function () {
+      const params = new URLSearchParams(location.search);
+      function sameOriginOverlay(value) {
+        try {
+          const url = new URL(String(value || ""), location.origin);
+          if (url.origin !== location.origin || !url.pathname.startsWith("/overlay/")) return "";
+          return url.pathname + url.search + url.hash;
+        } catch {
+          return "";
+        }
+      }
+
+      const music = sameOriginOverlay(params.get("music"));
+      const master = sameOriginOverlay(params.get("master"));
+      if (music) document.getElementById("music-layer").src = music;
+      if (master) document.getElementById("scene-layer").src = master;
+    })();
+  </script>
+</body>
+</html>
