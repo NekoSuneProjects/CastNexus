@@ -95,6 +95,7 @@ function createProfile(mode, name) {
     canvasMode: "landscape",
     sceneMusicEnabled: mode === "music",
     scene: S.scene || null,
+    destinationEnabledIds: [],
     compositorEnabled: mode === "music" ? false : true,
     musicAutostart: mode === "music",
     musicSettings: { ...S.musicSettings },
@@ -115,7 +116,7 @@ function normaliseProfiles() {
     if (!p.canvasMode || !["landscape", "vertical"].includes(p.canvasMode)) { p.canvasMode = "landscape"; dirty = true; }
     if (p.sceneMusicEnabled === undefined) { p.sceneMusicEnabled = p.mode === "music"; dirty = true; }
     if (!p.musicSettings) { p.musicSettings = { shuffle:false, loop:true, volume:.7 }; dirty = true; }
-    if (p.destinationEnabledIds !== undefined) { delete p.destinationEnabledIds; dirty = true; }
+    if (!Array.isArray(p.destinationEnabledIds)) { p.destinationEnabledIds = []; dirty = true; }
   }
   return dirty;
 }
@@ -143,7 +144,10 @@ async function fetchCore() {
   S.tracks = tracksData.tracks || [];
   S.musicSettings = musicSettings || { shuffle:false, loop:true, volume:.7 };
   const p = activeProfile();
-  if (p) p.musicSettings = { ...S.musicSettings };
+  if (p) {
+    p.musicSettings = { ...S.musicSettings };
+    p.destinationEnabledIds = (status.destinations || []).filter(d => d.enabled).map(d => d.id);
+  }
 }
 
 function loadProfileStoreFromOverlays() {
@@ -206,9 +210,10 @@ async function saveProfileStore() {
 async function snapshotActiveProfile(showToast = false) {
   const p = activeProfile();
   if (!p) return;
-  const [sceneData, compositor, musicSettings] = await Promise.all([
-    api("/api/scenes/current"), api("/api/compositor"), api(musicApiUrl("/settings", p.id)),
+  const [status, sceneData, compositor, musicSettings] = await Promise.all([
+    api("/api/status"), api("/api/scenes/current"), api("/api/compositor"), api(musicApiUrl("/settings", p.id)),
   ]);
+  p.destinationEnabledIds = (status.destinations || []).filter(d => d.enabled).map(d => d.id);
   p.scene = sceneData.currentScene || null;
   p.compositorEnabled = !!compositor.enabled;
   p.musicSettings = { ...musicSettings };
