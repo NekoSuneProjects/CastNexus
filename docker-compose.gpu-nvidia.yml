@@ -1,0 +1,12 @@
+# Optional NVIDIA GPU access for CastNexus.
+# Requires NVIDIA Container Toolkit on the Docker host.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu-nvidia.yml up -d
+#
+# CastNexus probes h264_nvenc before using it and automatically falls back to
+# CPU x264 if the driver/runtime/encoder probe fails.
+services:
+  dashboard:
+    gpus: all
+  music24:
+    gpus: all
