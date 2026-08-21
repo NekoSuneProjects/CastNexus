@@ -4,10 +4,12 @@ function visibleOverlays() {
 
 function profileMusicUrl(profile = activeProfile()) {
   if (!S.status?.twitchLogin) return "";
-  const base = `/overlay/${encodeURIComponent(S.status.twitchLogin)}/music`;
+  const profileId = profile?.id ? `/${encodeURIComponent(profile.id)}` : "";
+  const base = `/overlay/${encodeURIComponent(S.status.twitchLogin)}/music${profileId}`;
   const visual = profile?.musicVisual || {};
   const q = new URLSearchParams();
   for (const key of ["accent", "background", "station", "title", "cover"]) if (visual[key]) q.set(key, visual[key]);
+  q.set("layout", profile?.canvasMode === "vertical" ? "vertical" : "landscape");
   return base + (q.toString() ? `?${q}` : "");
 }
 
@@ -18,14 +20,15 @@ function overlayUrl(path) {
 function currentProfileBadge(p) {
   if (!p) return "";
   const label = p.mode === "music" ? "24/7 MUSIC" : p.mode === "console" ? "CONSOLE" : "PC";
-  const cls = p.mode === "music" ? "cyan" : p.mode === "console" ? "purple" : "purple";
-  return `<span class="badge ${cls}">${label}</span>`;
+  const cls = p.mode === "music" ? "cyan" : "purple";
+  const layout = p.canvasMode === "vertical" ? "9:16" : "16:9";
+  return `<span class="badge ${cls}">${label}</span><span class="badge">${layout}</span>`;
 }
 
 function renderProfileSelect() {
   const select = $("#profile-select");
   if (!select) return;
-  select.innerHTML = S.profiles.map(p => `<option value="${esc(p.id)}" ${p.id === S.activeProfileId ? "selected" : ""}>${esc(p.name)} · ${esc(MODE_LABELS[p.mode] || p.mode)}</option>`).join("");
+  select.innerHTML = S.profiles.map(p => `<option value="${esc(p.id)}" ${p.id === S.activeProfileId ? "selected" : ""}>${esc(p.name)} · ${esc(MODE_LABELS[p.mode] || p.mode)} · ${p.canvasMode === "vertical" ? "9:16" : "16:9"}</option>`).join("");
   const p = activeProfile();
   const dot = $("#active-profile-dot");
   if (dot) dot.style.background = p?.color || PROFILE_COLORS[p?.mode] || "#7c5cff";
@@ -93,34 +96,34 @@ function renderOverview() {
         <div class="broadcast-state">
           <div class="eyebrow">PROGRAM STATUS · ${esc(p?.name || "DEFAULT")}</div>
           <div class="big-status"><span class="status-dot ${ls.key !== "idle" ? ls.key : ""}"></span>${esc(ls.title)}</div>
-          <p>${esc(ls.sub)}. Active workspace: <strong>${esc(MODE_LABELS[p?.mode] || "Unconfigured")}</strong>. ${p?.mode === "music" ? "The Docker music worker renders the spectrum scene and publishes it as a normal internal source." : "Enable the compositor to bake RestreamNode scenes and overlays directly into the outgoing stream."}</p>
+          <p>${esc(ls.sub)}. Active workspace: <strong>${esc(MODE_LABELS[p?.mode] || "Unconfigured")}</strong>. ${p?.mode === "music" ? "The Docker music worker renders this profile's isolated music library and spectrum scene." : "Enable the compositor to bake CastNexus scenes and overlays directly into the outgoing stream."}</p>
           <div class="page-actions">${currentProfileBadge(p)}<span class="badge ${S.compositor.enabled ? "green" : ""}">${esc(compositorText)}</span><span class="badge">${enabled} outputs enabled</span></div>
         </div>
         <div class="hero-meters">
           <div class="meter-row"><span>Source</span><div class="meter"><span style="width:${S.status?.live ? 100 : 18}%"></span></div><b>${esc(sourceLabel())}</b></div>
           <div class="meter-row"><span>Destinations</span><div class="meter"><span style="width:${enabled ? Math.max(20, (active/enabled)*100) : 0}%"></span></div><b>${active}/${enabled}</b></div>
           <div class="meter-row"><span>Overlay stack</span><div class="meter"><span style="width:${Math.min(100, 15 + overlayCount*14)}%"></span></div><b>${overlayCount}</b></div>
-          <div class="meter-row"><span>Music library</span><div class="meter"><span style="width:${Math.min(100, S.tracks.length*8)}%"></span></div><b>${S.tracks.length} tracks</b></div>
+          <div class="meter-row"><span>Profile music</span><div class="meter"><span style="width:${Math.min(100, S.tracks.length*8)}%"></span></div><b>${S.tracks.length} tracks</b></div>
         </div>
       </div>
     </section>
     <div class="section-title">At a glance</div>
     <section class="grid grid-4">
-      <div class="card-panel stat-card"><div class="stat-label">Active profile</div><div class="stat-value">${esc(p?.name || "—")}</div><div class="stat-sub">${esc(MODE_LABELS[p?.mode] || "No mode")}</div></div>
+      <div class="card-panel stat-card"><div class="stat-label">Active profile</div><div class="stat-value">${esc(p?.name || "—")}</div><div class="stat-sub">${esc(MODE_LABELS[p?.mode] || "No mode")} · ${p?.canvasMode === "vertical" ? "9:16" : "16:9"}</div></div>
       <div class="card-panel stat-card"><div class="stat-label">Restream outputs</div><div class="stat-value">${enabled}</div><div class="stat-sub">${active} currently publishing</div></div>
       <div class="card-panel stat-card"><div class="stat-label">Custom overlays</div><div class="stat-value">${overlayCount}</div><div class="stat-sub">HTML, browser, text & music</div></div>
-      <div class="card-panel stat-card"><div class="stat-label">Music library</div><div class="stat-value">${S.tracks.length}</div><div class="stat-sub">Shuffle ${S.musicSettings.shuffle ? "on" : "off"} · Loop ${S.musicSettings.loop ? "on" : "off"}</div></div>
+      <div class="card-panel stat-card"><div class="stat-label">Profile music</div><div class="stat-value">${S.tracks.length}</div><div class="stat-sub">Isolated to ${esc(p?.name || "this profile")} · Shuffle ${S.musicSettings.shuffle ? "on" : "off"}</div></div>
     </section>
     <div class="section-title">Program preview</div>
     <section class="grid grid-2">
       <div class="card-panel">
         <div class="card-title-row"><h3>Live / scene preview</h3><button class="btn btn-ghost btn-sm" data-open-url="${esc(preview)}">Open</button></div>
-        <p>${p?.mode === "music" ? "Spectrum + now-playing scene rendered by the same page used for the 24/7 broadcast." : S.status?.live ? "Current public playback feed." : "No source is live, so this shows your master overlay scene."}</p>
-        <div class="preview-frame"><span class="preview-label">PROGRAM</span><iframe src="${esc(preview)}" allow="autoplay; fullscreen" loading="lazy"></iframe></div>
+        <p>${p?.mode === "music" ? "Spectrum + now-playing scene for this profile only." : S.status?.live ? "Current public playback feed." : "No source is live, so this shows your master overlay scene."}</p>
+        <div class="preview-frame ${p?.canvasMode === "vertical" ? "preview-frame-vertical" : ""}"><span class="preview-label">PROGRAM</span><iframe src="${esc(preview)}" allow="autoplay; fullscreen" loading="lazy"></iframe></div>
       </div>
       <div class="card-panel">
         <div class="card-title-row"><h3>Master overlay URL</h3><span class="badge purple">OBS BROWSER SOURCE</span></div>
-        <p>Add this once in OBS and switch Starting Soon / BRB / Ending / custom overlays from RestreamNode without editing OBS again.</p>
+        <p>Add this once in OBS and switch Starting Soon / BRB / Ending / custom overlays from CastNexus without editing OBS again.</p>
         <div class="copy-field"><input readonly value="${esc(overlayUrl("master"))}"><button class="btn btn-ghost btn-sm" data-copy="${esc(overlayUrl("master"))}">Copy</button></div>
         <div class="section-title">Quick scene</div>
         ${sceneButtons()}
@@ -153,20 +156,20 @@ function renderSources() {
   const pcEnabled = p?.mode === "pc";
   const musicEnabled = p?.mode === "music";
   return `
-    ${pageHead("INPUT ROUTING", "Sources", "Three purpose-built source modes. Profiles remember which workflow you want and can be switched from the top bar.")}
+    ${pageHead("INPUT ROUTING", "Sources", "Three purpose-built source modes. Profiles remember which workflow and canvas you want and can be switched from the top bar.")}
     <section class="grid grid-3">
-      ${sourceModeCard("pc", "◫", "PC Streaming", "OBS, Streamlabs or any RTMP encoder publishes directly to RestreamNode.", pcEnabled)}
-      ${sourceModeCard("console", "⌁", "Console Streaming", "Intercept console broadcasting, then add RestreamNode overlays and destinations.", consoleEnabled)}
-      ${sourceModeCard("music", "♫", "24/7 Music", "Docker renders your spectrum scene and publishes music continuously without OBS.", musicEnabled)}
+      ${sourceModeCard("pc", "◫", "PC Streaming", "OBS, Streamlabs or any RTMP encoder publishes directly to CastNexus.", pcEnabled)}
+      ${sourceModeCard("console", "⌁", "Console Streaming", "Intercept console broadcasting, then add CastNexus overlays and destinations.", consoleEnabled)}
+      ${sourceModeCard("music", "♫", "24/7 Music", "Docker renders this profile's own spectrum scene and music library continuously without OBS.", musicEnabled)}
     </section>
     <div class="section-title">Active source configuration</div>
     ${musicEnabled ? renderMusicSourceSetup() : consoleEnabled ? renderConsoleSourceSetup() : renderPcSourceSetup()}
     <div class="section-title">Overlay compositor</div>
     <section class="card-panel">
-      <div class="card-title-row"><div><h3>Bake overlays into the outgoing video</h3><p>${musicEnabled ? "24/7 Music already uses its own headless renderer, so the normal live-feed compositor is disabled for this profile." : "Headless Chromium combines your live source with the master scene and widgets before fan-out to destinations."}</p></div>
+      <div class="card-title-row"><div><h3>Bake overlays into the outgoing video</h3><p>${musicEnabled ? "24/7 Music already uses its own headless renderer, so the normal live-feed compositor is disabled for this profile." : "Headless Chromium combines your live source with the master scene and this profile's scene music before fan-out."}</p></div>
         <label class="toggle"><input id="compositor-toggle" type="checkbox" ${S.compositor.enabled ? "checked" : ""} ${musicEnabled ? "disabled" : ""}><span class="toggle-track"></span></label>
       </div>
-      ${!musicEnabled ? `<div class="callout warn">The compositor adds CPU usage because it re-encodes video. Leave it off if you only want OBS Browser Sources; turn it on when you want console/PC output with overlays baked in server-side.</div>` : ""}
+      ${!musicEnabled ? `<div class="callout warn">The compositor adds CPU usage because it re-encodes video. Destination 9:16 conversion also requires transcoding.</div>` : ""}
     </section>`;
 }
 
