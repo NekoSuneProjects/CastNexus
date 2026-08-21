@@ -65,6 +65,18 @@ function musicSceneUrl(account, profile) {
   return `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/music/${encodeURIComponent(profile.id)}${query ? `?${query}` : ""}`;
 }
 
+function activeProgramScene(account) {
+  const scene = account?.currentScene;
+  return scene && scene.kind && scene.kind !== "none" ? scene : null;
+}
+
+function programSceneUrl(account, profile) {
+  if (activeProgramScene(account)) {
+    return `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/master`;
+  }
+  return musicSceneUrl(account, profile);
+}
+
 function musicWorkerSignature(account, profile) {
   return JSON.stringify({
     login:account.twitchLogin,
@@ -73,6 +85,10 @@ function musicWorkerSignature(account, profile) {
     canvasMode:profile?.canvasMode || "landscape",
     video:profileVideo(profile),
     visual:profile?.musicVisual || {},
+    // The master page receives scene-to-scene updates over SSE, so a worker
+    // restart is needed only when entering or leaving Program Scene mode.
+    // Starting Soon -> BRB -> Ending stays on the same browser page.
+    programSceneMode:activeProgramScene(account) ? "master" : "music",
   });
 }
 
@@ -282,7 +298,7 @@ class Music24Worker {
       const video = profileVideo(this.profile);
       this.compositor = new Compositor({
         accountId:`music24-${this.accountId}-${sanitizeSegment(this.profile.id)}`,
-        pageUrl:musicSceneUrl(this.account, this.profile),
+        pageUrl:programSceneUrl(this.account, this.profile),
         audioSourceUrl:`${RTMP_ORIGIN}/${silencePath}`,
         outputUrl,
         getMusicNow:() => this.getNow(),
@@ -455,5 +471,8 @@ module.exports = {
   mediaPathReady,
   waitForMediaPath,
   profileMusicState,
+  musicSceneUrl,
+  activeProgramScene,
+  programSceneUrl,
   musicWorkerSignature,
 };
