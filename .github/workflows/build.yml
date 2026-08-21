@@ -45,6 +45,8 @@ jobs:
           node --check dashboard/music-engine.js
           node --check dashboard/profile-music.js
           node --check dashboard/profile-vod.js
+          node --check dashboard/cover-art.js
+          node --check dashboard/rtmp-pipeline.js
           node --check dashboard/gpu-encoder.js
           node --check dashboard/twitch-api.js
           node --check dashboard/mediamtx-recordings.js
@@ -56,6 +58,12 @@ jobs:
 
       - name: Profile music isolation + dual-format smoke test
         run: node --test dashboard/profile-music.test.js
+
+      - name: Cover artwork fallback smoke test
+        run: node --test dashboard/cover-art.test.js
+
+      - name: Pi-safe RTMP pipeline smoke test
+        run: node --test dashboard/rtmp-pipeline.test.js
 
       - name: Twitch HLS + VOD resolver smoke test
         run: node --test dashboard/profile-vod.test.js
