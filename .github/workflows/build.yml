@@ -89,6 +89,9 @@ jobs:
           test "$http_ready" -eq 1
           test "$worker_ready" -eq 1
 
+      - name: CPU-only Chromium compositor regression test
+        run: node --test dashboard/compositor.test.js
+
       - name: Profile music isolation + dual-format smoke test
         run: node --test dashboard/profile-music.test.js
 
