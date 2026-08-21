@@ -3,6 +3,7 @@
 const PROFILE_STORE_SYSTEM = "restreamnode-profile-store-v1";
 const PROFILE_COLORS = { pc: "#7c5cff", console: "#ff4fd8", music: "#38e8ff" };
 const MODE_LABELS = { pc: "PC Streaming", console: "Console Streaming", music: "24/7 Music" };
+const LAYOUT_LABELS = { landscape: "16:9 Landscape", vertical: "9:16 Vertical" };
 const PAGE_TITLES = {
   overview: "Overview", sources: "Sources", destinations: "Destinations",
   studio: "Overlay Studio", music: "Music 24/7", profiles: "Profiles", settings: "Settings",
@@ -79,6 +80,12 @@ function modeSource(mode) {
   return mode === "console" ? "console" : "pc";
 }
 
+function musicApiUrl(endpoint, profileId = S.activeProfileId) {
+  const suffix = String(endpoint || "");
+  if (!profileId) return `/api/music${suffix}`;
+  return `/api/music${suffix}${suffix.includes("?") ? "&" : "?"}profileId=${encodeURIComponent(profileId)}`;
+}
+
 function createProfile(mode, name) {
   const enabledIds = (S.status?.destinations || []).filter(d => d.enabled).map(d => d.id);
   return {
@@ -86,6 +93,8 @@ function createProfile(mode, name) {
     name: name || MODE_LABELS[mode] || "Profile",
     mode,
     color: PROFILE_COLORS[mode] || "#7c5cff",
+    canvasMode: "landscape",
+    sceneMusicEnabled: mode === "music",
     scene: S.scene || null,
     destinationEnabledIds: enabledIds,
     compositorEnabled: mode === "music" ? false : true,
@@ -94,32 +103,48 @@ function createProfile(mode, name) {
     musicVisual: {
       accent: mode === "music" ? "#00f0ff" : PROFILE_COLORS[mode],
       background: "",
-      station: S.status?.displayName ? `${S.status.displayName} Radio` : "RestreamNode Radio",
-      title: "RestreamNode Radio",
+      station: S.status?.displayName ? `${S.status.displayName} Radio` : "CastNexus Radio",
+      title: "CastNexus Radio",
       cover: S.status?.profileImageUrl || "",
     },
     createdAt: new Date().toISOString(),
   };
 }
 
+function normaliseProfiles() {
+  let dirty = false;
+  for (const p of S.profiles) {
+    if (!p.canvasMode || !["landscape", "vertical"].includes(p.canvasMode)) { p.canvasMode = "landscape"; dirty = true; }
+    if (p.sceneMusicEnabled === undefined) { p.sceneMusicEnabled = p.mode === "music"; dirty = true; }
+    if (!p.musicSettings) { p.musicSettings = { shuffle:false, loop:true, volume:.7 }; dirty = true; }
+  }
+  return dirty;
+}
+
 async function fetchCore() {
-  const [status, overlaysData, overlayConfig, tracksData, musicSettings, sceneData, compositor] = await Promise.all([
+  const [status, overlaysData, overlayConfig, sceneData, compositor] = await Promise.all([
     api("/api/status"),
     api("/api/overlays"),
     api("/api/overlays/config"),
-    api("/api/music/tracks"),
-    api("/api/music/settings"),
     api("/api/scenes/current"),
     api("/api/compositor"),
   ]);
   S.status = status;
   S.overlays = overlaysData.overlays || [];
   S.overlayConfig = overlayConfig || {};
-  S.tracks = tracksData.tracks || [];
-  S.musicSettings = musicSettings || { shuffle:false, loop:true, volume:.7 };
   S.scene = sceneData.currentScene || null;
   S.compositor = compositor || { enabled:false };
   loadProfileStoreFromOverlays();
+
+  const profileId = S.activeProfileId;
+  const [tracksData, musicSettings] = await Promise.all([
+    api(musicApiUrl("/tracks", profileId)),
+    api(musicApiUrl("/settings", profileId)),
+  ]);
+  S.tracks = tracksData.tracks || [];
+  S.musicSettings = musicSettings || { shuffle:false, loop:true, volume:.7 };
+  const p = activeProfile();
+  if (p) p.musicSettings = { ...S.musicSettings };
 }
 
 function loadProfileStoreFromOverlays() {
@@ -127,6 +152,7 @@ function loadProfileStoreFromOverlays() {
   const cfg = S.profileStoreOverlay?.config || {};
   S.profiles = Array.isArray(cfg.profiles) ? cfg.profiles : [];
   S.activeProfileId = cfg.activeProfileId || S.profiles[0]?.id || null;
+  normaliseProfiles();
 }
 
 async function ensureProfileStore(initialMode) {
@@ -134,19 +160,22 @@ async function ensureProfileStore(initialMode) {
     try { S.overlays = (await api("/api/overlays")).overlays || []; } catch {}
   }
   loadProfileStoreFromOverlays();
-  if (S.profileStoreOverlay && S.profiles.length) return;
+  if (S.profileStoreOverlay && S.profiles.length) {
+    if (normaliseProfiles()) await saveProfileStore();
+    return;
+  }
 
   const mode = initialMode || (S.status?.sourceMode === "console" ? "console" : "pc");
   const profile = createProfile(mode, mode === "pc" ? "PC Gaming" : mode === "console" ? "Console Gaming" : "24/7 Music");
   const payload = {
-    name: "RestreamNode Profiles",
+    name: "CastNexus Profiles",
     type: "html",
     config: {
       system: PROFILE_STORE_SYSTEM,
       html: "",
       profiles: [profile],
       activeProfileId: profile.id,
-      version: 1,
+      version: 2,
     },
   };
   const created = await api("/api/overlays", { method:"POST", body:payload });
@@ -164,7 +193,7 @@ async function saveProfileStore() {
     html: "",
     profiles: S.profiles,
     activeProfileId: S.activeProfileId,
-    version: 1,
+    version: 2,
     updatedAt: new Date().toISOString(),
   };
   const r = await api(`/api/overlays/${encodeURIComponent(S.profileStoreOverlay.id)}`, {
@@ -179,7 +208,7 @@ async function snapshotActiveProfile(showToast = false) {
   const p = activeProfile();
   if (!p) return;
   const [status, sceneData, compositor, musicSettings] = await Promise.all([
-    api("/api/status"), api("/api/scenes/current"), api("/api/compositor"), api("/api/music/settings"),
+    api("/api/status"), api("/api/scenes/current"), api("/api/compositor"), api(musicApiUrl("/settings", p.id)),
   ]);
   p.destinationEnabledIds = (status.destinations || []).filter(d => d.enabled).map(d => d.id);
   p.scene = sceneData.currentScene || null;
@@ -197,8 +226,8 @@ async function activateProfile(profileId) {
   try {
     await snapshotActiveProfile(false);
 
-    // Stop 24/7 music first when leaving it. The sidecar watches this store
-    // and tears down its generated RTMP source within its short poll window.
+    // When leaving a 24/7 profile, publish the new active id first so the
+    // sidecar stops the old profile before another source is selected.
     if (previous?.mode === "music" && target.mode !== "music") {
       S.activeProfileId = target.id;
       await saveProfileStore();
@@ -207,8 +236,12 @@ async function activateProfile(profileId) {
 
     await api("/api/source-mode", { method:"POST", body:{ sourceMode: modeSource(target.mode) } });
 
-    if (target.musicSettings) {
-      await api("/api/music/settings", { method:"POST", body:target.musicSettings });
+    // For every other switch, make the target profile authoritative before
+    // compositor/scene changes so server-side music resolves to the correct
+    // isolated profile library immediately.
+    if (!(previous?.mode === "music" && target.mode !== "music")) {
+      S.activeProfileId = target.id;
+      await saveProfileStore();
     }
 
     const status = await api("/api/status");
@@ -225,13 +258,6 @@ async function activateProfile(profileId) {
     if (target.mode !== "music") {
       const scene = target.scene || { kind:"none" };
       try { await api("/api/scenes/current", { method:"POST", body:scene }); } catch {}
-    }
-
-    // Starting a music profile is the inverse: source-mode/settings must be
-    // ready before the sidecar sees the active profile and begins publishing.
-    if (!(previous?.mode === "music" && target.mode !== "music")) {
-      S.activeProfileId = target.id;
-      await saveProfileStore();
     }
 
     await fetchCore();
