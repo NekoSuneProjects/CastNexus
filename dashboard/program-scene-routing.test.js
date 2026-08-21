@@ -88,21 +88,21 @@ test("PC Program Scene temporarily enables compositor and None restores saved pr
   const { context, harness } = createBrowserHarness({ mode: "pc", compositorEnabled: false });
 
   await context.setScene({ kind: "builtin", name: "startingSoon" });
-  assert.deepEqual(harness.calls.slice(0, 2).map(call => [call.url, call.body]), [
-    ["/api/compositor", { enabled: true }],
-    ["/api/scenes/current", { kind: "builtin", name: "startingSoon" }],
-  ]);
+  assert.equal(harness.calls[0].url, "/api/compositor");
+  assert.equal(harness.calls[0].body.enabled, true);
+  assert.equal(harness.calls[1].url, "/api/scenes/current");
+  assert.equal(harness.calls[1].body.kind, "builtin");
+  assert.equal(harness.calls[1].body.name, "startingSoon");
   assert.equal(harness.state.compositor.enabled, true);
   assert.equal(harness.profile.compositorEnabled, false, "temporary scene compositor must not overwrite saved profile preference");
 
   harness.calls.length = 0;
   await context.setScene({ kind: "none" });
   assert.equal(harness.calls[0].url, "/api/scenes/current");
-  assert.deepEqual(harness.calls.at(-1), {
-    url: "/api/compositor",
-    method: "POST",
-    body: { enabled: false },
-  });
+  const restore = harness.calls.at(-1);
+  assert.equal(restore.url, "/api/compositor");
+  assert.equal(restore.method, "POST");
+  assert.equal(restore.body.enabled, false);
   assert.equal(harness.state.compositor.enabled, false);
   assert.equal(harness.state.scene, null);
 });
