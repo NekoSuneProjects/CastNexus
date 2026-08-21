@@ -89,6 +89,7 @@ jobs:
           PUPPETEER_EXECUTABLE_PATH: ${{ steps.runtime.outputs.chrome }}
           MEDIAMTX_API: http://127.0.0.1:9997
           MEDIA_RTMP_ORIGIN: rtmp://127.0.0.1:1935
+          COMPOSITOR_DEBUG: "true"
         run: node dashboard/music24-live.integration.js
 
       - name: MediaMTX logs
