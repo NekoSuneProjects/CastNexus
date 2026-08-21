@@ -12,13 +12,22 @@ const AUDIO_MIME = {
   ".opus": "audio/opus", ".weba": "audio/webm",
 };
 
+function safeEmbedUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return (url.protocol === "https:" || url.protocol === "http:") ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Live badge + custom overlays.
 
 function liveBadgePage(login, cfg) {
   const accent = cfg.accent || "#35d07f";
   const body = `
-    <div id="wrap" style="position:fixed; bottom:24px; right:24px; display:none; align-items:center; gap:10px; background:rgba(0,0,0,.55); padding:10px 18px; border-radius:999px; color:#fff; font-weight:700; font-size:16px;">
+    <div id="wrap" style="position:fixed; bottom:24px; right:24px; display:none; align-items:center; gap:10px; background:rgba(0,0,0,.55); padding:10px 18px; border-radius:999px; color:#fff; font-weight:700; font-size:16px; backdrop-filter:blur(10px); border:1px solid rgba(255,255,255,.10);">
       <span style="width:12px; height:12px; border-radius:50%; background:${escapeHtml(accent)}; box-shadow:0 0 10px ${escapeHtml(accent)}; animation:cs-pulse 1.4s infinite;"></span>
       <span id="label">${escapeHtml(cfg.title || "LIVE")}</span>
     </div>
@@ -28,7 +37,7 @@ function liveBadgePage(login, cfg) {
         function poll() {
           fetch(${JSON.stringify(`/overlay/${encodeURIComponent(login)}/live-status.json`)}, { cache: "no-store" })
             .then(function (r) { return r.json(); })
-            .then(function (data) { document.getElementById("wrap").style.display = data.live ? "flex" : "none"; })
+            .then(function (data) { var el=document.getElementById("wrap"); if(el)el.style.display = data.live ? "flex" : "none"; })
             .catch(function () {});
         }
         poll();
@@ -40,17 +49,62 @@ function liveBadgePage(login, cfg) {
 
 function textOverlayFragment(overlay) {
   const cfg = overlay.config || {};
+  const align = ["left", "center", "right"].includes(cfg.align) ? cfg.align : "center";
+  const x = Number.isFinite(Number(cfg.x)) ? Number(cfg.x) : 50;
+  const y = Number.isFinite(Number(cfg.y)) ? Number(cfg.y) : 50;
   return `
-    <div style="position:fixed; inset:0; display:flex; align-items:center; justify-content:center;">
-      <div style="font-size:${Number(cfg.fontSize) || 48}px; color:${escapeHtml(cfg.color || "#ffffff")}; text-align:center; text-shadow:0 2px 12px rgba(0,0,0,.6); white-space:pre-wrap;">${escapeHtml(cfg.text || "")}</div>
+    <div style="position:fixed; inset:0; pointer-events:none;">
+      <div style="position:absolute; left:${x}%; top:${y}%; transform:translate(-50%,-50%); max-width:90vw; font-size:${Number(cfg.fontSize) || 48}px; font-weight:${Number(cfg.fontWeight) || 700}; color:${escapeHtml(cfg.color || "#ffffff")}; text-align:${align}; text-shadow:0 2px 12px rgba(0,0,0,.7); white-space:pre-wrap;">${escapeHtml(cfg.text || "")}</div>
+    </div>`;
+}
+
+// Sandboxed Browser Source / iframe overlay. This intentionally mirrors the
+// trust boundary used by NekoStreamAPP's embed scene: scripts + same-origin
+// are allowed because StreamElements/Streamlabs-style widgets need them, but
+// forms/popups/top-navigation are not granted. The iframe has its own origin,
+// so it cannot read RestreamNode's session cookie.
+function iframeOverlayFragment(overlay) {
+  const cfg = overlay.config || {};
+  const url = safeEmbedUrl(cfg.url);
+  if (!url) {
+    return `<div style="position:fixed;inset:0;display:grid;place-items:center;color:#f87171;font:600 16px ui-monospace,monospace;background:rgba(5,6,10,.65)">Invalid iframe URL</div>`;
+  }
+
+  const width = Math.max(0, Number(cfg.width) || 0);
+  const height = Math.max(0, Number(cfg.height) || 0);
+  const fullscreen = cfg.fullscreen !== false && !(width && height);
+  const x = Math.max(0, Math.min(100, Number(cfg.x ?? 50)));
+  const y = Math.max(0, Math.min(100, Number(cfg.y ?? 50)));
+  const opacity = Math.max(0, Math.min(1, Number(cfg.opacity ?? 1)));
+  const pointerEvents = cfg.interactive ? "auto" : "none";
+  const bg = cfg.transparent === false ? (cfg.background || "#05060a") : "transparent";
+
+  const frameStyle = fullscreen
+    ? `position:absolute;inset:0;width:100%;height:100%;`
+    : `position:absolute;left:${x}%;top:${y}%;transform:translate(-50%,-50%);width:${width || 800}px;height:${height || 600}px;`;
+
+  return `
+    <div style="position:fixed;inset:0;overflow:hidden;background:${escapeHtml(bg)};pointer-events:${pointerEvents};">
+      <iframe
+        src="${escapeHtml(url)}"
+        title="${escapeHtml(overlay.name || "Browser overlay")}"
+        sandbox="allow-scripts allow-same-origin allow-presentation"
+        allow="autoplay; encrypted-media; fullscreen"
+        referrerpolicy="no-referrer-when-downgrade"
+        style="${frameStyle}border:0;background:${escapeHtml(bg)};opacity:${opacity};"
+      ></iframe>
     </div>`;
 }
 
 function htmlOverlayFragment(overlay) {
   const cfg = overlay.config || {};
-  // Deliberately NOT escaped - this is the explicit raw HTML escape hatch.
+  if (cfg.kind === "iframe" || cfg.kind === "browser") return iframeOverlayFragment(overlay);
+  // Deliberately NOT escaped - this is the explicit raw HTML/CSS escape hatch.
+  // It is only editable from the authenticated dashboard. Use iframe/browser
+  // overlays for third-party URLs instead of pasting remote scripts here.
   return `${cfg.css ? `<style>${cfg.css}</style>` : ""}${cfg.html || ""}`;
 }
+
 function musicOverlayPage(login, cfg = {}, account, query = {}) {
   return page({ title: query.title || cfg.title || "Music", body: musicSceneFragment(login, cfg, query, account), transparent: false });
 }
@@ -65,14 +119,13 @@ function resolveSceneFragment(scene, account) {
     if (scene.name === "startingSoon") return startingSoonFragment(cfg.startingSoon || {}, {}, account);
     if (scene.name === "brb") return brbFragment(cfg.brb || {}, {}, account);
     if (scene.name === "ending") return endingFragment(cfg.ending || {}, {}, account);
-    // Forward-compatible with a dashboard that later exposes these names.
     if (scene.name === "offline") return offlineFragment(cfg.offline || {}, {}, account);
     if (scene.name === "music") return musicSceneFragment(account.twitchLogin, cfg.music || {}, {}, account);
     return "";
   }
   if (scene.kind === "custom") {
     const overlay = (account.overlays || []).find((o) => o.id === scene.overlayId);
-    if (!overlay) return "";
+    if (!overlay || overlay.config?.system) return "";
     if (overlay.type === "text") return textOverlayFragment(overlay);
     if (overlay.type === "html") return htmlOverlayFragment(overlay);
     if (overlay.type === "music") return musicSceneFragment(account.twitchLogin, overlay.config || {}, {}, account);
@@ -80,10 +133,9 @@ function resolveSceneFragment(scene, account) {
   return "";
 }
 
-// innerHTML does not execute newly inserted <script> tags. Existing RestreamNode
-// scenes already embed scripts (countdown / widgets), and the CacheStream music
-// scene needs them too. Replacing the script nodes after each SSE scene swap
-// makes those fragments actually initialize without reloading the Browser Source.
+// innerHTML does not execute newly inserted <script> tags. Recreating script
+// nodes after each SSE swap lets countdowns, custom HTML widgets and the music
+// spectrum initialize without forcing OBS to reload the Browser Source.
 function sceneMountScript(login) {
   return `
     <script>
@@ -111,7 +163,6 @@ function sceneMountScript(login) {
 }
 
 function masterPage(login, initialFragment) {
-  // <template> keeps fragment scripts inert until mount() recreates them.
   const body = `<template id="scene-initial">${initialFragment}</template><div id="scene-root"></div>${sceneMountScript(login)}`;
   return page({ title: "Live scene", body, transparent: true });
 }
@@ -218,9 +269,6 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn, subscribeE
     res.send(page({ title: req.query.title || cfg.title || "Thanks for watching", body: fragment, transparent: false }));
   });
 
-  // CacheStream also ships an Offline scene. It is available as a direct
-  // Browser Source immediately; dashboard scene-switch wiring can expose it
-  // later without another renderer change.
   router.get("/:login/offline", (req, res) => {
     const account = accountOr404(req, res);
     if (!account) return;
@@ -229,7 +277,6 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn, subscribeE
     res.send(page({ title: req.query.title || cfg.title || "Offline", body: fragment, transparent: false }));
   });
 
-  // Dedicated full-screen music/radio scene with spectrum visualizer.
   router.get("/:login/music", (req, res) => {
     const account = accountOr404(req, res);
     if (!account) return;
@@ -272,7 +319,7 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn, subscribeE
   router.get("/:login/custom/:slug", (req, res) => {
     const account = accountOr404(req, res);
     if (!account) return;
-    const overlay = (account.overlays || []).find((o) => o.slug === req.params.slug);
+    const overlay = (account.overlays || []).find((o) => o.slug === req.params.slug && !o.config?.system);
     if (!overlay) return res.status(404).send("not found");
 
     if (overlay.type === "text") {
