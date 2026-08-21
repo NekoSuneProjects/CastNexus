@@ -1,5 +1,7 @@
 "use strict";
 
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
@@ -37,6 +39,12 @@ test("Music 24/7 permanent Program page contains music and master layers", () =>
   assert.equal(url.pathname, "/music-program.html");
   assert.equal(url.searchParams.get("music"), musicSceneUrl(acc, profile));
   assert.equal(url.searchParams.get("master"), "http://127.0.0.1:8090/overlay/tester/master");
+
+  const shell = fs.readFileSync(path.join(__dirname, "public", "music-program.html"), "utf8");
+  assert.match(shell, /id="music-layer"/);
+  assert.match(shell, /id="scene-layer"/);
+  assert.match(shell, /url\.origin !== location\.origin/);
+  assert.match(shell, /url\.pathname\.startsWith\("\/overlay\/"\)/);
 });
 
 test("Program page URL never changes when Music scene changes", () => {
