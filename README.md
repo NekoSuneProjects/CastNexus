@@ -1,375 +1,473 @@
-# NekoSune Restream Node
+# CastNexus
 
-Take a broadcast and fan it out to your own RTMP/SRT destinations, managed
-live from a web dashboard - instead of (or as well as) the real platform.
-There are **two independent ways to get a stream in**, and each dashboard
-account picks which one(s) it uses right after signing in - **console**, **PC
-streaming software**, or **both**:
+**CastNexus** is a self-hosted broadcast control studio for restreaming one source to multiple destinations, adding browser/HTML overlays, switching broadcast profiles, and running an always-on music station.
 
-- **PC streaming software** - point OBS (or any RTMP-capable software) at
-  this box like any normal RTMP target: a server URL + a stream key
-  **the dashboard generates for you** - never your real Twitch stream key,
-  so there's nothing Twitch-related to expose to third-party software, and
-  it can be rotated anytime without touching your Twitch account at all.
-- **Console** (e.g. PS5) - the console's own **Create -> Broadcast ->
-  Twitch** button, transparently captured via DNS hijack + ARP-spoof
-  intercept, since a console can't be pointed at a custom RTMP server the
-  way OBS can. Capture is Twitch-only (a console's native "Broadcast ->
-  YouTube" can't be reliably intercepted, unlike Twitch) - but YouTube works
-  fine as one of your *output* destinations either way, added like any
-  other RTMP/SRT target from the dashboard.
+It is designed around three workflows:
 
-Either way, once the feed lands here the rest is identical: the dashboard
-matches it to your account by stream key, and pushes it out to whatever
-destinations you've enabled. **Choosing "both" is genuinely just "both" -
-console and PC are detected independently**, so the dashboard can show each
-one's live status separately instead of one hiding the other. Only one
-drives the actual output pushes at a time (most RTMP destinations only
-accept one publisher per stream key anyway) - whichever goes live first,
-with automatic failover to the other if it's still live when the first one
-stops.
+1. **PC Streaming** — OBS, Streamlabs or another RTMP encoder publishes to CastNexus.
+2. **Console Streaming** — a supported console Twitch broadcast is intercepted on the network and routed through CastNexus.
+3. **Music 24/7** — Docker renders a full music scene with a live spectrum and continuously publishes uploaded music without needing OBS open.
+
+CastNexus uses **MediaMTX** for ingest/playback, **FFmpeg** for destination fan-out and audio/video processing, and an optional **headless Chromium compositor** for server-side overlays.
+
+---
+
+## Features
+
+### Broadcast sources
+
+- PC / OBS RTMP ingest using a CastNexus-generated key
+- Console Twitch capture using the existing DNS + ARP/DNAT interception system
+- independent PC and console source detection
+- automatic source failover
+- configurable reconnect grace period
+- Docker Music 24/7 source
+
+### Restream destinations
+
+Add as many per-account outputs as needed:
+
+- RTMP
+- RTMPS
+- SRT
+- Twitch
+- YouTube
+- Kick
+- custom streaming servers
+
+Destinations can be enabled/disabled live from the Studio UI.
+
+### Overlay Studio
+
+CastNexus provides one master Browser Source plus individual scene URLs.
+
+Built-in scenes:
+
+- Starting Soon
+- BRB / Intermission
+- Ending
+- Offline
+- Music / Radio
+- Live badge
+- Now Playing widget
+
+Custom overlays:
+
+- **Browser / iframe** — ideal for StreamElements, Streamlabs alerts, chat boxes and trusted browser widgets
+- **HTML / CSS** — raw trusted custom overlay code
+- **Text** — configurable text overlays
+- **Music** — full spectrum/music visual scene
+
+Browser overlays use a sandbox that allows the JavaScript commonly required by alert widgets without granting popup/forms/top-navigation permissions.
+
+### Music / Radio
+
+The music scene includes:
+
+- 48 spectrum bars
+- Web Audio `AnalyserNode`
+- FFT size 256
+- smoothing 0.78
+- 30 FPS visualizer
+- procedural fallback spectrum
+- animated vinyl
+- title / artist metadata
+- progress bar
+- elapsed + total time
+- clock
+- station name
+- custom accent
+- background image
+- cover/logo image
+
+The shared music engine keeps the Music scene and Now Playing widgets on the same authoritative track timeline.
+
+### Profiles
+
+Profiles work like separate broadcast workspaces. Examples:
+
+- `PC Gaming`
+- `Console Gaming`
+- `CastNexus Radio`
+- `Nekoryza 24/7`
+
+A profile remembers its:
+
+- mode: PC / Console / Music
+- enabled destination IDs
+- current scene
+- compositor preference
+- music shuffle / loop / volume
+- music visual settings
+
+Switch profiles from the top bar in CastNexus Studio.
+
+---
+
+# CastNexus Studio UI
+
+The web dashboard is a responsive dark/glass broadcast control interface with:
+
+- Overview
+- Sources
+- Destinations
+- Overlay Studio
+- Music 24/7
+- Profiles
+- Settings
+- live/reconnecting status
+- program preview
+- Twitch account avatar
+- profile switcher
+- modals and confirmations
+- update notifications
+
+Open it at:
 
 ```text
-PC software ──── rtmp://PI_IP:1935/live/<streamkey> ────────┐
-                                                             │
-Console ── (DNS hijack, ARP-spoofed, DNAT'd to :1935) ───────┤
-                                                             ▼
-                                    MediaMTX on the Raspberry Pi <- also
-                                       serves the same feed back out as
-                                       LL-HLS / RTSP / SRT / WHIP for direct
-                                       playback (VRChat, VLC, OBS...)
-                                                             │
-                    Dashboard (auth + control) spawns one independent
-                    ffmpeg push per enabled destination, sourced from
-                    whichever of that account's sources is currently active
-                      ├── Twitch RTMP
-                      ├── Kick RTMP
-                      ├── your own RTMP/SRT endpoint
-                      └── ...any destination you add from the dashboard
+http://<CASTNEXUS_HOST>:8090
 ```
 
-Which **containers** run is a separate, infrastructure-level decision (not
-per-account): set `TARGET_IPS`/`GATEWAY_IP` in `.env` if you have a console
-to capture, and `./install.sh` brings up the `dns` + `intercept` containers
-alongside `mediamtx` + `dashboard`. Leave them blank and only `mediamtx` +
-`dashboard` start - PC/OBS sources push straight to `mediamtx` regardless,
-no extra containers needed for that. Which source(s) an *individual account*
-actually uses is chosen in the dashboard after signing in, independently of
-what's running.
+---
 
-## Getting PC streaming software (OBS, etc.) connected - step by step
+# Docker install
 
-1. **Install and start the stack** (see below) - `TARGET_IPS` can be blank
-   if you have no console to capture.
-2. **Open the dashboard** at `http://<Pi LAN IP>:8090` and sign in with
-   Twitch. On first login, pick **PC streaming software** (or **Both**) as
-   how you'll stream - no Twitch stream key needed for this.
-3. **Add at least one destination** (the "+ Add destination" button) - a
-   full `rtmp://` or `srt://` URL including that destination's own stream
-   key, and turn it on. (Want to restream to your own Twitch channel too?
-   Add it here as a normal destination using your real Twitch key - that's
-   completely separate from the account-level matching key below.)
-4. In the dashboard's **"Connect a source" -> "PC / software"** tab, copy
-   the server URL (`rtmp://<Pi LAN IP>:1935/live`) and the **stream key
-   shown there** (a key the dashboard generated just for this - never your
-   Twitch key). In OBS: Settings -> Stream -> Service: Custom -> Server:
-   that URL -> Stream Key: that generated key.
-5. **Start streaming in OBS.** Watch the dashboard - the status badge should
-   flip to "Live (PC)", the preview player should start playing, and your
-   enabled destination(s) should show "Pushing now".
-6. Stopping the stream in OBS automatically stops every destination -
-   nothing to clean up (unless Console is also live for this account, in
-   which case outputs fail over to it).
-
-If that generated key ever leaks, hit **Regenerate key** in the same tab -
-it takes effect immediately (just update OBS's Stream Key field afterward).
-It's ours to rotate freely since it isn't tied to your Twitch account at
-all.
-
-## Getting your console (e.g. PS5) connected - step by step
-
-1. **Install and start the stack** (see below) with `TARGET_IPS`/`GATEWAY_IP`
-   set to your console's IP and your LAN gateway.
-2. **On the console:** Settings -> Network -> Settings -> Set Up Internet
-   Connection -> [your connection] -> Advanced Settings -> set:
-   ```text
-   DNS Settings: Manual
-   Primary DNS: <Raspberry Pi LAN IP>
-   Secondary DNS: 0.0.0.0
-   ```
-   Save, and let it reconnect to the network.
-3. **Open the dashboard** at `http://<Pi LAN IP>:8090` and sign in with
-   Twitch. On first login, pick **Console** (or **Both**) as how you'll
-   stream, then paste your Twitch stream key (from
-   `dashboard.twitch.tv/settings/stream`) when asked - this is the only way
-   an incoming console broadcast can be matched to your account.
-4. **Add at least one destination** (the "+ Add destination" button) - a
-   full `rtmp://` or `srt://` URL including the stream key, and turn it on.
-5. **On the console:** Create -> Broadcast -> Twitch. Wait for the live
-   indicator with a running timer.
-6. Watch the dashboard - the status badge should flip to "Live (console)",
-   the preview player should start playing, and your enabled destination(s)
-   should show "Pushing now".
-7. Ending the broadcast automatically stops every destination - nothing to
-   clean up (unless PC software is also live for this account, in which
-   case outputs fail over to it).
-
-Two independent layers try to catch the console's stream, because relying on
-DNS alone turned out not to be reliable in practice:
-
-1. **DNS hijack** (`dns/`) - answers Twitch ingest hostname lookups with
-   the Pi's own IP. Only fires if the console does a fresh DNS lookup for
-   the exact ingest host.
-2. **ARP-spoof + DNAT intercept** (`intercept/`) - makes the Pi the man in
-   the middle between the console and the LAN gateway, and transparently
-   redirects any outbound TCP:1935 connection to the Pi's own RTMP
-   listener, regardless of what IP/hostname the console actually used. This
-   is what actually makes Twitch capture work reliably - DNS hijacking
-   alone missed it because the real ingest address is often handed to the
-   console directly by an HTTPS API call, not a fresh DNS lookup. (We tried
-   this same approach for YouTube too - it never caught a single YouTube
-   broadcast in testing, which is why capture is Twitch-only now.)
-
-## Install (Raspberry Pi / Docker)
+Copy the environment template:
 
 ```bash
 cp .env.example .env
-nano .env   # set PI_IP, TWITCH_CLIENT_ID/SECRET, and TARGET_IPS/GATEWAY_IP
-            # if you have a console to capture (leave blank if not)
-./install.sh
+nano .env
 ```
 
-## Desktop build (Windows/Linux, no Docker)
+Configure at minimum:
 
-See [`desktop/README.md`](desktop/README.md). Covers the dashboard, media
-relay, and playback protocols only - **not** the ARP-spoof intercept or DNS
-hijack, which are Linux-only. Prebuilt binaries are produced by the
-`build.yml` GitHub Actions workflow on every push to `master`.
-
-## Dashboard
-
-Open `http://PI_IP:8090`. Multi-account: anyone can sign in with their own
-Twitch account and manage their own destinations, independently of anyone
-else's.
-
-### Twitch app setup (one-time, required for login to work at all)
-
-1. Create an app at https://dev.twitch.tv/console/apps
-2. Set its **OAuth Redirect URL** to exactly `TWITCH_REDIRECT_URI` from
-   your `.env` (e.g. `http://<PI_IP>:8090/auth/twitch/callback`)
-3. Put the generated Client ID/Secret into `.env` as `TWITCH_CLIENT_ID` /
-   `TWITCH_CLIENT_SECRET`
-
-### How accounts and matching work
-
-- Sign in with Twitch. On first login you pick how you'll stream -
-  **console**, **PC streaming software**, or **both** - before anything
-  else. Change your choice anytime from the "Connect a source" panel.
-- **Two separate matching keys, never mixed up:**
-  - **Console** is matched by your real Twitch stream key (Twitch's API
-    never exposes this - `dashboard.twitch.tv/settings/stream` is the only
-    place to get it), asked for right after picking console/both - it's the
-    only way an incoming console broadcast can be matched to your account,
-    since the RTMP path a console publishes under is literally that key.
-  - **PC streaming software** is matched by a key **the dashboard generates
-    for you** instead - shown in full in "Connect a source" -> "PC /
-    software" (with a "Regenerate key" button), and never your real Twitch
-    key. This means your Twitch stream key is never typed into OBS or any
-    third-party software, and the PC key can be rotated anytime with zero
-    effect on your Twitch account. Want to restream to your own Twitch
-    channel from a PC-mode source? Add it as a normal destination with your
-    real Twitch key, same as Kick or any custom RTMP target - that's
-    unrelated to this account-level matching key.
-- **Console and PC are detected independently** by which RTMP app name the
-  path was published under (`app/<key>` for console, mirroring Twitch's own
-  ingest scheme; `live/<key>` for PC software, this project's own
-  convention) - so with "both" selected, the dashboard can show each one's
-  live status separately instead of one hiding the other. Only one drives
-  the actual destination pushes at a time (most RTMP destinations only
-  accept one publisher per stream key anyway): whichever goes live first,
-  with automatic failover to the other if it's still live when the first
-  one stops.
-- **Reconnect grace window:** if a stream drops and there's no other source
-  to fail over to, outputs aren't torn down immediately - the dashboard
-  waits up to an hour (`RECONNECT_GRACE_MS` in `.env`, default `3600000`)
-  for the same source to reconnect (flaky wifi, a console reboot, OBS
-  crashing and relaunching, etc.) before actually ending the stream and
-  stopping every destination. The dashboard shows "Reconnecting… Xm left"
-  during this window; reconnecting at any point resumes automatically with
-  no action needed.
-- Destinations are managed entirely per-account - add, rename, edit the
-  URL, enable/disable, or delete, all in real time, no `.env` editing or
-  restart required. Both `rtmp://`/`rtmps://` and `srt://` URLs are
-  supported.
-- Toggling a destination on/off takes effect immediately if that account's
-  stream is currently live - it starts or stops just that one output, the
-  others keep running.
-- When an account's only live source stops, its outputs keep running
-  through the reconnect grace window above and only actually stop if
-  nothing reconnects before it expires (if another source is still live,
-  outputs fail over to it immediately instead - no grace window needed).
-  Re-enabling a destination just marks it for next time; it resumes
-  automatically the next time that account goes live.
-- While live, the dashboard also shows direct playback URLs (HLS, RTSP,
-  SRT, WHEP) for pulling the raw feed into VRChat, VLC, OBS, etc. without
-  going through any platform at all. These are always served from a
-  per-account path (`public/<twitch-username>`) - **never** the raw
-  MediaMTX path, which is literally the real Twitch stream key. The
-  dashboard internally republishes each live account's feed under that
-  fixed path specifically so these URLs can be shared/pasted without
-  exposing anything that could be used to hijack the real Twitch stream.
-  - **HLS and WHEP are reverse-proxied through the dashboard's own
-    port** (`/hls/...`, `/webrtc/...`), since both are plain HTTP - so
-    they automatically pick up whatever domain/scheme you're actually
-    viewing the dashboard through (works with just NPM forwarding the
-    dashboard's port, nothing extra to expose).
-  - **RTSP and SRT are raw TCP/UDP, not HTTP** - there's no such thing as
-    reverse-proxying them through a web proxy. Their URLs use the same
-    hostname you're viewing the dashboard from, but ports `8554`/`8890`
-    still need to be reachable directly at that host (forwarded/exposed
-    as their own ports, not through NPM).
-
-## Overlays & scenes
-
-The dashboard's **"Overlays & scenes"** panel serves browser-source pages
-you add as an OBS Browser Source (or any scene software with the same
-concept) - independent of console/PC ingest, so this works no matter which
-mode you're using.
-
-### Switch scenes live, without touching OBS
-
-Add the **master scene switcher** URL as a single Browser Source and leave
-it there. Buttons in the dashboard ("None" / Starting Soon / BRB / Ending /
-any custom Text or HTML overlay) change what it shows **instantly** - no
-editing OBS's Browser Source config, no restarting the stream. Under the
-hood: the dashboard holds one authoritative "what's showing right now" per
-account, and pushes the update to that one already-loaded page over
-Server-Sent Events, which swaps its own content in place. (Individual scene
-URLs like `/starting-soon`/`/brb`/`/ending` still work too, unchanged, for
-anyone who'd rather add each as its own Browser Source and toggle visibility
-manually in OBS - the master switcher is an additional, easier option, not a
-replacement.)
-
-- **Built-in scenes** - Starting Soon (with an optional countdown), BRB,
-  and Ending, each with editable title/subtitle/accent color/background
-  image, plus a **Live badge** that shows itself automatically only while
-  that account is actually live (polls its own small status endpoint - no
-  manual scene switching needed for that one).
-- **Custom overlays** - add as many as you want, three types:
-  - **Text** - a styled text block (size/color configurable).
-  - **HTML** - raw HTML/CSS passthrough for anything the built-ins don't
-    cover (same "you're trusted, typos break the overlay" tradeoff as any
-    raw-HTML tool).
-  - **Music player** - see below.
-
-### Music - one shared, synced playlist
-
-Upload tracks in the **Music library** section; volume/shuffle/loop are set
-once for the whole library (not per-overlay). The dashboard runs a small
-server-side engine that's the single authority on which track is playing
-and how far into it - so every Music-player overlay, and the optional **Now
-Playing widget** (layered onto any scene above, master switcher included),
-all agree, in sync, no matter which page loaded or reloaded when. Autoplay-
-with-sound works in OBS's Browser Source; a regular browser tab may block it
-until you click into the page.
-
-Every scene/overlay has **Copy URL** / **Open** so you can paste it straight
-into OBS's Browser Source URL field. These pages are unauthenticated (OBS
-can't log in) but scoped to your account's login, the same trust model
-already used for the direct-playback URLs above.
-
-### Built-in compositor (experimental) - bake overlays into the actual video
-
-By default, overlays only exist inside whatever OBS Browser Source is
-showing them - they're never part of the raw video this project pushes to
-destinations. Turning on **"Built-in compositor"** in the Overlays panel
-changes that: it spins up a real headless-Chromium + FFmpeg pipeline per
-account (the same mechanism [CacheStream](https://github.com/NekoSuneProjectsForks/NekoStreamAPP)
-uses to render its scenes) that plays your own live feed back into itself
-alongside the overlay layer, re-encodes the result, and that's what
-destinations push out - so overlays show up for viewers even if they're not
-watching through your own OBS.
-
-This is a genuinely heavy, opt-in addition - a persistent browser process
-plus several ffmpeg processes per account, real CPU cost instead of the
-normal zero-cost passthrough, and a real (if usually small) added-latency
-cost since the video gets decoded twice. Off by default; not recommended on
-low-end hardware (e.g. a Raspberry Pi 3). See
-[`docs/design/overlays.md`](docs/design/overlays.md) for the full mechanism
-and what's still unverified on real hardware.
-
-## Console DNS
-
-Set the console's Primary DNS to the Raspberry Pi LAN IP:
-
-```text
-Primary DNS: PI_IP
-Secondary DNS: 0.0.0.0
+```dotenv
+PI_IP=192.168.1.50
+TWITCH_CLIENT_ID=
+TWITCH_CLIENT_SECRET=
+TWITCH_REDIRECT_URI=http://192.168.1.50:8090/auth/twitch/callback
 ```
 
-## Logs
+For console capture also configure:
+
+```dotenv
+TARGET_IPS=192.168.1.100
+GATEWAY_IP=192.168.1.1
+```
+
+Then start CastNexus.
+
+For PC/Music only:
 
 ```bash
-docker compose logs -f mediamtx
-docker compose logs -f dashboard
-# only running if TARGET_IPS is set (console capture):
-docker compose logs -f dns
-docker compose logs -f intercept
+docker compose up -d
 ```
 
-## 💖 Support NekoSuneProjects
+For console capture helpers as well:
 
-If you enjoy our projects, find them useful, or would like to help support the continued development of **NekoSuneProjects**, donations are greatly appreciated. ❤️
+```bash
+docker compose --profile console up -d
+```
 
-Donations help support:
+The existing `install.sh` can also be used for the Raspberry Pi deployment.
 
-* 🖥️ Server and hosting costs
-* 🌐 Domains and infrastructure
-* 🔧 Development and maintenance
-* 💾 Storage and backup costs
-* 🛡️ Security and infrastructure improvements
-* 🚀 New open-source projects and features
-* ☕ The time and effort that goes into maintaining our projects
+---
 
-### 💰 Cryptocurrency Donations
+# Stable and Beta channels
 
-You can support **NekoSuneProjects** using any of the following cryptocurrencies:
+CastNexus deliberately separates test builds from production releases.
 
-| Cryptocurrency                     | Donation Address                 |
-| ---------------------------------- | -------------------------------- |
-| 🟣 **Ethereum (ETH)**              | `0xAD41cD581FD06dB2589fd745BB179cA454a242ac`               |
-| 🟠 **Bitcoin (BTC)**               | `38qeqyTxgakcsb8swbo4g8EnovUSX4DDNp`               |
-| 🐕 **Dogecoin (DOGE)**             | `DGVT15yeHJnSFsAy6zWx3m6grXsK7FV9kk`              |
-| 🟢 **Hive (HIVE)**                 | `chisdealhd`  |
-| 🟡 **Hive Dollar (HBD)**           | `chisdealhd`  |
-| 🟢 **Steem (STEEM)**               | `chisdealhd` |
-| 🟡 **Steem Dollar (SBD)**          | `chisdealhd` |
-| 🔵 **Blurt (BLURT)**               | `chisdealhd` |
-| 🟣 **Solana (SOL)**                | `YOUR_SOL_ADDRESS`               |
-| 💵 **USD Coin (USDC)**             | `0xAD41cD581FD06dB2589fd745BB179cA454a242ac`              |
-| 💵 **USDT Coin (USDT)**             | `0xAD41cD581FD06dB2589fd745BB179cA454a242ac`             |
-| 🟡 **BNB**                         | `0xAD41cD581FD06dB2589fd745BB179cA454a242ac`               |
-| 🦇 **Basic Attention Token (BAT) ETH CHAIN** | `0x7196Ec85d9FB64f1a6EA94e0E7d7f25195416F17`               |
-| ⚡ **ZBD / Bitcoin Lightning**      | `nekosunevr`   |
-| **Github Sponsor** | `https://github.com/sponsors/NekoSuneProjects` |
+## Stable
 
-> ⚠️ **Important:** Always verify the cryptocurrency and network before sending a donation. Sending funds to an incorrect address or unsupported network may result in permanent loss of funds.
+Stable Docker installs use:
 
-### 🙏 Thank You
+```dotenv
+CASTNEXUS_IMAGE_TAG=latest
+CASTNEXUS_CHANNEL=stable
+```
 
-Whether you contribute financially, report bugs, submit improvements, or simply use and share our projects, **thank you for supporting NekoSuneProjects**.
+Images:
 
-Every contribution helps us continue building and maintaining open-source software for the community. ❤️
+```text
+ghcr.io/nekosuneprojects/castnexus-dashboard:latest
+ghcr.io/nekosuneprojects/castnexus-dns:latest
+ghcr.io/nekosuneprojects/castnexus-intercept:latest
+```
 
-**Thank you for supporting NekoSuneProjects!** 🌙
+A stable GitHub release uses a normal semantic-version tag such as:
 
-## Important
+```text
+v1.2.0
+```
 
-This is a LAN-only prototype. Do not expose DNS port 53, RTMP port 1935,
-MediaMTX's other ports, or the dashboard port to the public internet.
-Console capture's ARP-spoof intercept (only running if `TARGET_IPS` is set)
-actively manipulates ARP tables for the console and your LAN gateway -
-scoped only to that one device pair, but still something to be aware of on
-a shared home network. PC streaming software doesn't touch DNS or ARP at
-all - it just pushes to the dashboard's RTMP port like any other RTMP
-target.
+Stable GitHub releases are normal releases and are marked as the latest release.
+
+## Beta
+
+Beta Docker installs use:
+
+```dotenv
+CASTNEXUS_IMAGE_TAG=beta
+CASTNEXUS_CHANNEL=beta
+```
+
+Images:
+
+```text
+ghcr.io/nekosuneprojects/castnexus-dashboard:beta
+ghcr.io/nekosuneprojects/castnexus-dns:beta
+ghcr.io/nekosuneprojects/castnexus-intercept:beta
+```
+
+Beta versions use prerelease tags such as:
+
+```text
+v1.3.0-beta.1
+```
+
+GitHub marks them as **Pre-release**, so they can be tested without replacing the stable/latest release.
+
+---
+
+# Creating a release
+
+The release builder is:
+
+```text
+.github/workflows/release.yml
+```
+
+Open **GitHub → Actions → CastNexus Release → Run workflow**.
+
+## Make a beta
+
+Choose:
+
+```text
+Channel: beta
+Version: 1.3.0
+```
+
+If the version does not already contain a prerelease suffix, the workflow automatically creates a version similar to:
+
+```text
+1.3.0-beta.<workflow run number>
+```
+
+The workflow then:
+
+1. builds `linux/amd64` + `linux/arm64` Docker images
+2. publishes exact-version Docker tags
+3. updates the `:beta` Docker tags
+4. builds CastNexus Desktop for Windows x64
+5. builds CastNexus Desktop for Linux x64
+6. creates a GitHub **Pre-release**
+7. attaches the Windows/Linux downloads
+8. asks GitHub to generate release notes from the changes since the previous release
+
+## Promote a stable release
+
+Run the same workflow **from `main`** with:
+
+```text
+Channel: stable
+Version: 1.3.0
+```
+
+Stable release dispatches are intentionally blocked from non-`main` branches.
+
+The stable build:
+
+- publishes exact Docker version tags
+- updates Docker `:latest`
+- creates a normal GitHub Release
+- marks it as the latest release
+- attaches Windows/Linux desktop bundles
+- generates release notes
+
+You can also push normal `v*` tags. A tag containing a prerelease suffix is treated as beta; a normal `v1.2.3` tag is stable.
+
+---
+
+# Updating Docker
+
+## Stable
+
+```bash
+CASTNEXUS_IMAGE_TAG=latest CASTNEXUS_CHANNEL=stable docker compose pull
+docker compose up -d
+```
+
+## Beta
+
+```bash
+CASTNEXUS_IMAGE_TAG=beta CASTNEXUS_CHANNEL=beta docker compose pull
+docker compose up -d
+```
+
+CastNexus embeds its version/channel into each release build. The Studio UI checks GitHub Releases periodically and displays an update notification when a newer release exists for the installed channel.
+
+Stable installations ignore beta/prerelease versions.
+
+---
+
+# Desktop — Windows and Linux
+
+Release assets are built for:
+
+```text
+CastNexus-Windows-x64.zip
+CastNexus-Linux-x64.tar.gz
+```
+
+See [`desktop/README.md`](desktop/README.md) for full desktop information.
+
+The desktop launcher:
+
+- starts MediaMTX
+- starts the bundled CastNexus dashboard
+- opens the Studio UI
+- checks for updates at startup
+- attempts a native Windows notification or Linux `notify-send` notification when a newer version exists
+- also gets the normal in-dashboard update notification
+
+Desktop application data is stored in:
+
+```text
+~/.castnexus
+```
+
+For upgrade compatibility, CastNexus automatically continues using the older `.nekosune-ps5-streamer` directory when that directory already exists and the new directory has not yet been created.
+
+> Desktop does not bundle the privileged console DNS/ARP interception containers. Use the Docker/Linux deployment for full console interception and the guaranteed Docker Music 24/7 worker.
+
+---
+
+# PC / OBS setup
+
+1. Sign in to CastNexus with Twitch.
+2. Create or choose a **PC Streaming** profile.
+3. Open **Sources**.
+4. Copy the CastNexus RTMP server and generated PC key.
+5. In OBS choose a Custom streaming service.
+6. Paste the server + CastNexus key.
+7. Configure your Destinations.
+8. Start OBS.
+
+The generated PC ingest key is separate from the real Twitch stream key and can be rotated from CastNexus.
+
+---
+
+# Console setup
+
+Console Twitch capture requires the Docker/Linux network helpers.
+
+1. Configure `TARGET_IPS` and `GATEWAY_IP`.
+2. Start Compose using the `console` profile.
+3. Point the console DNS at the CastNexus host.
+4. Sign in to CastNexus.
+5. Create or choose a **Console Streaming** profile.
+6. Paste the Twitch stream key when requested.
+7. Start the console Twitch broadcast.
+8. CastNexus captures the stream and fans it out to enabled destinations.
+
+The Twitch stream key is masked after it is saved.
+
+---
+
+# Music 24/7 setup
+
+1. Start the normal Docker stack.
+2. Sign in to CastNexus.
+3. Create a **24/7 Music** profile.
+4. Open **Music 24/7**.
+5. Upload tracks.
+6. Configure shuffle / loop / volume.
+7. Configure the music scene accent, background, station name and cover.
+8. Enable the destinations you want.
+
+The `music24` service watches the active profile. When a Music profile is active and at least one track exists it automatically renders and publishes the station.
+
+Switching away from the Music profile stops its generated broadcast.
+
+### Important
+
+A Music profile publishes through the account's CastNexus PC ingest path. Do not leave OBS publishing with the same CastNexus PC key while activating Music 24/7, because two publishers cannot safely own the same MediaMTX path.
+
+---
+
+# Browser overlay examples
+
+## StreamElements / Streamlabs
+
+Open **Overlay Studio → New overlay → Browser / iframe** and paste the widget/browser-source URL.
+
+Choose either:
+
+- full-screen
+- fixed width + height
+- X/Y position
+- transparent background
+
+Then either:
+
+- activate it through the CastNexus master scene switcher, or
+- copy its individual Browser Source URL into OBS.
+
+## Custom HTML
+
+Use **HTML / CSS** for trusted code you own.
+
+Do not use the raw HTML mode simply to embed an unknown third-party script; use the sandboxed Browser / iframe option instead.
+
+---
+
+# Playback
+
+While an account is live CastNexus provides playback endpoints for:
+
+- WebRTC / WHEP
+- HLS
+- RTSP
+- SRT
+
+The public playback path uses the Twitch login instead of exposing the raw stream-key path.
+
+---
+
+# CI vs Release builds
+
+`.github/workflows/build.yml` is now **CI only**. It validates JavaScript, performs non-publishing Docker builds and smoke-packages the Linux desktop app.
+
+It does **not** publish `latest`.
+
+Only `.github/workflows/release.yml` promotes Docker images or creates GitHub Releases. This prevents an ordinary development push from accidentally replacing the production image.
+
+---
+
+## Project layout
+
+```text
+CastNexus/
+├── dashboard/                # Studio API/UI, overlays, compositor, music
+│   ├── public/               # modern CastNexus Studio frontend
+│   ├── music24.js            # always-on Docker music worker
+│   ├── music-scene.js        # spectrum/radio scene
+│   ├── scenes.js             # Starting Soon / BRB / Ending / Offline
+│   └── overlays.js           # browser, HTML, text and master overlays
+├── desktop/                  # Windows/Linux launcher build
+├── dns/                      # console DNS capture helper
+├── intercept/                # console ARP/DNAT capture helper
+├── config/                   # MediaMTX configuration
+├── docs/
+├── docker-compose.yml
+└── .github/workflows/
+    ├── build.yml             # validation / CI
+    └── release.yml           # beta + stable releases
+```
+
+---
+
+## Credits
+
+CastNexus includes scene/compositor ideas adapted from the `docker` branch of the NekoStreamAPP/CacheStream work while keeping CastNexus on its own lightweight Express + MediaMTX architecture.

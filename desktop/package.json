@@ -1,14 +1,21 @@
 {
-  "name": "nekosune-ps5-streamer-desktop",
+  "name": "castnexus-desktop",
   "private": true,
-  "version": "1.0.0",
+  "version": "0.0.0-dev",
   "bin": "launcher.js",
   "pkg": {
     "targets": [
       "node18-win-x64",
       "node18-linux-x64"
     ],
-    "outputPath": "dist"
+    "outputPath": "dist",
+    "assets": [
+      "build-info.json",
+      "../dashboard/public/**/*"
+    ],
+    "scripts": [
+      "../dashboard/*.js"
+    ]
   },
   "devDependencies": {
     "@yao-pkg/pkg": "^5.11.1"

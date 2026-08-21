@@ -1,21 +1,27 @@
 FROM node:22-alpine
 
-# ffmpeg: destination pushes, republish, and the compositor's encode.
-# chromium + fonts: the optional built-in overlay compositor (see
-# dashboard/compositor.js) - a headless Chromium instance that renders the
-# account's own live feed + overlays as one page and re-encodes it, the same
-# mechanism CacheStream uses (github.com/NekoSuneProjectsForks/NekoStreamAPP,
-# `docker` branch, apps/streamer/src/stream.js). Off by default per-account;
-# these packages just make the option available.
+# CastNexus dashboard + optional headless broadcast compositor.
+# ffmpeg handles destination pushes, restreaming and compositor audio/video.
+# chromium renders CastNexus scenes/overlays and the 24/7 music spectrum.
 RUN apk add --no-cache \
       ffmpeg \
       chromium nss freetype harfbuzz ca-certificates ttf-freefont \
       dumb-init
 
-# puppeteer-core has no bundled Chromium to skip downloading, but the flag
-# also silences a startup warning some puppeteer-core versions emit anyway.
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+ARG CASTNEXUS_VERSION=0.0.0-dev
+ARG CASTNEXUS_CHANNEL=dev
+ARG CASTNEXUS_REVISION=unknown
+ENV CASTNEXUS_VERSION=${CASTNEXUS_VERSION}
+ENV CASTNEXUS_CHANNEL=${CASTNEXUS_CHANNEL}
+ENV CASTNEXUS_INSTALL_TYPE=docker
+
+LABEL org.opencontainers.image.title="CastNexus Dashboard" \
+      org.opencontainers.image.description="Self-hosted multi-source restreaming, overlays and 24/7 music studio" \
+      org.opencontainers.image.version="${CASTNEXUS_VERSION}" \
+      org.opencontainers.image.revision="${CASTNEXUS_REVISION}"
 
 WORKDIR /app
 
