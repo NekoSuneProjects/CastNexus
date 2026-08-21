@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#080a12">
-  <title>RestreamNode Studio</title>
+  <title>CastNexus Studio</title>
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -13,9 +13,9 @@
 
   <section id="login-view" class="auth-shell hidden">
     <div class="auth-card glass">
-      <div class="brand-mark brand-mark-large">RN</div>
+      <div class="brand-mark brand-mark-large">CN</div>
       <div class="eyebrow">SELF-HOSTED BROADCAST CONTROL</div>
-      <h1>RestreamNode <span>Studio</span></h1>
+      <h1>CastNexus <span>Studio</span></h1>
       <p>One control room for PC streaming, console capture, overlays, multi-destination restreaming and 24/7 music.</p>
       <a class="btn btn-twitch btn-lg" href="/auth/twitch">Sign in with Twitch</a>
       <div class="auth-foot">Your stream keys and destinations stay on your own server.</div>
@@ -25,13 +25,13 @@
   <section id="setup-view" class="auth-shell hidden">
     <div class="setup-card glass">
       <div class="setup-head">
-        <div class="brand-mark">RN</div>
+        <div class="brand-mark">CN</div>
         <div><div class="eyebrow">FIRST PROFILE</div><h1>How do you want to broadcast?</h1></div>
       </div>
       <p class="muted">Pick your first workspace. You can add all three later and switch between profiles from the top bar.</p>
       <div class="mode-grid">
         <button class="mode-card" data-setup-mode="pc">
-          <span class="mode-icon">◫</span><strong>PC Streaming</strong><small>OBS / Streamlabs / encoder input with RestreamNode overlays and multi-restream outputs.</small><span class="mode-chip">OBS · RTMP · OVERLAYS</span>
+          <span class="mode-icon">◫</span><strong>PC Streaming</strong><small>OBS / Streamlabs / encoder input with CastNexus overlays and multi-restream outputs.</small><span class="mode-chip">OBS · RTMP · OVERLAYS</span>
         </button>
         <button class="mode-card" data-setup-mode="console">
           <span class="mode-icon">⌁</span><strong>Console Streaming</strong><small>Capture console broadcasts through the DNS/intercept path, then add overlays before restreaming.</small><span class="mode-chip">PS5 · CAPTURE · OVERLAYS</span>
@@ -46,10 +46,10 @@
 
   <section id="streamkey-view" class="auth-shell hidden">
     <form id="streamkey-form" class="auth-card glass">
-      <div class="brand-mark">RN</div>
+      <div class="brand-mark">CN</div>
       <div class="eyebrow">CONSOLE PROFILE</div>
       <h1>Add your Twitch stream key</h1>
-      <p>Console capture matches the intercepted broadcast to your account using the Twitch stream key. RestreamNode never shows the full key again after saving it.</p>
+      <p>Console capture matches the intercepted broadcast to your account using the Twitch stream key. CastNexus never shows the full key again after saving it.</p>
       <label>Stream key</label>
       <input id="streamkey-input" type="password" autocomplete="off" placeholder="live_..." required>
       <button class="btn btn-primary btn-lg" type="submit">Save &amp; enter studio</button>
@@ -60,7 +60,7 @@
 
   <div id="app-view" class="app-shell hidden">
     <aside class="sidebar glass">
-      <div class="side-brand"><div class="brand-mark">RN</div><div><strong>RestreamNode</strong><span>Broadcast Studio</span></div></div>
+      <div class="side-brand"><div class="brand-mark">CN</div><div><strong>CastNexus</strong><span>Broadcast Studio</span></div></div>
       <nav id="main-nav" class="nav-list">
         <button class="nav-item active" data-page="overview"><span>⌂</span>Overview</button>
         <button class="nav-item" data-page="sources"><span>⇥</span>Sources</button>
@@ -98,10 +98,12 @@
   <div id="modal-root"></div>
   <div id="toast-root" class="toast-root"></div>
 
+  <script src="/build-info.js" defer></script>
   <script src="/app-core.js" defer></script>
   <script src="/app-pages-a.js" defer></script>
   <script src="/app-pages-b.js" defer></script>
   <script src="/app-modals.js" defer></script>
   <script src="/app-runtime.js" defer></script>
+  <script src="/app-updater.js" defer></script>
 </body>
 </html>
