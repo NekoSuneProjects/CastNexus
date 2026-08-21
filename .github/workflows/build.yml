@@ -60,6 +60,30 @@ jobs:
           node --check desktop/launcher.js
           for f in dashboard/public/app-*.js dashboard/public/build-info.js; do node --check "$f"; done
 
+      - name: Embedded dashboard + Music 24/7 runtime smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOG=/tmp/castnexus-entry.log
+          STATE=/tmp/castnexus-entry-state.json
+          rm -f "$LOG" "$STATE"
+          DASHBOARD_PORT=18090 \
+          STATE_FILE="$STATE" \
+          MUSIC_DIR=/tmp/castnexus-entry-music \
+          MEDIAMTX_API=http://127.0.0.1:19997 \
+          node dashboard/server-entry.js >"$LOG" 2>&1 &
+          pid=$!
+          cleanup() { kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+          ready=0
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:18090/ >/dev/null 2>&1; then ready=1; break; fi
+            sleep .25
+          done
+          cat "$LOG"
+          test "$ready" -eq 1
+          grep -F "[music24] watching" "$LOG"
+
       - name: Profile music isolation + dual-format smoke test
         run: node --test dashboard/profile-music.test.js
 
