@@ -9,10 +9,40 @@ assert.equal(piSafeMode({ arch:"arm64", hardwareEncoder:true, setting:"auto" }),
 assert.equal(piSafeMode({ arch:"x64", hardwareEncoder:false, setting:"auto" }), false);
 assert.equal(piSafeMode({ arch:"arm64", hardwareEncoder:false, setting:"false" }), false);
 
-assert.deepEqual(safeCanvas("landscape", { arch:"arm64", hardwareEncoder:false, width:1920, height:1080, fps:30 }), { width:1280, height:720, fps:30 });
-assert.deepEqual(safeCanvas("vertical", { arch:"arm64", hardwareEncoder:false, width:1080, height:1920, fps:30 }), { width:720, height:1280, fps:30 });
+assert.deepEqual(
+  safeCanvas("landscape", { arch:"arm64", hardwareEncoder:false, width:1920, height:1080, fps:30 }),
+  { width:960, height:540, fps:20, screencastQuality:60 },
+  "CPU-only Pi rendering must stay below the old 720p30 CDP/x264 pressure point"
+);
+assert.deepEqual(
+  safeCanvas("vertical", { arch:"arm64", hardwareEncoder:false, width:1080, height:1920, fps:30 }),
+  { width:540, height:960, fps:20, screencastQuality:60 }
+);
 assert.deepEqual(safeCanvas("landscape", { arch:"arm64", hardwareEncoder:true, width:1920, height:1080, fps:30 }), { width:1920, height:1080, fps:30 });
 assert.equal(cpuX264Preset({ arch:"arm64", hardwareEncoder:false }), "ultrafast");
+
+const oldWidth = process.env.CASTNEXUS_PI_SAFE_WIDTH;
+const oldHeight = process.env.CASTNEXUS_PI_SAFE_HEIGHT;
+const oldFps = process.env.CASTNEXUS_PI_SAFE_FPS;
+const oldQuality = process.env.CASTNEXUS_PI_JPEG_QUALITY;
+process.env.CASTNEXUS_PI_SAFE_WIDTH = "854";
+process.env.CASTNEXUS_PI_SAFE_HEIGHT = "480";
+process.env.CASTNEXUS_PI_SAFE_FPS = "15";
+process.env.CASTNEXUS_PI_JPEG_QUALITY = "52";
+assert.deepEqual(
+  safeCanvas("landscape", { arch:"arm64", hardwareEncoder:false, width:1920, height:1080, fps:30 }),
+  { width:854, height:480, fps:15, screencastQuality:52 },
+  "Pi safe renderer must be tunable without rebuilding CastNexus"
+);
+for (const [key, value] of [
+  ["CASTNEXUS_PI_SAFE_WIDTH", oldWidth],
+  ["CASTNEXUS_PI_SAFE_HEIGHT", oldHeight],
+  ["CASTNEXUS_PI_SAFE_FPS", oldFps],
+  ["CASTNEXUS_PI_JPEG_QUALITY", oldQuality],
+]) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
 
 const audio = stableAudioArgs();
 assert.equal(audio[audio.indexOf("-b:a") + 1], "128k");
