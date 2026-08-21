@@ -109,6 +109,21 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.gpu-vaapi.yml config >/dev/null
           docker compose -f docker-compose.yml -f docker-compose.gpu-nvidia.yml config >/dev/null
 
+      - name: Boot-test pinned MediaMTX recording config
+        shell: bash
+        run: |
+          set +e
+          timeout 5s docker run --rm \
+            -v "$PWD/config/mediamtx.yml:/mediamtx.yml:ro" \
+            bluenviron/mediamtx:1.19.2 /mediamtx.yml >mediamtx-boot.log 2>&1
+          code=$?
+          set -e
+          cat mediamtx-boot.log
+          if [ "$code" -ne 124 ]; then
+            echo "MediaMTX exited before the timeout; config is invalid or failed to boot (exit $code)." >&2
+            exit 1
+          fi
+
   desktop-smoke:
     runs-on: ubuntu-latest
     steps:
