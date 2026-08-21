@@ -101,7 +101,7 @@ jobs:
       matrix:
         service: [dashboard, dns, intercept]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Stamp CastNexus web build
         shell: bash
@@ -161,11 +161,12 @@ jobs:
             artifact: CastNexus-Linux-x64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
+          package-manager-cache: false
 
       - name: Stamp CastNexus desktop build
         shell: node {0}
@@ -236,7 +237,7 @@ jobs:
           chmod +x out/CastNexus out/mediamtx
           tar -czf CastNexus-Linux-x64.tar.gz -C out .
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: |
@@ -248,12 +249,23 @@ jobs:
     needs: [meta, docker, desktop]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - name: Download desktop release artifacts only
+        uses: actions/download-artifact@v8
         with:
+          pattern: CastNexus-*
           path: release-assets
           merge-multiple: true
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f release-assets/CastNexus-Windows-x64.zip
+          test -f release-assets/CastNexus-Linux-x64.tar.gz
+          echo "Release assets:"
+          ls -lh release-assets
 
       - name: Write release channel notes
         shell: bash
@@ -288,4 +300,5 @@ jobs:
           generate_release_notes: true
           body_path: release-intro.md
           files: |
-            release-assets/*
+            release-assets/CastNexus-Windows-x64.zip
+            release-assets/CastNexus-Linux-x64.tar.gz
