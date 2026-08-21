@@ -16,7 +16,7 @@ assert.equal(cpuX264Preset({ arch:"arm64", hardwareEncoder:false }), "ultrafast"
 
 const audio = stableAudioArgs();
 assert.equal(audio[audio.indexOf("-b:a") + 1], "128k");
-assert.equal(audio[audio.indexOf("-ar") + 1], "48000");
+assert.equal(audio[audio.indexOf("-ar") + 1], "44100");
 assert.ok(audio.includes("aresample=async=1:first_pts=0"));
 
 const mux = liveMuxArgs("rtmp://example/live/key", "flv");
@@ -27,6 +27,7 @@ const source = destinationFfmpegArgs("rtmp://source/live", { url:"rtmp://youtube
 assert.equal(source[source.indexOf("-c:v") + 1], "copy", "Pi-friendly source mode should not re-encode video");
 assert.equal(source[source.indexOf("-c:a") + 1], "aac", "source mode must normalize audio instead of copying broken/low-bitrate AAC");
 assert.equal(source[source.indexOf("-b:a") + 1], "128k");
+assert.equal(source[source.indexOf("-ar") + 1], "44100");
 assert.ok(source.includes("+genpts+discardcorrupt"));
 
 console.log("Pi-safe RTMP pipeline tests passed");
