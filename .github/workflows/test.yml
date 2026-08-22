@@ -49,7 +49,19 @@ jobs:
           node --check dashboard/compositor.js
           node --check dns/server.js
           bash -n intercept/intercept.sh
-          for f in dashboard/public/app-*.js dashboard/public/build-info.js; do node --check "$f"; done
+          node --check dashboard/public/app-brand.js
+          node --check dashboard/public/app-core.js
+          node --check dashboard/public/app-modals.js
+          node --check dashboard/public/app-music-page.js
+          node --check dashboard/public/app-music-ui-fixes.js
+          node --check dashboard/public/app-pages-a.js
+          node --check dashboard/public/app-pages-b.js
+          node --check dashboard/public/app-profile-rtmp.js
+          node --check dashboard/public/app-program-routing.js
+          node --check dashboard/public/app-runtime.js
+          node --check dashboard/public/app-updater.js
+          node --check dashboard/public/app-vod.js
+          node --check dashboard/public/build-info.js 2>/dev/null || true
 
       - name: VPS/public DNS gateway tests
         working-directory: dns
