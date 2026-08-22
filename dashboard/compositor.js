@@ -23,7 +23,7 @@ function audioTransportFor(accountId, runtimeDir, platform = process.platform) {
   return { live:endpoint(base), music:endpoint(base+1), fifo:false };
 }
 
-function buildChromiumGpuArgs(gpuEnabled) {
+function buildChromiumGpuArgs(gpuEnabled, platform = process.platform) {
   // CPU-only hosts still need Chromium's software rasterizer in order to
   // produce compositor frames. Disabling both GPU and software rasterization
   // can leave Page.startScreencast() alive but with no frames at all, which in
@@ -32,7 +32,8 @@ function buildChromiumGpuArgs(gpuEnabled) {
   // longer recognizes and silently falls back to "--use-gl=disabled" (no
   // rendering at all). The ANGLE-routed selector below is what still works.
   if (!gpuEnabled) return ["--disable-gpu", "--enable-software-rasterization", "--use-gl=angle", "--use-angle=swiftshader"];
-  return ["--ignore-gpu-blocklist", "--enable-gpu-rasterization", "--enable-zero-copy", "--use-gl=egl", "--disable-frame-rate-limit"];
+  const backend = platform === "win32" ? ["--use-gl=angle", "--use-angle=d3d11"] : ["--use-gl=egl"];
+  return ["--ignore-gpu-blocklist", "--enable-gpu-rasterization", "--enable-zero-copy", ...backend, "--disable-frame-rate-limit"];
 }
 
 function defaultVideoConfig() {

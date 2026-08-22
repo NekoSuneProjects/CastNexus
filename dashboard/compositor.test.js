@@ -10,10 +10,18 @@ test("CPU-only Chromium keeps software rasterization available", () => {
   assert.equal(args.includes("--disable-software-rasterizer"), false);
 });
 
-test("GPU compositor keeps the accelerated flags", () => {
-  const args = buildChromiumGpuArgs(true);
+test("Linux GPU compositor keeps the accelerated EGL flags", () => {
+  const args = buildChromiumGpuArgs(true, "linux");
   assert.ok(args.includes("--enable-gpu-rasterization"));
   assert.ok(args.includes("--use-gl=egl"));
+});
+
+test("Windows GPU compositor uses ANGLE with Direct3D 11", () => {
+  const args = buildChromiumGpuArgs(true, "win32");
+  assert.ok(args.includes("--enable-gpu-rasterization"));
+  assert.ok(args.includes("--use-gl=angle"));
+  assert.ok(args.includes("--use-angle=d3d11"));
+  assert.equal(args.includes("--use-gl=egl"), false);
 });
 
 test("Windows audio uses loopback UDP instead of Unix FIFO files", () => {
