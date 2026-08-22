@@ -1,6 +1,7 @@
 "use strict";
 
 const net = require("node:net");
+const {Worker,isMainThread,parentPort,workerData}=require("node:worker_threads");
 
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
@@ -47,10 +48,21 @@ class PcmAudioRelay {
   }
 
   start(){
+    if(isMainThread){
+      if(this.worker)return;
+      this.worker=new Worker(__filename,{workerData:{castNexusPcmRelay:true,inputPort:this.inputPort,outputPort:this.outputPort}});
+      this.worker.on("error",error=>this.logger.warn?.(`[audio-relay:${this.inputPort}] worker error: ${error.message}`));
+      return;
+    }
     if(this.pacer)return;
     this.inputServer=net.createServer(socket=>{
       if(this.writer){try{this.writer.destroy();}catch{}}
       this.writer=socket;
+      // A new writer means a new song (or a restarted decoder). Never let
+      // pending samples from the previous connection play into the new track.
+      this.chunks=[];
+      this.chunkBytes=0;
+      this.primed=false;
       socket.on("data",chunk=>{
         if(socket!==this.writer)return;
         this.chunks.push(chunk);
@@ -107,6 +119,13 @@ class PcmAudioRelay {
   }
 
   stop(){
+    if(this.worker){
+      const worker=this.worker;
+      this.worker=null;
+      worker.postMessage("stop");
+      worker.terminate().catch(()=>{});
+      return;
+    }
     if(this.pacer){clearInterval(this.pacer);this.pacer=null;}
     for(const socket of [this.writer,this.consumer]){try{socket?.destroy();}catch{}}
     this.writer=this.consumer=null;
@@ -118,4 +137,10 @@ class PcmAudioRelay {
   }
 }
 
-module.exports={PcmAudioRelay,SAMPLE_RATE,BYTES_PER_SEC,PRIME_BYTES,TARGET_SOURCE_BUFFER,MAX_SOURCE_BUFFER,trimPcmQueue};
+if(!isMainThread&&workerData?.castNexusPcmRelay){
+  const relay=new PcmAudioRelay({inputPort:workerData.inputPort,outputPort:workerData.outputPort});
+  relay.start();
+  parentPort.on("message",message=>{if(message==="stop"){relay.stop();process.exit(0);}});
+}
+
+module.exports={PcmAudioRelay,SAMPLE_RATE,BYTES_PER_SEC,PRIME_BYTES,TARGET_SOURCE_BUFFER,MAX_SOURCE_BUFFER,trimPcmQueue,isMainThread};

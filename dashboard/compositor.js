@@ -62,7 +62,7 @@ function compositorFilterGraph({ fps, encoder, audioPlan }) {
 }
 
 function videoInputArgs({electronOffscreen,fps,width,height}){
-  if(electronOffscreen)return ["-thread_queue_size","1024","-framerate",String(fps),"-f","rawvideo","-pixel_format","bgra","-video_size",`${width}x${height}`,"-i","-"];
+  if(electronOffscreen)return ["-thread_queue_size","1024","-framerate",String(fps),"-use_wallclock_as_timestamps","1","-f","rawvideo","-pixel_format","bgra","-video_size",`${width}x${height}`,"-i","-"];
   return ["-thread_queue_size","1024","-framerate",String(fps),"-use_wallclock_as_timestamps","1","-f","image2pipe","-vcodec","mjpeg","-i","-"];
 }
 

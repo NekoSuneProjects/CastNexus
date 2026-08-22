@@ -52,6 +52,7 @@ test("Electron sends raw BGRA frames without main-process JPEG compression",()=>
   const args=videoInputArgs({electronOffscreen:true,fps:30,width:1920,height:1080});
   assert.deepEqual(args.slice(-8),["-f","rawvideo","-pixel_format","bgra","-video_size","1920x1080","-i","-"]);
   assert.doesNotMatch(args.join(" "),/mjpeg/);
+  assert.equal(args[args.indexOf("-use_wallclock_as_timestamps")+1],"1");
   assert.match(videoInputArgs({electronOffscreen:false,fps:30,width:1920,height:1080}).join(" "),/image2pipe .*mjpeg/);
 });
 
