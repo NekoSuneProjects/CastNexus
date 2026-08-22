@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildChromiumGpuArgs, audioTransportFor, useElectronOffscreen, watchdogActivityAt } = require("./compositor");
+const { buildChromiumGpuArgs, audioTransportFor, useElectronOffscreen, watchdogActivityAt, audioInputPlan, defaultVideoConfig } = require("./compositor");
 
 test("Electron install uses its bundled Chromium offscreen renderer", () => {
   assert.equal(useElectronOffscreen("electron", { electron:"37.0.0" }), true);
@@ -13,6 +13,17 @@ test("Electron install uses its bundled Chromium offscreen renderer", () => {
 test("Electron watchdog tracks paints even while FFmpeg drops backpressured frames", () => {
   assert.equal(watchdogActivityAt(true, 200, 100), 200);
   assert.equal(watchdogActivityAt(false, 200, 100), 100);
+});
+
+test("Music-only compositor uses one paced audio input without amix", () => {
+  const plan=audioInputPlan(false,"live","music");
+  assert.equal(plan.args.filter(value=>value==="-i").length,1);
+  assert.equal(plan.args.at(-1),"music");
+  assert.doesNotMatch(plan.filter,/amix/);
+});
+
+test("default intermediate JPEG quality matches the proven desktop capture setting", () => {
+  assert.equal(defaultVideoConfig().screencastQuality,70);
 });
 
 test("CPU-only Chromium keeps software rasterization available", () => {

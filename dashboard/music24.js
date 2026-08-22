@@ -310,6 +310,10 @@ class Music24Worker {
         video,
         runtimeDir:path.join("/tmp", "castnexus-music24", sanitizeSegment(this.accountId), sanitizeSegment(this.profile.id)),
         logger:console,
+        // Music 24/7 already has an always-on music/silence PCM producer.
+        // Avoid a second audio input and amix so audio pacing cannot starve
+        // the video pipeline on Electron.
+        includeLiveAudio:false,
       });
 
       await this.compositor.start();

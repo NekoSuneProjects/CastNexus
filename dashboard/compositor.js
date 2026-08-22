@@ -44,6 +44,18 @@ function watchdogActivityAt(electronOffscreen, lastPaintAt, lastFrameAt) {
   return electronOffscreen ? lastPaintAt : lastFrameAt;
 }
 
+function audioInputPlan(includeLiveAudio, live, music) {
+  const pcm=input=>["-thread_queue_size","1024","-f","s16le","-ar","48000","-ac","2","-i",input];
+  if(!includeLiveAudio)return {
+    args:pcm(music),
+    filter:"[1:a]aresample=async=1:first_pts=0[a]",
+  };
+  return {
+    args:[...pcm(live),...pcm(music)],
+    filter:"[1:a][2:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0[a]",
+  };
+}
+
 function defaultVideoConfig() {
   const detected = detectEncoder();
   const mode = String(process.env.COMPOSITOR_GPU || "auto").toLowerCase();
@@ -52,16 +64,20 @@ function defaultVideoConfig() {
     height:Number(process.env.COMPOSITOR_HEIGHT || 720),
     fps:Number(process.env.COMPOSITOR_FPS || 30),
     gpuEnabled:mode === "true" || (mode === "auto" && detected.hardware),
-    screencastQuality:Number(process.env.COMPOSITOR_JPEG_QUALITY || 80),
+    // JPEG is an intermediate transport into FFmpeg, not the final stream
+    // quality. 70 materially reduces main-process encode work at 1080p while
+    // the final NVENC/x264 bitrate remains unchanged.
+    screencastQuality:Number(process.env.COMPOSITOR_JPEG_QUALITY || 70),
   };
 }
 
 class Compositor extends EventEmitter {
-  constructor({ accountId, pageUrl, audioSourceUrl, outputUrl, getMusicNow, musicFilePathFor, video, runtimeDir, logger }) {
+  constructor({ accountId, pageUrl, audioSourceUrl, outputUrl, getMusicNow, musicFilePathFor, video, runtimeDir, logger, includeLiveAudio = true }) {
     super();
     this.accountId=accountId;
     this.pageUrl=pageUrl;
     this.audioSourceUrl=audioSourceUrl;
+    this.includeLiveAudio=includeLiveAudio!==false;
     this.outputUrl=outputUrl;
     this.getMusicNow=getMusicNow;
     this.musicFilePathFor=musicFilePathFor;
@@ -147,7 +163,7 @@ class Compositor extends EventEmitter {
 
   async _runOnce(){
     fs.mkdirSync(this.runtimeDir,{recursive:true});
-    this._startLiveAudioTap();
+    if(this.includeLiveAudio)this._startLiveAudioTap();
     await this._startMusicAudioTap();
     await this._launchBrowser();
     await this._openScene();
@@ -444,12 +460,13 @@ class Compositor extends EventEmitter {
 
   _spawnFfmpeg(){
     const live=this.audioTransport.live.input,music=this.audioTransport.music.input,enc=this.forceCpu?CPU_PROFILE:this.encoder;
+    const audioPlan=audioInputPlan(this.includeLiveAudio,live,music);
     const lowPower=!enc.hardware&&(process.arch==="arm64"||process.arch==="arm");
     const bitrate=process.env.COMPOSITOR_VIDEO_BITRATE||(this.video.width<=1280&&this.video.height<=1280?"4000k":"6000k");
     const maxrate=process.env.COMPOSITOR_VIDEO_MAXRATE||bitrate;
     const bufsize=process.env.COMPOSITOR_VIDEO_BUFSIZE||(this.video.width<=1280&&this.video.height<=1280?"8000k":"12000k");
-    const filter=["[0:v]setsar=1[vbase]",encoderFilterSuffix(enc,"vbase","v"),"[1:a][2:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0[a]"].join(";");
-    const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats",...globalEncoderArgs(enc),"-thread_queue_size","1024","-framerate",String(this.video.fps),"-use_wallclock_as_timestamps","1","-f","image2pipe","-vcodec","mjpeg","-i","-","-thread_queue_size","1024","-f","s16le","-ar","48000","-ac","2","-i",live,"-thread_queue_size","1024","-f","s16le","-ar","48000","-ac","2","-i",music,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,bitrate,maxrate,bufsize,x264Preset:process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
+    const filter=[`[0:v]fps=${this.video.fps},setsar=1[vbase]`,encoderFilterSuffix(enc,"vbase","v"),audioPlan.filter].join(";");
+    const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats",...globalEncoderArgs(enc),"-thread_queue_size","1024","-framerate",String(this.video.fps),"-use_wallclock_as_timestamps","1","-f","image2pipe","-vcodec","mjpeg","-i","-",...audioPlan.args,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,bitrate,maxrate,bufsize,x264Preset:process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
     if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg command: ffmpeg ${args.join(" ")}`);
     const started=Date.now();
     this.ffmpeg=spawn(FFMPEG_BIN,args,{stdio:["pipe","ignore","pipe"]});
@@ -569,4 +586,4 @@ class Compositor extends EventEmitter {
   }
 }
 
-module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt};
+module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan};
