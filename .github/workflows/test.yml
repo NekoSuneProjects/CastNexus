@@ -58,6 +58,7 @@ jobs:
           bash -n intercept/intercept.sh
           node --check dashboard/public/app-brand.js
           node --check dashboard/public/app-core.js
+          node --check dashboard/public/destination-presets.js
           node --check dashboard/public/app-modals.js
           node --check dashboard/public/app-music-page.js
           node --check dashboard/public/app-music-ui-fixes.js
@@ -129,6 +130,9 @@ jobs:
 
       - name: Public RTMP republish regression test
         run: node --test dashboard/public-republish-runtime.test.js
+
+      - name: Destination platform preset tests
+        run: node --test dashboard/destination-presets.test.js
 
       - name: Program Scene routing regression test
         run: node --test dashboard/program-scene-routing.test.js

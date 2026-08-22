@@ -61,32 +61,49 @@ function confirmAction(title, message, confirmLabel = "Delete") {
 }
 
 function openDestinationModal(dest = null) {
-  const currentLayout = dest?.layout || "source";
-  modalShell(dest ? "Edit destination" : "Add destination", "OUTPUT ROUTE", `
-    <div class="form-grid">
-      <div class="full"><label>Name</label><input id="dest-name" value="${esc(dest?.name || "")}" placeholder="YouTube Horizontal"></div>
-      <div class="full"><label>${dest ? "New URL (leave blank to keep current)" : "RTMP / RTMPS / SRT URL"}</label><input id="dest-url" placeholder="rtmps://…" value=""></div>
-      <div class="full"><label>Output layout</label><select id="dest-layout">
-        <option value="source" ${currentLayout === "source" ? "selected" : ""}>Source / passthrough (no video re-encode)</option>
-        <option value="landscape" ${currentLayout === "landscape" ? "selected" : ""}>16:9 Landscape · 1920×1080</option>
-        <option value="vertical" ${currentLayout === "vertical" ? "selected" : ""}>9:16 Vertical · 1080×1920</option>
-      </select></div>
-    </div>
-    <div class="callout" style="margin-top:12px">For YouTube Dual Stream, add two destinations: the normal stream key as 16:9 and YouTube's second vertical stream key as 9:16. Vertical/forced layouts require FFmpeg transcoding.</div>
-    <div id="modal-error" class="form-error"></div>`, `<button class="btn btn-ghost" data-modal-close>Cancel</button><button class="btn btn-primary" id="dest-save">Save destination</button>`, true);
-  $$('[data-modal-close]').forEach(b => b.onclick = closeModal);
-  $("#dest-save").onclick = async () => {
-    const name = $("#dest-name").value.trim(), url = $("#dest-url").value.trim(), layout = $("#dest-layout").value;
-    try {
-      if (dest) {
-        const body = { name, layout }; if (url) body.url = url;
-        await api(`/api/destinations/${encodeURIComponent(dest.id)}`, { method:"PUT", body });
-      } else {
-        await api("/api/destinations", { method:"POST", body:{ name, url, layout } });
-      }
-      closeModal(); await refreshAndRender(); toast("Destination saved", "success");
-    } catch (e) { $("#modal-error").textContent = e.message; }
+  const catalog = window.CastNexusDestinationPresets;
+  const renderForm = preset => {
+    const currentLayout = dest?.layout || "source";
+    const automatic = !!preset?.autoUrl;
+    const fullUrl = !!preset?.fullUrl;
+    modalShell(dest ? "Edit destination" : preset.name, "OUTPUT ROUTE", `
+      ${!dest ? `<button class="destination-back" id="dest-back" type="button">← All platforms</button><div class="destination-selected"><span class="platform-mark" style="--platform:${esc(preset.colour)}">${esc(preset.mark)}</span><div><strong>${esc(preset.name)}</strong><span>${esc(preset.help)}</span></div></div>` : ""}
+      <div class="form-grid">
+        <div class="full"><label>Name</label><input id="dest-name" value="${esc(dest?.name || preset?.name || "")}" placeholder="YouTube Horizontal"></div>
+        ${dest ? `<div class="full"><label>New complete URL (leave blank to keep current)</label><input id="dest-url" placeholder="rtmps://…" value=""></div>` : fullUrl ? `<div class="full"><label>Complete SRT URL</label><input id="dest-url" placeholder="srt://host:port?mode=caller…"></div>` : `${automatic ? `<div class="full"><label>RTMPS server · filled automatically</label><input id="dest-url" value="${esc(preset.autoUrl)}" readonly></div>` : `<div class="full"><label>RTMP / RTMPS server URL</label><input id="dest-url" placeholder="rtmps://…"></div>`}<div class="full"><label>Stream key</label><input id="dest-key" type="password" autocomplete="off" placeholder="Paste stream key"></div>`}
+        <div class="full"><label>Output layout</label><select id="dest-layout">
+          <option value="source" ${currentLayout === "source" ? "selected" : ""}>Source / passthrough (no video re-encode)</option>
+          <option value="landscape" ${currentLayout === "landscape" ? "selected" : ""}>16:9 Landscape · 1920×1080</option>
+          <option value="vertical" ${currentLayout === "vertical" ? "selected" : ""}>9:16 Vertical · 1080×1920</option>
+        </select></div>
+      </div>
+      <div class="callout" style="margin-top:12px">Stream keys are secrets. CastNexus joins the key to the server URL locally, stores the completed destination server-side, and masks it in the dashboard.</div>
+      <div class="callout" style="margin-top:12px">The output layout remains independent for every destination. Add two YouTube destinations for separate horizontal and vertical keys.</div>
+      <div id="modal-error" class="form-error"></div>`, `<button class="btn btn-ghost" data-modal-close>Cancel</button><button class="btn btn-primary" id="dest-save">Save destination</button>`, true);
+    $$('[data-modal-close]').forEach(b => b.onclick = closeModal);
+    if ($("#dest-back")) $("#dest-back").onclick = renderPicker;
+    $("#dest-save").onclick = async () => {
+      const name = $("#dest-name").value.trim(), layout = $("#dest-layout").value;
+      const serverUrl = $("#dest-url").value.trim();
+      const url = dest ? serverUrl : fullUrl ? serverUrl : catalog.destinationUrl(preset, serverUrl, $("#dest-key")?.value);
+      try {
+        if (dest) {
+          const body = { name, layout }; if (url) body.url = url;
+          await api(`/api/destinations/${encodeURIComponent(dest.id)}`, { method:"PUT", body });
+        } else {
+          await api("/api/destinations", { method:"POST", body:{ name, url, layout, platform:preset.id } });
+        }
+        closeModal(); await refreshAndRender(); toast("Destination saved", "success");
+      } catch (e) { $("#modal-error").textContent = e.message; }
+    };
   };
+  const renderPicker = () => {
+    modalShell("Add destination", "CHOOSE A PLATFORM", `<p class="muted">Choose a service. CastNexus fills verified fixed ingest servers automatically; services that issue event-specific URLs will ask for both values.</p><div class="platform-grid">${catalog.presets.map(p => `<button class="platform-tile" type="button" data-platform="${esc(p.id)}"><span class="platform-mark" style="--platform:${esc(p.colour)}">${esc(p.mark)}</span><strong>${esc(p.name)}</strong><small>${p.autoUrl ? "SERVER AUTO-FILLED" : p.fullUrl ? "COMPLETE URL" : "URL + KEY"}</small></button>`).join("")}</div>`, "", true);
+    $$('[data-modal-close]').forEach(b => b.onclick = closeModal);
+    $$('[data-platform]').forEach(button => button.onclick = () => renderForm(catalog.byId(button.dataset.platform)));
+  };
+  if (dest) renderForm({ id:"custom-rtmp", name:"Custom RTMP", mark:"RTMP", colour:"#8d73ff" });
+  else renderPicker();
 }
 
 function openBuiltinModal(key) {
