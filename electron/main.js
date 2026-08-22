@@ -9,7 +9,7 @@ const http = require("node:http");
 const { spawn } = require("node:child_process");
 const downloadManager = require("./download-manager");
 const oauthBridge = require("./oauth-bridge");
-const OFFICIAL_OAUTH_BROKER = "https://restreamer.nekosunevr.co.uk/oauth";
+const OFFICIAL_OAUTH_BROKER = "https://castnexus.nekosunevr.co.uk/oauth";
 
 // Setup file-based logging for debugging startup issues
 const logFile = path.join(os.homedir(), ".castnexus", "startup.log");

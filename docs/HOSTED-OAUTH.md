@@ -3,7 +3,7 @@
 CastNexus installations use the public broker at:
 
 ```text
-https://restreamer.nekosunevr.co.uk/oauth
+https://castnexus.nekosunevr.co.uk/oauth
 ```
 
 The broker owns the Twitch and Google OAuth client secrets. Docker, Desktop
@@ -47,14 +47,14 @@ location /oauth/ {
 Register these exact provider callbacks:
 
 ```text
-https://restreamer.nekosunevr.co.uk/oauth/callback/twitch
-https://restreamer.nekosunevr.co.uk/oauth/callback/youtube
+https://castnexus.nekosunevr.co.uk/oauth/callback/twitch
+https://castnexus.nekosunevr.co.uk/oauth/callback/youtube
 ```
 
 Verify deployment with:
 
 ```text
-https://restreamer.nekosunevr.co.uk/oauth/health
+https://castnexus.nekosunevr.co.uk/oauth/health
 ```
 
 ## Security properties

@@ -8,7 +8,7 @@ const { spawn } = require("node:child_process");
 const Store = require("electron-store");
 
 const downloadManager = require("../tools/download-manager");
-const OFFICIAL_OAUTH_BROKER = "https://restreamer.nekosunevr.co.uk/oauth";
+const OFFICIAL_OAUTH_BROKER = "https://castnexus.nekosunevr.co.uk/oauth";
 const isWin = process.platform === "win32";
 
 const store = new Store({

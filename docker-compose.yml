@@ -92,7 +92,7 @@ services:
       CASTNEXUS_CHANNEL: ${CASTNEXUS_CHANNEL:-stable}
       # Official hosted OAuth keeps Twitch/Google client secrets out of user
       # installations. Set this blank to use local BYO credentials instead.
-      CASTNEXUS_OAUTH_BROKER_URL: ${CASTNEXUS_OAUTH_BROKER_URL-https://restreamer.nekosunevr.co.uk/oauth}
+      CASTNEXUS_OAUTH_BROKER_URL: ${CASTNEXUS_OAUTH_BROKER_URL-https://castnexus.nekosunevr.co.uk/oauth}
 
   intercept:
     image: ghcr.io/nekosuneprojects/castnexus-intercept:${CASTNEXUS_IMAGE_TAG:-latest}
