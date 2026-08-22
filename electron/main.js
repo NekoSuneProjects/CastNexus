@@ -25,7 +25,8 @@ app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 // The hidden music scene must decode its <audio> element to feed WebAudio's
 // analyser. Without this, play() is rejected for lack of a user gesture and
 // the spectrum only changes when its one-second metadata poll seeks again.
-// webContents.setAudioMuted(true) still prevents any local speaker output.
+// The scene routes analyser output through a zero-gain WebAudio node, so it
+// decodes continuously without producing local speaker sound.
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
 // Setup file-based logging for debugging startup issues
