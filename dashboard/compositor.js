@@ -8,6 +8,20 @@ const { EventEmitter } = require("node:events");
 const puppeteer = require("puppeteer-core");
 const { CPU_PROFILE, detectEncoder, globalEncoderArgs, encoderFilterSuffix, videoEncoderArgs } = require("./gpu-encoder");
 const { cpuX264Preset, liveMuxArgs } = require("./rtmp-pipeline");
+const FFMPEG_BIN = process.env.FFMPEG_BIN || "ffmpeg";
+
+function audioTransportFor(accountId, runtimeDir, platform = process.platform) {
+  if (platform !== "win32") return {
+    live:{ input:path.join(runtimeDir,"live-audio.fifo"), output:path.join(runtimeDir,"live-audio.fifo") },
+    music:{ input:path.join(runtimeDir,"music-audio.fifo"), output:path.join(runtimeDir,"music-audio.fifo") },
+    fifo:true,
+  };
+  let hash=2166136261;
+  for(const char of String(accountId||"castnexus")){hash^=char.charCodeAt(0);hash=Math.imul(hash,16777619);}
+  const base=30000+((hash>>>0)%14000)*2;
+  const endpoint=port=>({input:`udp://127.0.0.1:${port}?fifo_size=262144&overrun_nonfatal=1`,output:`udp://127.0.0.1:${port}?pkt_size=3840`});
+  return { live:endpoint(base), music:endpoint(base+1), fifo:false };
+}
 
 function buildChromiumGpuArgs(gpuEnabled) {
   // CPU-only hosts still need Chromium's software rasterizer in order to
@@ -44,6 +58,10 @@ class Compositor extends EventEmitter {
     this.musicFilePathFor=musicFilePathFor;
     this.video={...defaultVideoConfig(),...(video||{})};
     this.runtimeDir=runtimeDir||path.join(os.tmpdir(),"restreamnode-compositor",accountId);
+    this.audioTransport=audioTransportFor(accountId,this.runtimeDir);
+    if(!this.audioTransport.fifo){
+      for(const name of ["live-audio.fifo","music-audio.fifo"]){try{fs.rmSync(path.join(this.runtimeDir,name),{force:true});}catch{}}
+    }
     this.logger=logger||console;
     this.debug=String(process.env.COMPOSITOR_DEBUG||"").toLowerCase()==="true";
     this.encoder=detectEncoder();
@@ -237,9 +255,9 @@ class Compositor extends EventEmitter {
   }
 
   _startLiveAudioTap(){
-    const fifo=this._fifoPath("live-audio");
-    this._ensureFifo(fifo);
-    if(this.liveAudioFifoFd==null){
+    const fifo=this.audioTransport.live.output;
+    if(this.audioTransport.fifo)this._ensureFifo(fifo);
+    if(this.audioTransport.fifo&&this.liveAudioFifoFd==null){
       try{
         this.liveAudioFifoFd=fs.openSync(fifo,fs.constants.O_RDWR|fs.constants.O_NONBLOCK);
       }catch(err){
@@ -251,7 +269,7 @@ class Compositor extends EventEmitter {
     // tiny (~20KB/s). FFmpeg's default probesize (5MB) can take minutes to satisfy at
     // that bitrate, so this tap sits producing zero audio well past the compositor's
     // watchdog timeout unless probing is explicitly bounded to something it can hit fast.
-    const child=spawn("ffmpeg",["-hide_banner","-loglevel",this.debug?"info":"warning","-nostdin","-y","-analyzeduration","1000000","-probesize","32768","-thread_queue_size","1024","-i",this.audioSourceUrl,"-vn","-af","aresample=async=1:first_pts=0","-f","s16le","-ar","48000","-ac","2",fifo]);
+    const child=spawn(FFMPEG_BIN,["-hide_banner","-loglevel",this.debug?"info":"warning","-nostdin","-y","-analyzeduration","1000000","-probesize","32768","-thread_queue_size","1024","-i",this.audioSourceUrl,"-vn","-af","aresample=async=1:first_pts=0","-f","s16le","-ar","48000","-ac","2",fifo]);
     child.stderr.on("data",chunk=>{if(this.debug){const line=chunk.toString().trim();if(line)this.logger.log(`[compositor:${this.accountId}] live-audio: ${line}`);}});
     child.on("exit",()=>{
       if(this.liveAudioTap===child)this.liveAudioTap=null;
@@ -274,8 +292,8 @@ class Compositor extends EventEmitter {
   }
 
   async _startMusicAudioTap(){
-    const fifo=this._fifoPath("music-audio");
-    this._ensureFifo(fifo);
+    const fifo=this.audioTransport.music.output;
+    if(this.audioTransport.fifo)this._ensureFifo(fifo);
     if(this.musicAudioFifoFd!=null){try{fs.closeSync(this.musicAudioFifoFd);}catch{}}
     try{
       this.musicAudioFifoFd=fs.openSync(fifo,fs.constants.O_RDWR|fs.constants.O_NONBLOCK);
@@ -299,7 +317,7 @@ class Compositor extends EventEmitter {
       old.removeAllListeners("exit");
       old.kill("SIGTERM");
     }
-    const fifo=this._fifoPath("music-audio");
+    const fifo=this.audioTransport.music.output;
     let args;
     if(trackId){
       let filePath;
@@ -313,7 +331,7 @@ class Compositor extends EventEmitter {
     }else{
       args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostdin","-y","-re","-f","lavfi","-i","anullsrc=r=48000:cl=stereo","-f","s16le","-ar","48000","-ac","2",fifo];
     }
-    const child=spawn("ffmpeg",args);
+    const child=spawn(FFMPEG_BIN,args);
     child.stderr.on("data",chunk=>{if(this.debug){const line=chunk.toString().trim();if(line)this.logger.log(`[compositor:${this.accountId}] music-audio: ${line}`);}});
     child.on("exit",()=>{
       if(this.musicAudioTap===child){
@@ -328,7 +346,7 @@ class Compositor extends EventEmitter {
   _stopMusicPoll(){if(this.musicPollTimer){clearInterval(this.musicPollTimer);this.musicPollTimer=null;}}
 
   _spawnFfmpeg(){
-    const live=this._fifoPath("live-audio"),music=this._fifoPath("music-audio"),enc=this.forceCpu?CPU_PROFILE:this.encoder;
+    const live=this.audioTransport.live.input,music=this.audioTransport.music.input,enc=this.forceCpu?CPU_PROFILE:this.encoder;
     const lowPower=!enc.hardware&&(process.arch==="arm64"||process.arch==="arm");
     const bitrate=process.env.COMPOSITOR_VIDEO_BITRATE||(this.video.width<=1280&&this.video.height<=1280?"4000k":"6000k");
     const maxrate=process.env.COMPOSITOR_VIDEO_MAXRATE||bitrate;
@@ -337,7 +355,7 @@ class Compositor extends EventEmitter {
     const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats",...globalEncoderArgs(enc),"-thread_queue_size","1024","-framerate",String(this.video.fps),"-use_wallclock_as_timestamps","1","-f","image2pipe","-vcodec","mjpeg","-i","-","-thread_queue_size","1024","-f","s16le","-ar","48000","-ac","2","-i",live,"-thread_queue_size","1024","-f","s16le","-ar","48000","-ac","2","-i",music,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,bitrate,maxrate,bufsize,x264Preset:process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
     if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg command: ffmpeg ${args.join(" ")}`);
     const started=Date.now();
-    this.ffmpeg=spawn("ffmpeg",args,{stdio:["pipe","ignore","pipe"]});
+    this.ffmpeg=spawn(FFMPEG_BIN,args,{stdio:["pipe","ignore","pipe"]});
     this.ffmpeg.on("spawn",()=>{if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg spawned pid=${this.ffmpeg?.pid}`);});
     this.ffmpeg.on("error",err=>{this.logger.warn(`[compositor:${this.accountId}] ffmpeg process error: ${err.message}`);});
     this.ffmpeg.stderr.on("data",chunk=>{
@@ -451,4 +469,4 @@ class Compositor extends EventEmitter {
   }
 }
 
-module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs};
+module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor};

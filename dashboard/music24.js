@@ -15,6 +15,7 @@ const DASHBOARD_ORIGIN = process.env.DASHBOARD_INTERNAL_ORIGIN || `http://127.0.
 const RTMP_ORIGIN = process.env.MEDIA_RTMP_ORIGIN || "rtmp://127.0.0.1:1935";
 const MEDIAMTX_API = process.env.MEDIAMTX_API || "http://127.0.0.1:9997";
 const FFPROBE_BIN = process.env.FFPROBE_BIN || "ffprobe";
+const FFMPEG_BIN = process.env.FFMPEG_BIN || "ffmpeg";
 const POLL_MS = Number(process.env.MUSIC24_POLL_MS || 2000);
 const NOW_POLL_MS = Number(process.env.MUSIC24_NOW_POLL_MS || 750);
 const START_TIMEOUT_MS = Number(process.env.MUSIC24_START_TIMEOUT_MS || 15000);
@@ -180,7 +181,7 @@ function spawnSilenceFeed(accountId, profileId) {
     "-f", "flv", "-flvflags", "no_duration_filesize", "-rtmp_live", "live",
     outputUrl,
   ];
-  const child = spawn("ffmpeg", args, { stdio:["ignore", "ignore", "pipe"] });
+  const child = spawn(FFMPEG_BIN, args, { stdio:["ignore", "ignore", "pipe"] });
   child.stderr.on("data", chunk => {
     const line = chunk.toString().trim();
     if (line && /error|failed|cannot|refused|invalid/i.test(line)) {
