@@ -183,17 +183,26 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - name: Download Electron artifacts
+        uses: actions/download-artifact@v4
         with:
-          path: artifacts
-      - name: Extract and prepare artifacts
-        shell: bash
-        run: |
-          mkdir -p electron-win electron-linux cli-win-x64 cli-linux-x64
-          [ -d artifacts/electron-win ] && cp artifacts/electron-win/* electron-win/ 2>/dev/null || true
-          [ -d artifacts/electron-linux ] && cp artifacts/electron-linux/* electron-linux/ 2>/dev/null || true
-          [ -d artifacts/cli-win-x64 ] && cp artifacts/cli-win-x64/* cli-win-x64/ 2>/dev/null || true
-          [ -d artifacts/cli-linux-x64 ] && cp artifacts/cli-linux-x64/* cli-linux-x64/ 2>/dev/null || true
+          name: electron-win
+          path: electron-win
+      - name: Download Electron Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: electron-linux
+          path: electron-linux
+      - name: Download CLI Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-win-x64
+          path: cli-win-x64
+      - name: Download CLI Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-linux-x64
+          path: cli-linux-x64
       - name: Create checksums
         run: |
           mkdir -p checksums
