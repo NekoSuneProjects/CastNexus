@@ -22,6 +22,7 @@
   "build": {
     "appId": "com.castnexus.desktop",
     "productName": "CastNexus Studio",
+    "publish": null,
     "directories": {
       "buildResources": "assets"
     },
