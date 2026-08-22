@@ -153,8 +153,10 @@ jobs:
         run: |
           VERSION="${{ needs.meta.outputs.version }}"
           CHANNEL="${{ needs.meta.outputs.channel }}"
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
       - name: Build and push ${{ matrix.service }} image
         uses: docker/build-push-action@v6
         with:
@@ -166,8 +168,8 @@ jobs:
             CASTNEXUS_CHANNEL=${{ steps.tags.outputs.channel }}
             CASTNEXUS_REVISION=${{ github.sha }}
           tags: |
-            ghcr.io/${{ github.repository }}-${{ matrix.service }}:${{ steps.tags.outputs.version }}
-            ghcr.io/${{ github.repository }}-${{ matrix.service }}:latest
+            ghcr.io/${{ steps.tags.outputs.repo }}-${{ matrix.service }}:${{ steps.tags.outputs.version }}
+            ghcr.io/${{ steps.tags.outputs.repo }}-${{ matrix.service }}:latest
           labels: |
             org.opencontainers.image.title=CastNexus ${{ matrix.service }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
