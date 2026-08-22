@@ -116,7 +116,6 @@ rtmp: yes
 rtmpAddress: :1935
 rtsp: yes
 rtspAddress: :8554
-rtp: yes
 rtpAddress: :8000
 rtcpAddress: :8001
 hls: yes
@@ -178,13 +177,21 @@ paths:
 
 function startDashboard() {
   setTimeout(() => {
-    require("../dashboard/public-republish-runtime.js").installPublicRepublishSpawnPolicy();
-    require("../dashboard/server.js");
-    music24Service = require("../dashboard/music24.js");
-    music24Service.startMusic24();
+    // Resolve dashboard paths correctly in both dev and packaged contexts
+    const dashboardDir = path.join(__dirname, process.env.NODE_ENV === 'development' ? '../dashboard' : '../dashboard');
 
-    const port = process.env.DASHBOARD_PORT;
-    console.log(`[electron] Dashboard listening on http://localhost:${port}`);
+    try {
+      require(path.join(dashboardDir, "public-republish-runtime.js")).installPublicRepublishSpawnPolicy();
+      require(path.join(dashboardDir, "server.js"));
+      music24Service = require(path.join(dashboardDir, "music24.js"));
+      music24Service.startMusic24();
+
+      const port = process.env.DASHBOARD_PORT;
+      console.log(`[electron] Dashboard listening on http://localhost:${port}`);
+    } catch (err) {
+      console.error("[electron] Failed to start dashboard:", err.message);
+      throw err;
+    }
   }, 1000);
 }
 

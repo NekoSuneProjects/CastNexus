@@ -25,13 +25,23 @@ async function extractArchive(archivePath, extractDir) {
 
   try {
     if (ext === '.zip') {
-      // Use built-in Windows unzip or Node modules
-      if (process.platform === 'win32') {
-        // PowerShell unzip for Windows
-        execSync(`powershell -Command "Expand-Archive -Path '${archivePath}' -DestinationPath '${extractDir}' -Force"`, { stdio: 'inherit' });
-      } else {
-        // Use unzip command on Unix
-        execSync(`unzip -o "${archivePath}" -d "${extractDir}"`, { stdio: 'inherit' });
+      // Try to use extract-zip if available, fall back to command line
+      try {
+        const extractZip = require('extract-zip');
+        fs.mkdirSync(extractDir, { recursive: true });
+        await extractZip(archivePath, { dir: extractDir });
+      } catch (nodeErr) {
+        console.log('[tools] Falling back to system unzip command...');
+        if (process.platform === 'win32') {
+          // Use PowerShell on Windows
+          execSync(`powershell -NoProfile -Command "Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${extractDir}' -Force"`, {
+            stdio: 'inherit',
+            shell: 'powershell.exe'
+          });
+        } else {
+          // Use unzip on Unix
+          execSync(`unzip -o "${archivePath}" -d "${extractDir}"`, { stdio: 'inherit' });
+        }
       }
     } else if (ext === '.gz') {
       // tar.gz extraction
@@ -40,7 +50,7 @@ async function extractArchive(archivePath, extractDir) {
 
     console.log(`[tools] Extracted ${archivePath} to ${extractDir}`);
     // Delete archive after extraction
-    fs.unlinkSync(archivePath);
+    try { fs.unlinkSync(archivePath); } catch {}
   } catch (err) {
     console.error(`[tools] Extraction failed:`, err.message);
     throw err;
