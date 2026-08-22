@@ -49,25 +49,16 @@ function audioInputPlan(includeLiveAudio, live, music) {
   const pcm=input=>["-thread_queue_size","1024","-f","s16le","-ar","48000","-ac","2","-i",input];
   if(!includeLiveAudio)return {
     args:pcm(music),
-    filter:"[1:a]asplit=2[aprogram][avis];[aprogram]aresample=async=1:first_pts=0[a]",
-    visualLabel:"avis",
+    filter:"[1:a]aresample=async=1:first_pts=0[a]",
   };
   return {
     args:[...pcm(live),...pcm(music)],
-    filter:"[1:a][2:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[amixed];[amixed]asplit=2[aprogram][avis];[aprogram]aresample=async=1:first_pts=0[a]",
-    visualLabel:"avis",
+    filter:"[1:a][2:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0[a]",
   };
 }
 
-function compositorFilterGraph({ fps, width, height, encoder, audioPlan, musicOnly }) {
-  if(musicOnly&&width>=height){
-    const x=Math.round(width*.453),y=Math.round(height*.541),w=Math.round(width*.519),h=Math.round(height*.148);
-    const bars=48,barWidth=20,spectrumWidth=bars*barWidth,spectrumX=x+Math.round((w-spectrumWidth)/2);
-    const spectrum=`[${audioPlan.visualLabel}]showfreqs=s=${bars}x${h}:r=${fps}:mode=bar:ascale=sqrt:fscale=log:win_size=2048:averaging=2:colors=0x00f0ff:channels=FL,scale=${spectrumWidth}:${h}:flags=neighbor,drawgrid=w=${barWidth}:h=${h}:t=3:c=0x050913[spectrum]`;
-    const video=`[0:v]fps=${fps},setsar=1,drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=0x050913@0.98:t=fill[vbase];[vbase][spectrum]overlay=${spectrumX}:${y}:shortest=1[vraw]`;
-    return [audioPlan.filter,spectrum,video,encoderFilterSuffix(encoder,"vraw","v")].join(";");
-  }
-  return [`[0:v]fps=${fps},setsar=1[vbase]`,encoderFilterSuffix(encoder,"vbase","v"),audioPlan.filter,`[${audioPlan.visualLabel}]anullsink`].join(";");
+function compositorFilterGraph({ fps, encoder, audioPlan }) {
+  return [`[0:v]fps=${fps},setsar=1[vbase]`,encoderFilterSuffix(encoder,"vbase","v"),audioPlan.filter].join(";");
 }
 
 function videoInputArgs({electronOffscreen,fps,width,height}){

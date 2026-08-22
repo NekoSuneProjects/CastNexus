@@ -20,16 +20,13 @@ test("Music-only compositor uses one paced audio input without amix", () => {
   assert.equal(plan.args.filter(value=>value==="-i").length,1);
   assert.equal(plan.args.at(-1),"music");
   assert.doesNotMatch(plan.filter,/amix/);
-  assert.match(plan.filter,/asplit=2/);
+  assert.doesNotMatch(plan.filter,/asplit/);
 });
 
-test("landscape music output renders its live spectrum from broadcast PCM",()=>{
+test("music output retains the browser-rendered gradient spectrum",()=>{
   const plan=audioInputPlan(false,"live","music");
   const graph=compositorFilterGraph({fps:30,width:1920,height:1080,encoder:{id:"nvenc"},audioPlan:plan,musicOnly:true});
-  assert.match(graph,/showfreqs=.*:r=30:/);
-  assert.match(graph,/showfreqs=s=48x160/);
-  assert.match(graph,/drawgrid=w=20/);
-  assert.match(graph,/overlay=888:584/);
+  assert.doesNotMatch(graph,/showfreqs|drawgrid|overlay/);
   assert.match(graph,/\[a\]/);
 });
 
@@ -37,7 +34,6 @@ test("vertical output retains the browser scene until its dedicated layout is av
   const plan=audioInputPlan(false,"live","music");
   const graph=compositorFilterGraph({fps:30,width:1080,height:1920,encoder:{id:"nvenc"},audioPlan:plan,musicOnly:true});
   assert.doesNotMatch(graph,/showfreqs/);
-  assert.match(graph,/\[avis\]anullsink/);
 });
 
 test("default intermediate JPEG quality matches the proven desktop capture setting", () => {
