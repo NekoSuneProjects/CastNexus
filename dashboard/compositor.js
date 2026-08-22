@@ -14,7 +14,7 @@ function buildChromiumGpuArgs(gpuEnabled) {
   // produce compositor frames. Disabling both GPU and software rasterization
   // can leave Page.startScreencast() alive but with no frames at all, which in
   // turn leaves FFmpeg waiting forever and Music 24/7 stuck at Idle.
-  if (!gpuEnabled) return ["--disable-gpu"];
+  if (!gpuEnabled) return ["--disable-gpu", "--enable-software-rasterization"];
   return ["--ignore-gpu-blocklist", "--enable-gpu-rasterization", "--enable-zero-copy", "--use-gl=egl", "--disable-frame-rate-limit"];
 }
 
