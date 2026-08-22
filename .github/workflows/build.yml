@@ -92,7 +92,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "18"
-          cache: npm
       - run: npm run install:all
       - name: Build Electron
         run: npm --prefix electron run build
@@ -119,7 +118,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "18"
-          cache: npm
       - run: npm --prefix cli install
       - name: Build CLI binary
         run: npm --prefix cli run pkg:build
