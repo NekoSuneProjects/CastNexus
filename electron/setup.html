@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#080a12">
+  <title>CastNexus Setup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #070911;
+      --bg-2: #0b0e18;
+      --panel: rgba(17, 21, 35, .78);
+      --panel-strong: rgba(18, 22, 38, .96);
+      --panel-soft: rgba(255, 255, 255, .035);
+      --border: rgba(255, 255, 255, .085);
+      --border-hot: rgba(128, 99, 255, .42);
+      --text: #f4f6ff;
+      --muted: #8f98af;
+      --muted-2: #687187;
+      --purple: #7c5cff;
+      --purple-2: #a36cff;
+      --cyan: #38e8ff;
+      --pink: #ff4fd8;
+      --green: #4ade80;
+      --yellow: #f7c948;
+      --red: #ff667a;
+      --shadow: 0 24px 70px rgba(0, 0, 0, .42);
+      --radius: 18px;
+      --radius-sm: 12px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      min-height: 100%;
+      width: 100%;
+    }
+
+    body {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 16% -10%, rgba(124, 92, 255, .12), transparent 34%),
+        radial-gradient(circle at 92% 12%, rgba(56, 232, 255, .07), transparent 28%),
+        linear-gradient(180deg, #080a12, #060810 70%);
+      color: var(--text);
+      overflow-x: hidden;
+    }
+
+    .ambient {
+      position: fixed;
+      width: 480px;
+      height: 480px;
+      border-radius: 50%;
+      filter: blur(110px);
+      pointer-events: none;
+      opacity: .14;
+      z-index: -2;
+    }
+    .ambient-a { background: var(--purple); left: -180px; top: 8vh; }
+    .ambient-b { background: var(--cyan); right: -220px; bottom: -120px; opacity: .08; }
+
+    .glass {
+      background: linear-gradient(180deg, rgba(20, 24, 40, .82), rgba(12, 15, 27, .76));
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow), inset 0 1px rgba(255,255,255,.03);
+      backdrop-filter: blur(22px);
+    }
+
+    .setup-container {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 32px;
+    }
+
+    .setup-card {
+      width: min(100%, 520px);
+      border-radius: 28px;
+      padding: 42px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .setup-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto auto 0;
+      width: 100%;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--purple), var(--cyan), transparent);
+      z-index: 1;
+    }
+
+    .setup-header {
+      position: relative;
+      z-index: 2;
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    .brand-mark {
+      width: 64px;
+      height: 64px;
+      border-radius: 18px;
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      letter-spacing: -.06em;
+      font-size: 1.2rem;
+      background: linear-gradient(135deg, var(--purple), #5839eb 58%, var(--cyan));
+      box-shadow: 0 10px 30px rgba(124,92,255,.35), inset 0 1px rgba(255,255,255,.25);
+      margin: 0 auto 28px;
+      color: white;
+    }
+
+    .setup-header h1 {
+      font-size: 32px;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    .eyebrow {
+      color: var(--muted-2);
+      font-size: .68rem;
+      letter-spacing: .22em;
+      font-weight: 800;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    .setup-header p {
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .setup-progress {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 32px;
+      justify-content: center;
+      position: relative;
+      z-index: 2;
+    }
+
+    .progress-step {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--border);
+      transition: all 0.3s ease;
+    }
+
+    .progress-step.active {
+      background: var(--purple);
+      width: 24px;
+      border-radius: 4px;
+      box-shadow: 0 0 12px rgba(124, 92, 255, .4);
+    }
+
+    .progress-step.completed {
+      background: var(--cyan);
+    }
+
+    .form-content {
+      position: relative;
+      z-index: 2;
+    }
+
+    .setup-form {
+      display: none;
+    }
+
+    .setup-form.active {
+      display: block;
+    }
+
+    .setup-form h2 {
+      font-size: 18px;
+      margin-bottom: 24px;
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .form-group {
+      margin-bottom: 24px;
+    }
+
+    .form-group label {
+      display: block;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+
+    .form-group input,
+    .form-group textarea {
+      width: 100%;
+      padding: 12px 14px;
+      background: rgba(255, 255, 255, .04);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: 14px;
+      font-family: inherit;
+      color: var(--text);
+      transition: all 0.2s ease;
+    }
+
+    .form-group input::placeholder,
+    .form-group textarea::placeholder {
+      color: var(--muted-2);
+    }
+
+    .form-group input:focus,
+    .form-group textarea:focus {
+      outline: none;
+      border-color: var(--border-hot);
+      background: rgba(255, 255, 255, .06);
+      box-shadow: 0 0 0 2px rgba(124, 92, 255, .12);
+    }
+
+    .form-group textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    .form-group .help-text {
+      font-size: 12px;
+      color: var(--muted-2);
+      margin-top: 6px;
+    }
+
+    .form-group .hint {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, .03);
+      border-left: 2px solid var(--border-hot);
+      border-radius: 4px;
+    }
+
+    .form-group a {
+      color: var(--purple);
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .form-group a:hover {
+      color: var(--purple-2);
+    }
+
+    .form-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 32px;
+      position: relative;
+      z-index: 2;
+    }
+
+    .form-actions button {
+      flex: 1;
+      padding: 12px 16px;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--purple), var(--purple-2));
+      color: white;
+      border: 1px solid rgba(124, 92, 255, .3);
+      box-shadow: 0 8px 24px rgba(124, 92, 255, .25);
+    }
+
+    .btn-primary:hover {
+      box-shadow: 0 12px 32px rgba(124, 92, 255, .35);
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, .04);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, .07);
+      border-color: var(--border-hot);
+    }
+
+    .btn-secondary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      background: rgba(255, 255, 255, .02);
+    }
+
+    .error-message {
+      background: rgba(255, 102, 122, .1);
+      border: 1px solid var(--red);
+      color: #ff9aa8;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      margin-bottom: 20px;
+      font-size: 13px;
+    }
+
+    .success-message {
+      background: rgba(74, 222, 128, .1);
+      border: 1px solid var(--green);
+      color: #86efac;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      margin-bottom: 20px;
+      font-size: 13px;
+    }
+
+    .complete-view {
+      text-align: center;
+      padding: 20px;
+    }
+
+    .complete-icon {
+      font-size: 48px;
+      margin-bottom: 20px;
+      display: block;
+    }
+
+    .complete-view h2 {
+      font-size: 24px;
+      color: var(--green);
+      margin-bottom: 10px;
+    }
+
+    .complete-view p {
+      color: var(--muted);
+      margin-bottom: 30px;
+    }
+  </style>
+</head>
+<body>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+
+  <div class="setup-container">
+    <div class="setup-card glass">
+      <div class="setup-header">
+        <div class="brand-mark">CN</div>
+        <div class="eyebrow">Setup</div>
+        <h1>CastNexus</h1>
+        <p>Configure your broadcast streaming</p>
+      </div>
+
+      <div class="setup-progress" id="progress">
+        <div class="progress-step active"></div>
+        <div class="progress-step"></div>
+        <div class="progress-step"></div>
+      </div>
+
+      <div class="form-content">
+        <!-- Form 1: Twitch OAuth -->
+        <form class="setup-form active" id="form-twitch">
+          <h2>Connect Twitch</h2>
+
+          <div id="twitch-error" class="error-message" style="display: none;"></div>
+
+          <div class="form-group">
+            <label for="twitch-client-id">Client ID</label>
+            <input type="text" id="twitch-client-id" placeholder="Your Twitch OAuth Client ID" required>
+            <div class="hint">
+              Get this from your <a href="https://dev.twitch.tv/console/apps" target="_blank">Twitch Developer Console</a>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="twitch-client-secret">Client Secret</label>
+            <input type="password" id="twitch-client-secret" placeholder="Your Twitch OAuth Client Secret" required>
+            <div class="help-text">Never share this secret with anyone</div>
+          </div>
+
+          <div class="form-group">
+            <label for="twitch-redirect-uri">Redirect URI</label>
+            <input type="text" id="twitch-redirect-uri" value="http://localhost:8091/auth/twitch/callback" disabled>
+            <div class="help-text">
+              Copy this exact URL into <strong>OAuth Redirect URLs</strong> in your Twitch app.
+              Sign-in opens in your normal browser, which hands the login back to CastNexus on this port.
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button type="button" class="btn-primary" onclick="handleTwitchNext()">Next</button>
+          </div>
+        </form>
+
+        <!-- Form 2: Basic Settings -->
+        <form class="setup-form" id="form-settings">
+          <h2>Basic Settings</h2>
+
+          <div id="settings-error" class="error-message" style="display: none;"></div>
+
+          <div class="form-group">
+            <label for="server-name">Server Name</label>
+            <input type="text" id="server-name" placeholder="My CastNexus Server" value="">
+            <div class="help-text">Display name for this streaming setup</div>
+          </div>
+
+          <div class="form-group">
+            <label for="data-dir">Data Directory</label>
+            <input type="text" id="data-dir" disabled>
+            <div class="help-text">Where recordings and settings are stored</div>
+          </div>
+
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" onclick="handleSettingsPrev()">Back</button>
+            <button type="button" class="btn-primary" onclick="handleSettingsNext()">Next</button>
+          </div>
+        </form>
+
+        <!-- Form 3: Complete -->
+        <div class="setup-form" id="form-complete">
+          <div class="complete-view">
+            <span class="complete-icon">✓</span>
+            <h2>Setup Complete!</h2>
+            <p>Your CastNexus is ready to use</p>
+            <div class="form-actions">
+              <button class="btn-primary" onclick="handleCompleteSetup()">
+                Open Dashboard
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentStep = 1;
+
+    // NOTE: never declare a top-level `let ipcRenderer` here. A top-level `let`
+    // shadows `window.ipcRenderer` across the whole script and puts it in the
+    // temporal dead zone, so any earlier reference throws
+    // "Cannot access 'ipcRenderer' before initialization".
+    // Wait for ipcRenderer to be available before using it
+    function getIpcRenderer() {
+      if (!window.ipcRenderer) {
+        throw new Error('ipcRenderer not available - preload script may not have loaded');
+      }
+      return window.ipcRenderer;
+    }
+
+    function updateProgress() {
+      const steps = document.querySelectorAll('.progress-step');
+      steps.forEach((step, idx) => {
+        step.classList.remove('active', 'completed');
+        if (idx < currentStep - 1) {
+          step.classList.add('completed');
+        } else if (idx === currentStep - 1) {
+          step.classList.add('active');
+        }
+      });
+    }
+
+    function showForm(step) {
+      document.querySelectorAll('.setup-form').forEach(f => f.classList.remove('active'));
+      document.getElementById(`form-${step === 1 ? 'twitch' : step === 2 ? 'settings' : 'complete'}`).classList.add('active');
+      updateProgress();
+    }
+
+    async function handleTwitchNext() {
+      const clientId = document.getElementById('twitch-client-id').value.trim();
+      const clientSecret = document.getElementById('twitch-client-secret').value.trim();
+
+      if (!clientId || !clientSecret) {
+        showError('twitch-error', 'Please fill in both Client ID and Client Secret');
+        return;
+      }
+
+      try {
+        const ipc = getIpcRenderer();
+        await ipc.invoke('store:set', 'twitch_client_id', clientId);
+        await ipc.invoke('store:set', 'twitch_client_secret', clientSecret);
+
+        currentStep = 2;
+        showForm(currentStep);
+      } catch (err) {
+        showError('twitch-error', 'Failed to save settings: ' + err.message);
+      }
+    }
+
+    async function handleSettingsPrev() {
+      currentStep = 1;
+      showForm(currentStep);
+    }
+
+    async function handleSettingsNext() {
+      const serverName = document.getElementById('server-name').value.trim() || 'CastNexus Server';
+
+      try {
+        const ipc = getIpcRenderer();
+        await ipc.invoke('store:set', 'server_name', serverName);
+
+        currentStep = 3;
+        showForm(currentStep);
+      } catch (err) {
+        showError('settings-error', 'Failed to save settings: ' + err.message);
+      }
+    }
+
+    async function handleCompleteSetup() {
+      try {
+        const ipc = getIpcRenderer();
+        await ipc.invoke('store:set', 'setupCompleted', true);
+        await ipc.invoke('store:set', 'setupWizardFinished', true);
+
+        // Close the setup window
+        window.close();
+      } catch (err) {
+        console.error('Failed to finalize setup:', err);
+      }
+    }
+
+    function showError(elementId, message) {
+      const el = document.getElementById(elementId);
+      el.textContent = message;
+      el.style.display = 'block';
+    }
+
+    // Wait for DOM to be ready
+    document.addEventListener('DOMContentLoaded', async () => {
+      try {
+        // Initialize progress indicators
+        updateProgress();
+
+        // Wait for ipcRenderer to be available (with timeout)
+        let attempts = 0;
+        while (!window.ipcRenderer && attempts < 50) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          attempts++;
+        }
+
+        if (!window.ipcRenderer) {
+          throw new Error('ipcRenderer timeout - preload script failed to load');
+        }
+
+        const ipc = getIpcRenderer();
+        const settings = await ipc.invoke('store:getAll');
+
+        if (settings.twitch_client_id) {
+          document.getElementById('twitch-client-id').value = settings.twitch_client_id;
+        }
+        if (settings.twitch_client_secret) {
+          document.getElementById('twitch-client-secret').value = settings.twitch_client_secret;
+        }
+        if (settings.server_name) {
+          document.getElementById('server-name').value = settings.server_name;
+        }
+        // Show the real paths the main process resolved, rather than guesses.
+        const info = await ipc.invoke('app:getInfo');
+        if (info?.dataDir) {
+          document.getElementById('data-dir').value = info.dataDir;
+        }
+        if (info?.redirectUri) {
+          document.getElementById('twitch-redirect-uri').value = info.redirectUri;
+        }
+      } catch (err) {
+        console.error('Failed to load settings:', err);
+        showError('twitch-error', 'Error loading settings: ' + err.message);
+      }
+    });
+  </script>
+</body>
+</html>

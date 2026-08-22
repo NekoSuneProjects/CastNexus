@@ -1,6 +1,6 @@
 .env
 node_modules/
 dashboard/data/
-desktop/dist/
-desktop/auto.crt
-desktop/auto.key
+electron/dist/
+electron/auto.crt
+electron/auto.key

@@ -30,10 +30,15 @@
       "main.js",
       "preload.js",
       "download-manager.js",
-      "../dashboard",
+      "oauth-bridge.js",
+      "setup.html",
       "package.json"
     ],
     "extraFiles": [
+      {
+        "from": "../dashboard",
+        "to": "dashboard"
+      },
       {
         "from": "../tools",
         "to": "tools"
@@ -61,3 +66,4 @@
     }
   }
 }
+
