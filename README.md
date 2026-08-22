@@ -19,6 +19,44 @@ Desktop and CLI installations. See [`docs/HOSTED-OAUTH.md`](docs/HOSTED-OAUTH.md
 
 ---
 
+## Screenshots
+
+Click any tile to open the full-size image.
+
+<table>
+  <tr>
+    <td width="33%" align="center"><a href="Screenshots/chrome_VWIe4CaoUu.png"><img src="Screenshots/chrome_VWIe4CaoUu.png" alt="chrome_VWIe4CaoUu"></a><br><sub><b>Overview</b> — live program status, at-a-glance tiles and the program preview</sub></td>
+    <td width="33%" align="center"><a href="Screenshots/chrome_arviMF4h91.png"><img src="Screenshots/chrome_arviMF4h91.png" alt="chrome_arviMF4h91"></a><br><sub><b>Playback URLs</b> — the VRChat / media-player HLS url plus WHEP, RTSP and SRT</sub></td>
+    <td width="33%" align="center"><a href="Screenshots/chrome_2HjFfVV5by.png"><img src="Screenshots/chrome_2HjFfVV5by.png" alt="chrome_2HjFfVV5by"></a><br><sub><b>Sources</b> — PC, console and 24/7 music workspaces with publisher state</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><a href="Screenshots/chrome_OOq1NtXrmf.png"><img src="Screenshots/chrome_OOq1NtXrmf.png" alt="chrome_OOq1NtXrmf"></a><br><sub><b>Destinations</b> — multi-destination fan-out with per-output layout</sub></td>
+    <td width="33%" align="center"><a href="Screenshots/chrome_8IfvSPlesW.png"><img src="Screenshots/chrome_8IfvSPlesW.png" alt="chrome_8IfvSPlesW"></a><br><sub><b>Add destination</b> — platform picker with verified ingest servers</sub></td>
+    <td width="33%" align="center"><a href="Screenshots/chrome_7tJCP6ixXv.png"><img src="Screenshots/chrome_7tJCP6ixXv.png" alt="chrome_7tJCP6ixXv"></a><br><sub><b>Reruns / VOD</b> — recordings, rerun library and YouTube upload jobs</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><a href="Screenshots/chrome_3D16JcrFlp.png"><img src="Screenshots/chrome_3D16JcrFlp.png" alt="chrome_3D16JcrFlp"></a><br><sub><b>Profiles</b> — separate workspaces for PC, console and music</sub></td>
+    <td width="33%" align="center"><a href="Screenshots/chrome_7yYMql2Jbh.png"><img src="Screenshots/chrome_7yYMql2Jbh.png" alt="chrome_7yYMql2Jbh"></a><br><sub><b>Studio</b> — more of the control room</sub></td>
+    <td width="33%" align="center"><a href="Screenshots/chrome_9XMn2cb8ee.png"><img src="Screenshots/chrome_9XMn2cb8ee.png" alt="chrome_9XMn2cb8ee"></a><br><sub><b>Studio</b> — more of the control room</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><a href="Screenshots/chrome_NSx2MEblTW.png"><img src="Screenshots/chrome_NSx2MEblTW.png" alt="chrome_NSx2MEblTW"></a><br><sub><b>Studio</b> — more of the control room</sub></td>
+    <td width="33%" align="center"><a href="Screenshots/chrome_bBJfkc6sGA.png"><img src="Screenshots/chrome_bBJfkc6sGA.png" alt="chrome_bBJfkc6sGA"></a><br><sub><b>Studio</b> — more of the control room</sub></td>
+    <td width="33%" align="center"><a href="Screenshots/chrome_cc10ELafXA.png"><img src="Screenshots/chrome_cc10ELafXA.png" alt="chrome_cc10ELafXA"></a><br><sub><b>Studio</b> — more of the control room</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><a href="Screenshots/chrome_fzikzGNOn6.png"><img src="Screenshots/chrome_fzikzGNOn6.png" alt="chrome_fzikzGNOn6"></a><br><sub><b>Studio</b> — more of the control room</sub></td>
+    <td width="33%" align="center"><a href="Screenshots/chrome_tsETaLRkSz.png"><img src="Screenshots/chrome_tsETaLRkSz.png" alt="chrome_tsETaLRkSz"></a><br><sub><b>Studio</b> — more of the control room</sub></td>
+    <td width="33%" align="center"><a href="Screenshots/chrome_uqS9Tgolmq.png"><img src="Screenshots/chrome_uqS9Tgolmq.png" alt="chrome_uqS9Tgolmq"></a><br><sub><b>Studio</b> — more of the control room</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><a href="Screenshots/firefox_U88NyzeNKM.png"><img src="Screenshots/firefox_U88NyzeNKM.png" alt="firefox_U88NyzeNKM"></a><br><sub><b>Studio</b> — more of the control room</sub></td>
+    <td width="33%" align="center"><a href="Screenshots/firefox_grBQoVotf0.png"><img src="Screenshots/firefox_grBQoVotf0.png" alt="firefox_grBQoVotf0"></a><br><sub><b>Studio</b> — more of the control room</sub></td>
+  </tr>
+</table>
+
+---
+
 ## Features
 
 ### Broadcast sources
