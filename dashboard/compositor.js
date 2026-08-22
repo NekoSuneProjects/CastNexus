@@ -285,11 +285,13 @@ class Compositor extends EventEmitter {
       };
       this.electronPaintHandler=onPaint;
       wc.on("paint",onPaint);
-      // Static pages only paint when damaged. Keep the watchdog and FFmpeg
-      // alive without forcing animated scenes to do extra work.
+      // Electron/Windows can coalesce canvas damage in an invisible window
+      // even while the iframe draws at 30 fps. Present the offscreen surface
+      // at capture cadence so paint events contain the newest canvas frame.
+      const invalidateMs=Math.max(16,Math.round(1000/Math.max(1,Number(this.video.fps||30))));
       this.paintKeepaliveTimer=setInterval(()=>{
         try{if(this.offscreenWindow&&!this.offscreenWindow.isDestroyed())this.offscreenWindow.webContents.invalidate();}catch{}
-      },1000);
+      },invalidateMs);
       wc.invalidate();
       const firstFrameTimeout=Math.max(1000,Number(process.env.COMPOSITOR_FIRST_FRAME_TIMEOUT_MS||10000));
       const deadline=Date.now()+firstFrameTimeout;
