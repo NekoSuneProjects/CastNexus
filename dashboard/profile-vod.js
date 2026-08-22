@@ -317,7 +317,7 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
 
   async function refreshTwitchCatalog(account) {
     if (!twitchApi) throw new Error("Twitch API is unavailable");
-    const items = await twitchApi.getVideos(account.twitchUserId, { first:100, type:"archive" });
+    const items = await twitchApi.getVideos(account.twitchUserId, { first:100, type:"archive", brokerToken:account.oauthBrokerToken });
     account.twitchVodCatalog = { updatedAt:new Date().toISOString(), items };
     saveState(state);
     return account.twitchVodCatalog;
@@ -348,7 +348,7 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
 
   async function ownLiveStatus(account) {
     if (!twitchApi) return { live:false, unavailable:true };
-    return twitchApi.isLive({ userId:account.twitchUserId });
+    return twitchApi.isLive({ userId:account.twitchUserId, brokerToken:account.oauthBrokerToken });
   }
 
   async function startTwitchLive(account, profileId, channelOrUrl) {
@@ -358,7 +358,7 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
     if (!url) throw new Error("enter a valid Twitch channel name or twitch.tv channel URL");
     const channel = new URL(url).pathname.split("/").filter(Boolean)[0] || account.twitchLogin;
     if (twitchApi) {
-      const live = await twitchApi.isLive({ login:channel });
+      const live = await twitchApi.isLive({ login:channel, brokerToken:account.oauthBrokerToken });
       if (!live.live) throw Object.assign(new Error(`${channel} is not live on Twitch right now. CastNexus will not start an HLS relay until the Twitch API reports the channel live.`), { code:"TWITCH_OFFLINE" });
     }
     const inputs = await resolveRemote("twitch-live", url);

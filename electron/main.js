@@ -9,6 +9,7 @@ const http = require("node:http");
 const { spawn } = require("node:child_process");
 const downloadManager = require("./download-manager");
 const oauthBridge = require("./oauth-bridge");
+const OFFICIAL_OAUTH_BROKER = "https://restreamer.nekosunevr.co.uk/oauth";
 
 // Setup file-based logging for debugging startup issues
 const logFile = path.join(os.homedir(), ".castnexus", "startup.log");
@@ -86,6 +87,9 @@ function setupEnvironment() {
   process.env.PI_IP = lanIp;
   process.env.MEDIAMTX_API = "http://127.0.0.1:9997";
   process.env.MEDIAMTX_PLAYBACK = "http://127.0.0.1:9996";
+  if (process.env.CASTNEXUS_OAUTH_MODE === "local") process.env.CASTNEXUS_OAUTH_BROKER_URL = "";
+  else process.env.CASTNEXUS_OAUTH_BROKER_URL =
+    process.env.CASTNEXUS_OAUTH_BROKER_URL || store.get("oauth_broker_url") || OFFICIAL_OAUTH_BROKER;
 
   // Twitch credentials collected by the setup wizard. Without these the
   // dashboard answers "TWITCH_CLIENT_ID is not configured" on every OAuth hit.
@@ -402,7 +406,7 @@ async function openMainWindow() {
   // Sign-in must happen in the user's real browser, and anything else pointing
   // off-app opens there too rather than in a chrome-less Electron window.
   const handleExternal = (url) => {
-    const provider = oauthBridge.matchProvider(url, port);
+    const provider = process.env.CASTNEXUS_OAUTH_BROKER_URL ? null : oauthBridge.matchProvider(url, port);
     if (provider) {
       runExternalLogin(provider, port);
       return true;

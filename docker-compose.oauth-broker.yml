@@ -1,0 +1,20 @@
+services:
+  oauth-broker:
+    build:
+      context: ./oauth-broker
+    image: ghcr.io/nekosuneprojects/castnexus-oauth-broker:${CASTNEXUS_IMAGE_TAG:-beta}
+    container_name: castnexus-oauth-broker
+    restart: unless-stopped
+    ports:
+      # Keep the broker private to the host; publish it through the existing
+      # HTTPS reverse proxy at /oauth instead of exposing this port publicly.
+      - "127.0.0.1:8091:8091"
+    environment:
+      OAUTH_BROKER_PORT: 8091
+      OAUTH_BROKER_PUBLIC_URL: https://restreamer.nekosunevr.co.uk/oauth
+      OAUTH_BROKER_SIGNING_SECRET: ${OAUTH_BROKER_SIGNING_SECRET:?Generate a random 32+ byte signing secret}
+      OAUTH_TRUST_PROXY: "true"
+      TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID:?Twitch client id required on the public broker}
+      TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET:?Twitch client secret required on the public broker}
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:?Google client id required on the public broker}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:?Google client secret required on the public broker}

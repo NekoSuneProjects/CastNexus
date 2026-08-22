@@ -23,6 +23,10 @@ jobs:
         working-directory: dns
         run: npm install
 
+      - name: Install OAuth broker dependencies
+        working-directory: oauth-broker
+        run: npm install
+
       - name: Syntax check server and browser modules
         shell: bash
         run: |
@@ -48,6 +52,8 @@ jobs:
           node --check dashboard/destination-output.js
           node --check dashboard/compositor.js
           node --check dns/server.js
+          node --check oauth-broker/server.js
+          node --check dashboard/hosted-oauth.js
           bash -n intercept/intercept.sh
           node --check dashboard/public/app-brand.js
           node --check dashboard/public/app-core.js
@@ -66,6 +72,11 @@ jobs:
       - name: VPS/public DNS gateway tests
         working-directory: dns
         run: npm test
+
+      - name: Hosted OAuth security tests
+        run: |
+          node --test oauth-broker/server.test.js
+          node --test dashboard/hosted-oauth.test.js
 
       - name: VPS intercept configuration smoke test
         shell: bash
@@ -164,7 +175,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [dashboard, dns, intercept]
+        service: [dashboard, dns, intercept, oauth-broker]
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3

@@ -8,7 +8,7 @@ function parseTwitchDuration(value) {
   return h * 3600 + m * 60 + s;
 }
 
-function createTwitchApi({ clientId, clientSecret, fetchImpl = global.fetch } = {}) {
+function createTwitchApi({ clientId, clientSecret, hostedOauth = null, fetchImpl = global.fetch } = {}) {
   let token = null;
   let tokenExpiresAt = 0;
 
@@ -27,7 +27,8 @@ function createTwitchApi({ clientId, clientSecret, fetchImpl = global.fetch } = 
     return token;
   }
 
-  async function helix(pathname, params = {}) {
+  async function helix(pathname, params = {}, brokerToken = "") {
+    if (hostedOauth?.enabled?.()) return hostedOauth.twitchHelix(pathname.replace(/^\//, ""), params, brokerToken);
     const accessToken = await appToken();
     const url = new URL(`https://api.twitch.tv/helix/${pathname.replace(/^\//, "")}`);
     for (const [key, value] of Object.entries(params)) {
@@ -43,13 +44,13 @@ function createTwitchApi({ clientId, clientSecret, fetchImpl = global.fetch } = 
     return data;
   }
 
-  async function getStream({ userId, login } = {}) {
-    const data = await helix("streams", userId ? { user_id:userId } : { user_login:login });
+  async function getStream({ userId, login, brokerToken } = {}) {
+    const data = await helix("streams", userId ? { user_id:userId } : { user_login:login }, brokerToken);
     return data.data?.[0] || null;
   }
 
-  async function isLive({ userId, login } = {}) {
-    const stream = await getStream({ userId, login });
+  async function isLive({ userId, login, brokerToken } = {}) {
+    const stream = await getStream({ userId, login, brokerToken });
     return {
       live: !!stream,
       stream: stream ? {
@@ -68,9 +69,9 @@ function createTwitchApi({ clientId, clientSecret, fetchImpl = global.fetch } = 
     };
   }
 
-  async function getVideos(userId, { first = 100, type = "archive" } = {}) {
+  async function getVideos(userId, { first = 100, type = "archive", brokerToken = "" } = {}) {
     if (!userId) throw new Error("Twitch user id is required");
-    const data = await helix("videos", { user_id:userId, first:Math.min(100, Math.max(1, Number(first) || 100)), type });
+    const data = await helix("videos", { user_id:userId, first:Math.min(100, Math.max(1, Number(first) || 100)), type }, brokerToken);
     return (data.data || []).map(video => ({
       id: video.id,
       streamId: video.stream_id || null,

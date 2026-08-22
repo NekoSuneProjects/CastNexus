@@ -37,12 +37,12 @@ function decryptSecret(blob, secret) {
   return Buffer.concat([decipher.update(Buffer.from(blob.data, "base64")), decipher.final()]).toString("utf8");
 }
 
-function createYoutubeUploadService({ clientId, clientSecret, redirectUri, state, saveState, recordings, fetchImpl = global.fetch } = {}) {
+function createYoutubeUploadService({ clientId, clientSecret, redirectUri, state, saveState, recordings, hostedOauth = null, fetchImpl = global.fetch } = {}) {
   const tokenCache = new Map();
   const softLimit = Math.max(1, Number(process.env.YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT || 90));
   const allowlist = parseAllowlist();
 
-  function configured() { return !!(clientId && clientSecret && redirectUri); }
+  function configured() { return !!(hostedOauth?.enabled?.() || (clientId && clientSecret && redirectUri)); }
 
   function quotaStatus(account) {
     const today = dailyKey();
@@ -86,6 +86,12 @@ function createYoutubeUploadService({ clientId, clientSecret, redirectUri, state
   }
 
   async function exchangeCode(code) {
+    if (hostedOauth?.enabled?.()) {
+      const data = await hostedOauth.youtubeRefresh(refresh);
+      if (!data.access_token) throw new Error("OAuth broker did not return a YouTube access token");
+      tokenCache.set(account.twitchUserId, { token:data.access_token, expiresAt:Date.now() + Number(data.expires_in || 3600) * 1000 });
+      return data.access_token;
+    }
     const res = await fetchImpl("https://oauth2.googleapis.com/token", {
       method:"POST",
       headers:{ "Content-Type":"application/x-www-form-urlencoded" },

@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": "NekoSuneProjects/CastNexus",
   "scripts": {
-    "install:all": "npm install && npm --prefix dashboard install && npm --prefix electron install && npm --prefix cli install",
+    "install:all": "npm install && npm --prefix dashboard install && npm --prefix electron install && npm --prefix cli install && npm --prefix dns install && npm --prefix oauth-broker install",
     "test": "npm --prefix dashboard test",
     "test:watch": "node --test --watch dashboard/**/*.test.js",
     "dev:dashboard": "npm --prefix dashboard start",
@@ -20,7 +20,9 @@
   "workspaces": [
     "dashboard",
     "electron",
-    "cli"
+    "cli",
+    "dns",
+    "oauth-broker"
   ],
   "engines": {
     "node": ">=18.0.0"

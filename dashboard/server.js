@@ -15,6 +15,7 @@ const { createProfileVodService } = require("./profile-vod");
 const { createTwitchApi } = require("./twitch-api");
 const { createMediaMtxRecordings } = require("./mediamtx-recordings");
 const { createYoutubeUploadService } = require("./youtube-upload");
+const { createHostedOauth } = require("./hosted-oauth");
 const profileRtmp = require("./profile-rtmp");
 const gpuEncoder = require("./gpu-encoder");
 const { OUTPUT_LAYOUTS, normaliseLayout, destinationFfmpegArgs } = require("./destination-output");
@@ -43,6 +44,8 @@ const TWITCH_REDIRECT_URI = process.env.TWITCH_REDIRECT_URI || `http://${MEDIA_H
 const YOUTUBE_CLIENT_ID = process.env.YOUTUBE_CLIENT_ID || "";
 const YOUTUBE_CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET || "";
 const YOUTUBE_REDIRECT_URI = process.env.YOUTUBE_REDIRECT_URI || `http://${MEDIA_HOST}:${PORT}/auth/youtube/callback`;
+const OAUTH_BROKER_URL = process.env.CASTNEXUS_OAUTH_BROKER_URL || "";
+const hostedOauth = createHostedOauth({ brokerUrl:OAUTH_BROKER_URL });
 
 function loadState() {
   if (fs.existsSync(STATE_FILE)) {
@@ -105,9 +108,9 @@ function getAccountByLogin(login) {
   return account ? getAccount(account.twitchUserId) : null;
 }
 
-const twitchApi = createTwitchApi({ clientId:TWITCH_CLIENT_ID, clientSecret:TWITCH_CLIENT_SECRET });
+const twitchApi = createTwitchApi({ clientId:TWITCH_CLIENT_ID, clientSecret:TWITCH_CLIENT_SECRET, hostedOauth });
 const recordings = createMediaMtxRecordings({ apiBase:MEDIAMTX_API, playbackBase:MEDIAMTX_PLAYBACK, recordingsDir:RECORDINGS_DIR, state, saveState });
-const youtubeUploads = createYoutubeUploadService({ clientId:YOUTUBE_CLIENT_ID, clientSecret:YOUTUBE_CLIENT_SECRET, redirectUri:YOUTUBE_REDIRECT_URI, state, saveState, recordings });
+const youtubeUploads = createYoutubeUploadService({ clientId:YOUTUBE_CLIENT_ID, clientSecret:YOUTUBE_CLIENT_SECRET, redirectUri:YOUTUBE_REDIRECT_URI, state, saveState, recordings, hostedOauth });
 const profileMusic = createProfileMusicService({ state, saveState, musicDir:MUSIC_DIR, maxBytes:MUSIC_MAX_BYTES, musicEngine, events });
 const profileVod = createProfileVodService({ state, saveState, vodDir:VOD_DIR, maxBytes:VOD_MAX_BYTES, probeDurationSeconds:musicEngine.probeDurationSeconds, rtmpOrigin:RTMP_ORIGIN, twitchApi });
 
@@ -369,7 +372,35 @@ const SOURCE_MODES=["console","pc","both"];
 function needsStreamKeyFor(account){return (account.sourceMode==="console"||account.sourceMode==="both")&&!account.streamKey;}
 function requireOnboarded(req,res,next){if(!req.account.sourceMode)return res.status(403).json({error:"pick a source mode first"});if(needsStreamKeyFor(req.account))return res.status(403).json({error:"must set stream key"});next();}
 
+function loginTwitchUser(req, twitchUser) {
+  let account=state.accounts[twitchUser.id];const isNewAccount=!account;
+  if(!account){account={twitchUserId:twitchUser.id,streamKey:null,pcKey:generatePcKey(),sourceMode:null,destinations:state.pendingLegacyDestinations||[],overlayConfig:defaultOverlayConfig(),overlays:[],musicTracks:[],musicSettings:defaultMusicSettings(),musicProfiles:{},vodProfiles:{},currentScene:null,compositorEnabled:false,recordingEnabled:false,youtubeUploadHistory:[],createdAt:new Date().toISOString()};state.accounts[twitchUser.id]=account;if(state.pendingLegacyDestinations){state.pendingLegacyDestinations=null;}}
+  account.twitchLogin=twitchUser.login;account.displayName=twitchUser.displayName||twitchUser.display_name;account.profileImageUrl=twitchUser.profileImageUrl||twitchUser.profile_image_url;saveState(state);req.session.accountId=twitchUser.id;
+  recordings.ensureConfig(account).catch(err=>console.warn(`[recordings] path config: ${err.message}`));profileVod.refreshTwitchCatalog(account).catch(err=>console.warn(`[twitch-vods] initial refresh: ${err.message}`));
+  console.log(`[dashboard] ${isNewAccount?"registered":"logged in"}: ${twitchUser.login}`);
+  return account;
+}
+function hostedWaitPage(provider, authorizationUrl) {
+  const label=provider==="youtube"?"YouTube":"Twitch";
+  const safeUrl=JSON.stringify(authorizationUrl);
+  return `<!doctype html><meta charset="utf-8"><title>Connect ${label}</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#080a12;color:#f4f6ff;font:16px system-ui}.card{max-width:560px;padding:38px;border:1px solid #292d3b;border-radius:24px;background:#10131f;text-align:center}p{color:#adb5ca;line-height:1.6}.spin{width:34px;height:34px;margin:20px auto;border:3px solid #292d3b;border-top-color:#7c5cff;border-radius:50%;animation:s 1s linear infinite}@keyframes s{to{transform:rotate(360deg)}}button{padding:12px 18px;border:0;border-radius:10px;background:#7c5cff;color:white;font-weight:700}</style><div class="card"><h1>Connect ${label}</h1><p id="message">Complete authorization in the secure browser window. This page will finish automatically.</p><div class="spin"></div><button id="open">Open authorization</button></div><script>const auth=${safeUrl};let opened=false;function openAuth(){opened=true;window.open(auth,"_blank","noopener");}document.getElementById("open").onclick=openAuth;openAuth();async function poll(){try{const r=await fetch("/auth/hosted/${provider}/status",{cache:"no-store"});const d=await r.json();if(r.status===202)return setTimeout(poll,1200);if(!r.ok)throw new Error(d.error||"Authorization failed");location.href=d.redirect||"/";}catch(e){document.getElementById("message").textContent=e.message;document.querySelector(".spin").style.display="none";}}setTimeout(poll,1000);</script>`;
+}
+async function beginHostedOauth(req,res,provider){
+  try{const flow=await hostedOauth.start(provider);req.session.hostedOauth=flow;res.send(hostedWaitPage(provider,flow.authorizationUrl));}
+  catch(err){res.status(err.status||502).send(`Hosted ${provider} authorization is unavailable: ${err.message}`);}
+}
+app.get("/auth/hosted/:provider/status",async(req,res)=>{
+  const provider=String(req.params.provider||"");const flow=req.session.hostedOauth;
+  if(!flow||flow.provider!==provider)return res.status(404).json({error:"authorization request not found"});
+  if(Date.now()>flow.expiresAt){delete req.session.hostedOauth;return res.status(410).json({error:"authorization request expired"});}
+  try{const result=await hostedOauth.exchange(flow);if(result.pending)return res.status(202).json({status:"pending"});delete req.session.hostedOauth;
+    if(provider==="twitch"){const account=loginTwitchUser(req,result.result.user);account.oauthBrokerToken=result.result.brokerToken;saveState(state);return res.json({ok:true,redirect:"/"});}
+    const account=getAccount(req.session.accountId);if(!account)return res.status(401).json({error:"Sign in with Twitch first"});youtubeUploads.storeTokens(account,result.result);res.json({ok:true,redirect:"/?youtube=connected"});
+  }catch(err){delete req.session.hostedOauth;res.status(err.status||400).json({error:err.message});}
+});
+
 app.get("/auth/twitch",(req,res)=>{
+  if(hostedOauth.enabled())return beginHostedOauth(req,res,"twitch");
   if(!TWITCH_CLIENT_ID)return res.status(500).send("TWITCH_CLIENT_ID is not configured");
   const oauthState=crypto.randomBytes(16).toString("hex");req.session.oauthState=oauthState;
   const url=new URL("https://id.twitch.tv/oauth2/authorize");
@@ -384,14 +415,10 @@ app.get("/auth/twitch/callback",async(req,res)=>{
     const tokenRes=await fetch("https://id.twitch.tv/oauth2/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:TWITCH_CLIENT_ID,client_secret:TWITCH_CLIENT_SECRET,code,grant_type:"authorization_code",redirect_uri:TWITCH_REDIRECT_URI})});
     const tokenData=await tokenRes.json();if(!tokenRes.ok)throw new Error(tokenData.message||"token exchange failed");
     const userRes=await fetch("https://api.twitch.tv/helix/users",{headers:{Authorization:`Bearer ${tokenData.access_token}`,"Client-Id":TWITCH_CLIENT_ID}});const userData=await userRes.json();if(!userRes.ok||!userData.data?.[0])throw new Error("failed to fetch Twitch user info");
-    const twitchUser=userData.data[0];let account=state.accounts[twitchUser.id];const isNewAccount=!account;
-    if(!account){account={twitchUserId:twitchUser.id,streamKey:null,pcKey:generatePcKey(),sourceMode:null,destinations:state.pendingLegacyDestinations||[],overlayConfig:defaultOverlayConfig(),overlays:[],musicTracks:[],musicSettings:defaultMusicSettings(),musicProfiles:{},vodProfiles:{},currentScene:null,compositorEnabled:false,recordingEnabled:false,youtubeUploadHistory:[],createdAt:new Date().toISOString()};state.accounts[twitchUser.id]=account;if(state.pendingLegacyDestinations){state.pendingLegacyDestinations=null;}}
-    account.twitchLogin=twitchUser.login;account.displayName=twitchUser.display_name;account.profileImageUrl=twitchUser.profile_image_url;saveState(state);req.session.accountId=twitchUser.id;
-    recordings.ensureConfig(account).catch(err=>console.warn(`[recordings] path config: ${err.message}`));profileVod.refreshTwitchCatalog(account).catch(err=>console.warn(`[twitch-vods] initial refresh: ${err.message}`));
-    console.log(`[dashboard] ${isNewAccount?"registered":"logged in"}: ${twitchUser.login}`);res.redirect("/");
+    loginTwitchUser(req,userData.data[0]);res.redirect("/");
   }catch(err){console.error("[dashboard] Twitch OAuth error:",err.message);res.status(500).send("Twitch login failed - please try again");}
 });
-app.get("/auth/youtube",requireAuth,(req,res)=>{if(!youtubeUploads.configured())return res.status(500).send("YouTube OAuth is not configured");const oauthState=crypto.randomBytes(24).toString("hex");req.session.youtubeOauthState=oauthState;const url=new URL("https://accounts.google.com/o/oauth2/v2/auth");url.searchParams.set("client_id",YOUTUBE_CLIENT_ID);url.searchParams.set("redirect_uri",YOUTUBE_REDIRECT_URI);url.searchParams.set("response_type","code");url.searchParams.set("scope","https://www.googleapis.com/auth/youtube.upload");url.searchParams.set("access_type","offline");url.searchParams.set("prompt","consent");url.searchParams.set("include_granted_scopes","true");url.searchParams.set("state",oauthState);res.redirect(url.toString());});
+app.get("/auth/youtube",requireAuth,(req,res)=>{if(hostedOauth.enabled())return beginHostedOauth(req,res,"youtube");if(!youtubeUploads.configured())return res.status(500).send("YouTube OAuth is not configured");const oauthState=crypto.randomBytes(24).toString("hex");req.session.youtubeOauthState=oauthState;const url=new URL("https://accounts.google.com/o/oauth2/v2/auth");url.searchParams.set("client_id",YOUTUBE_CLIENT_ID);url.searchParams.set("redirect_uri",YOUTUBE_REDIRECT_URI);url.searchParams.set("response_type","code");url.searchParams.set("scope","https://www.googleapis.com/auth/youtube.upload");url.searchParams.set("access_type","offline");url.searchParams.set("prompt","consent");url.searchParams.set("include_granted_scopes","true");url.searchParams.set("state",oauthState);res.redirect(url.toString());});
 app.get("/auth/youtube/callback",async(req,res)=>{const account=getAccount(req.session.accountId);if(!account)return res.status(401).send("Sign in to CastNexus with Twitch first");const{code,state:returnedState,error,error_description}=req.query;if(error)return res.status(400).send(`YouTube authorization failed: ${error_description||error}`);if(!code||!returnedState||returnedState!==req.session.youtubeOauthState)return res.status(400).send("Invalid YouTube OAuth state");delete req.session.youtubeOauthState;try{youtubeUploads.storeTokens(account,await youtubeUploads.exchangeCode(String(code)));res.redirect("/?youtube=connected");}catch(err){res.status(500).send(`YouTube authorization failed: ${err.message}`);}});
 
 app.post("/api/logout",(req,res)=>req.session.destroy(()=>res.json({ok:true})));
@@ -438,4 +465,4 @@ app.delete("/api/destinations/:id",requireAuth,requireOnboarded,(req,res)=>{cons
 app.post("/api/destinations/:id/toggle",requireAuth,requireOnboarded,(req,res)=>{const dest=findDestination(req.account,req.params.id);if(!dest)return res.status(404).json({error:"unknown destination"});dest.enabled=Boolean(req.body?.enabled);saveState(state);const source=destinationSourcePathFor(req.account);if(source){if(dest.enabled)startDestination(req.account,dest,source);else stopDestination(req.account.twitchUserId,dest.id);}res.json({ok:true});});
 
 app.use(express.static(path.join(__dirname,"public")));
-app.listen(PORT,()=>{const encoder=gpuEncoder.status().selected;console.log(`[dashboard] listening on :${PORT}`);console.log(`[dashboard] video encoder: ${encoder.label}${encoder.hardware?" (hardware)":" (software fallback)"}`);if(!TWITCH_CLIENT_ID||!TWITCH_CLIENT_SECRET)console.warn("[dashboard] TWITCH_CLIENT_ID/TWITCH_CLIENT_SECRET are not set - Twitch login/API discovery will not work");if(!YOUTUBE_CLIENT_ID||!YOUTUBE_CLIENT_SECRET)console.warn("[dashboard] YOUTUBE_CLIENT_ID/YOUTUBE_CLIENT_SECRET are not set - YouTube recording uploads will be disabled");});
+app.listen(PORT,()=>{const encoder=gpuEncoder.status().selected;console.log(`[dashboard] listening on :${PORT}`);console.log(`[dashboard] video encoder: ${encoder.label}${encoder.hardware?" (hardware)":" (software fallback)"}`);if(hostedOauth.enabled())console.log(`[dashboard] hosted OAuth broker: ${hostedOauth.baseUrl}`);if(!hostedOauth.enabled()&&(!TWITCH_CLIENT_ID||!TWITCH_CLIENT_SECRET))console.warn("[dashboard] Twitch OAuth is not configured");if(!hostedOauth.enabled()&&(!YOUTUBE_CLIENT_ID||!YOUTUBE_CLIENT_SECRET))console.warn("[dashboard] YouTube OAuth is not configured");});

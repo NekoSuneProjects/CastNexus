@@ -10,6 +10,11 @@ It is designed around three main profile workflows:
 
 CastNexus uses **MediaMTX** for ingest/playback, **FFmpeg** for destination fan-out and audio/video processing, **yt-dlp nightly + Deno** for supported Twitch/YouTube URL resolving, and an optional **headless Chromium compositor** for server-side overlays.
 
+Public installations can use the CastNexus hosted OAuth broker so users do
+not need to create Twitch or Google developer applications. Provider client
+secrets remain on the broker, while one-time PKCE transactions connect Docker,
+Desktop and CLI installations. See [`docs/HOSTED-OAUTH.md`](docs/HOSTED-OAUTH.md).
+
 ---
 
 ## Features

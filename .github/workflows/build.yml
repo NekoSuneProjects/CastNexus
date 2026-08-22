@@ -132,7 +132,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [dashboard, dns, intercept]
+        service: [dashboard, dns, intercept, oauth-broker]
     runs-on: ubuntu-latest
     permissions:
       contents: read
