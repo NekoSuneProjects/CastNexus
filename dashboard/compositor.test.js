@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildChromiumGpuArgs, audioTransportFor, useElectronOffscreen, watchdogActivityAt, audioInputPlan, defaultVideoConfig } = require("./compositor");
+const { buildChromiumGpuArgs, audioTransportFor, useElectronOffscreen, watchdogActivityAt, audioInputPlan, defaultVideoConfig, electronOffscreenWindowOptions } = require("./compositor");
 
 test("Electron install uses its bundled Chromium offscreen renderer", () => {
   assert.equal(useElectronOffscreen("electron", { electron:"37.0.0" }), true);
@@ -24,6 +24,14 @@ test("Music-only compositor uses one paced audio input without amix", () => {
 
 test("default intermediate JPEG quality matches the proven desktop capture setting", () => {
   assert.equal(defaultVideoConfig().screencastQuality,70);
+});
+
+test("Electron offscreen dimensions describe the content surface", () => {
+  const options=electronOffscreenWindowOptions(1920,1080);
+  assert.equal(options.width,1920);
+  assert.equal(options.height,1080);
+  assert.equal(options.useContentSize,true);
+  assert.equal(options.webPreferences.offscreen,true);
 });
 
 test("CPU-only Chromium keeps software rasterization available", () => {

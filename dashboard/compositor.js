@@ -56,6 +56,26 @@ function audioInputPlan(includeLiveAudio, live, music) {
   };
 }
 
+function electronOffscreenWindowOptions(width, height) {
+  return {
+    width,
+    height,
+    // BrowserWindow normally interprets width/height as the outer window.
+    // Windows reserved 30 px even for this hidden offscreen window, producing
+    // a real 1920x1050 Twitch stream. Make these dimensions the page itself.
+    useContentSize:true,
+    show:false,
+    frame:false,
+    webPreferences:{
+      offscreen:true,
+      backgroundThrottling:false,
+      nodeIntegration:false,
+      contextIsolation:true,
+      sandbox:true,
+    },
+  };
+}
+
 function defaultVideoConfig() {
   const detected = detectEncoder();
   const mode = String(process.env.COMPOSITOR_GPU || "auto").toLowerCase();
@@ -179,19 +199,8 @@ class Compositor extends EventEmitter {
   async _launchBrowser(){
     if(this.electronOffscreen){
       const { BrowserWindow }=require("electron");
-      this.offscreenWindow=new BrowserWindow({
-        width:this.video.width,
-        height:this.video.height,
-        show:false,
-        frame:false,
-        webPreferences:{
-          offscreen:true,
-          backgroundThrottling:false,
-          nodeIntegration:false,
-          contextIsolation:true,
-          sandbox:true,
-        },
-      });
+      this.offscreenWindow=new BrowserWindow(electronOffscreenWindowOptions(this.video.width,this.video.height));
+      this.offscreenWindow.setContentSize(this.video.width,this.video.height);
       // Music scenes decode their audio in Chromium to drive the spectrum
       // analyser, while FFmpeg independently supplies the broadcast audio.
       // Silence only the hidden window's speaker output so operators do not
@@ -261,7 +270,14 @@ class Compositor extends EventEmitter {
         // than the Docker CDP frame pump's single-frame buffer.
         if(stdin.writableLength>12*1024*1024){this.framesDropped++;return;}
         let frame;
-        try{frame=image.toJPEG(this.video.screencastQuality);}catch{return;}
+        try{
+          const size=image.getSize();
+          const exact=size.width===this.video.width&&size.height===this.video.height
+            ? image
+            : image.resize({width:this.video.width,height:this.video.height,quality:"good"});
+          if(firstCapture&&exact!==image)this.logger.warn(`[compositor:${this.accountId}] Electron painted ${size.width}x${size.height}; correcting to ${this.video.width}x${this.video.height}`);
+          frame=exact.toJPEG(this.video.screencastQuality);
+        }catch{return;}
         if(!frame?.length)return;
         this.latestFrame=frame;
         this.frameCount++;
@@ -586,4 +602,4 @@ class Compositor extends EventEmitter {
   }
 }
 
-module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan};
+module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan,electronOffscreenWindowOptions};
