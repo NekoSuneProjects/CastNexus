@@ -6,7 +6,7 @@ const path = require("node:path");
 const os = require("node:os");
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
-const downloadManager = require("../tools/download-manager");
+const downloadManager = require("./download-manager");
 
 const isWin = process.platform === "win32";
 const store = new Store();
