@@ -176,6 +176,11 @@ class Compositor extends EventEmitter {
           sandbox:true,
         },
       });
+      // Music scenes decode their audio in Chromium to drive the spectrum
+      // analyser, while FFmpeg independently supplies the broadcast audio.
+      // Silence only the hidden window's speaker output so operators do not
+      // hear Electron locally on top of the delayed Twitch/player audio.
+      this.offscreenWindow.webContents.setAudioMuted(true);
       this.offscreenWindow.webContents.setFrameRate(Math.max(1,Math.min(Number(this.video.fps||30),60)));
       this.offscreenWindow.once("closed",()=>{
         this.offscreenWindow=null;
