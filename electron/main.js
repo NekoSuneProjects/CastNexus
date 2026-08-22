@@ -6,8 +6,7 @@ const path = require("node:path");
 const os = require("node:os");
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
-// Load download-manager from outside app.asar to ensure it can access tools directory
-const downloadManager = require(path.join(__dirname, "..", "download-manager"));
+const downloadManager = require("./download-manager");
 
 const isWin = process.platform === "win32";
 const store = new Store();

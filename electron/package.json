@@ -29,14 +29,14 @@
     "files": [
       "main.js",
       "preload.js",
+      "download-manager.js",
       "../dashboard",
-      "../tools",
       "package.json"
     ],
     "extraFiles": [
       {
-        "from": "download-manager.js",
-        "to": "../download-manager.js"
+        "from": "../tools",
+        "to": "tools"
       }
     ],
     "win": {

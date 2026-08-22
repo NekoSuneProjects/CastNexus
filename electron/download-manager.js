@@ -6,8 +6,10 @@ const https = require("node:https");
 const { createWriteStream, promises: fsPromises } = require("node:fs");
 const { pipeline } = require("node:stream/promises");
 
-// In packaged app, tools are in app root; in dev, they're in ../tools
-const TOOLS_DIR = path.join(__dirname, process.env.NODE_ENV === 'development' ? '../tools' : '../tools');
+// In packaged app, tools are in app/ (outside asar); in dev, they're in ../tools
+const TOOLS_DIR = process.env.NODE_ENV === 'development'
+  ? path.join(__dirname, '../tools')
+  : path.join(__dirname, '../../tools');
 
 function getPlatformArch() {
   const platform = process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
