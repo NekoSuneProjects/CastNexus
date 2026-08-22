@@ -54,6 +54,12 @@ For Claude to complete later:
 - Treat the current Electron/Desktop implementation as the proven reference.
   Port the same complete-frame pacing, audio timing and public playback model
   to the Docker compositor without changing or regressing the Desktop path.
+- Read and study commit `7b88456` (`fix: stream complete Electron scene at
+  realtime cadence`) before changing the Docker compositor. Reuse its proven
+  complete-scene frame pacing approach where it fits Docker; do not blindly
+  copy Electron-only assumptions. Compare its changes in
+  `dashboard/compositor.js` and `dashboard/compositor.test.js` with the current
+  implementation and preserve all later audio/synchronisation fixes.
 - Preserve the working Desktop behaviour introduced through commit `68506f3`:
   raw complete-scene frames use wall-clock timestamps, audio cannot accumulate
   behind video, stale audio is discarded on song changes, and the original
@@ -73,6 +79,15 @@ For Claude to complete later:
   - Twitch or a local RTMP destination does not buffer or accumulate A/V drift;
   - MediaMTX reports no inbound frame errors;
   - CPU-only Docker remains usable and configured GPU acceleration still works.
+- Run the finished Docker image on both target deployment classes:
+  - a Raspberry Pi, validating its supported hardware encoder when available
+    and a realistic CPU fallback;
+  - a Linux VPS, validating CPU-only operation and any configured NVIDIA or
+    VAAPI acceleration.
+  Record the achieved output FPS, CPU/GPU use, memory use, dropped/duplicated
+  frames, and A/V sync on each system. Test WebRTC, HLS and at least one RTMP
+  destination for a sustained run that includes multiple automatic song
+  changes.
 - Measure sync from the encoded output by matching recorded programme audio to
   the source track; do not rely only on FFmpeg's reported FPS or packet presence.
 - Before Docker implementation work, create a clearly named snapshot commit or
