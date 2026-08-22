@@ -2,14 +2,16 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const https = require("node:https");
 const { createWriteStream, promises: fsPromises } = require("node:fs");
 const { pipeline } = require("node:stream/promises");
 
-// In packaged app, tools are in app/ (outside asar); in dev, they're in ../tools
+// In packaged app, tools are downloaded to user's home directory (writable)
+// In dev, they're in ../tools relative to electron directory
 const TOOLS_DIR = process.env.NODE_ENV === 'development'
   ? path.join(__dirname, '../tools')
-  : path.join(__dirname, '../../tools');
+  : path.join(os.homedir(), '.castnexus', 'tools');
 
 function getPlatformArch() {
   const platform = process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
@@ -89,7 +91,7 @@ async function ensureFFprobe(onProgress) {
 async function ensureMediaMTX(onProgress) {
   const { platform, arch } = getPlatformArch();
   const binName = platform === "windows" ? "mediamtx.exe" : "mediamtx";
-  const mtxPath = path.join(TOOLS_DIR, "mediamtx", platform, binName);
+  const mtxPath = path.join(TOOLS_DIR, "mediamtx", binName);
 
   if (fs.existsSync(mtxPath)) return mtxPath;
 
@@ -98,19 +100,23 @@ async function ensureMediaMTX(onProgress) {
     const mtxVersion = "v1.19.2";
     let downloadUrl;
 
+    // Map arch names: x64 -> amd64, arm64 -> arm64
+    const archMap = { x64: "amd64", x86: "386", arm64: "arm64v8" };
+    const mappedArch = archMap[arch] || arch;
+
     if (platform === "windows") {
-      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion}_windows_${arch}.zip`;
+      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion.substring(1)}_windows_${mappedArch}.zip`;
     } else if (platform === "linux") {
-      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion}_linux_${arch}.tar.gz`;
+      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion.substring(1)}_linux_${mappedArch}.tar.gz`;
     } else if (platform === "macos") {
-      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion}_macos_${arch}.tar.gz`;
+      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion.substring(1)}_macos_${mappedArch}.tar.gz`;
     }
 
     if (!downloadUrl) throw new Error(`Unsupported platform: ${platform}`);
 
     const archivePath = platform === "windows"
-      ? path.join(TOOLS_DIR, "mediamtx", `mediamtx-${platform}.zip`)
-      : path.join(TOOLS_DIR, "mediamtx", `mediamtx-${platform}.tar.gz`);
+      ? path.join(TOOLS_DIR, "mediamtx", `mediamtx.zip`)
+      : path.join(TOOLS_DIR, "mediamtx", `mediamtx.tar.gz`);
 
     await downloadFile(downloadUrl, archivePath, onProgress);
     console.log("[tools] MediaMTX downloaded successfully");
