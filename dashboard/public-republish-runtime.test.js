@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { isLegacyPublicRepublish, publicRepublishInputArgs, buildStablePublicRepublishArgs } = require("./public-republish-runtime");
+const { isLegacyPublicRepublish, publicRepublishInputArgs, buildStablePublicRepublishArgs, publicRtspDestination } = require("./public-republish-runtime");
 
 const source = "rtmp://127.0.0.1:1935/profile/radio/0123456789abcdef0123456789abcdef0123";
 const dest = "rtmp://127.0.0.1:1935/public/music-ci";
@@ -31,16 +31,17 @@ test("public republish input bypasses the long live-stream analyze window", () =
   assert.match(input[input.indexOf("-fflags") + 1], /genpts/);
 });
 
-test("stable public republish keeps streams copied but starts/flushed as live RTMP", () => {
+test("public republish exposes AAC to HLS and Opus to WebRTC on one RTSP path", () => {
   const args = buildStablePublicRepublishArgs(oldArgs);
   assert.equal(args[args.indexOf("-c:v") + 1], "copy");
-  assert.equal(args[args.indexOf("-c:a") + 1], "copy");
+  assert.equal(args[args.indexOf("-c:a:0") + 1], "copy");
+  assert.equal(args[args.indexOf("-c:a:1") + 1], "libopus");
+  assert.equal(args.filter(value=>value==="0:a:0?").length,2);
   assert.ok(args.includes("-avoid_negative_ts"));
   assert.ok(args.includes("make_zero"));
   assert.equal(args[args.indexOf("-flush_packets") + 1], "1");
-  assert.ok(args.includes("-flvflags"));
-  assert.ok(args.includes("no_duration_filesize"));
-  const rtmpLiveIndexes = args.map((v,i) => v === "-rtmp_live" ? i : -1).filter(i => i >= 0);
-  assert.ok(rtmpLiveIndexes.length >= 2, "RTMP live mode should apply to both the internal input and output");
-  assert.equal(args[args.length - 1], dest);
+  assert.equal(args[args.indexOf("-rtsp_transport") + 1], "tcp");
+  assert.equal(args[args.indexOf("-f") + 1], "rtsp");
+  assert.equal(args[args.length - 1], "rtsp://127.0.0.1:8554/public/music-ci");
+  assert.equal(publicRtspDestination(dest),"rtsp://127.0.0.1:8554/public/music-ci");
 });

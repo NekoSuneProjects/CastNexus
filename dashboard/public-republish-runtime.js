@@ -2,7 +2,6 @@
 
 const path = require("node:path");
 const childProcess = require("node:child_process");
-const { liveMuxArgs } = require("./rtmp-pipeline");
 
 const PATCH_FLAG = Symbol.for("castnexus.publicRepublishSpawnPolicy");
 
@@ -47,20 +46,36 @@ function publicRepublishInputArgs() {
   ];
 }
 
+function publicRtspDestination(rtmpDestination){
+  const match=String(rtmpDestination||"").match(/^rtmp:\/\/127\.0\.0\.1:1935\/(.+)$/);
+  return match?`rtsp://127.0.0.1:8554/${match[1]}`:null;
+}
+
 function buildStablePublicRepublishArgs(args) {
   const source = valueAfter(args, "-i");
-  const dest = args[args.length - 1];
+  const legacyDest = args[args.length - 1];
+  const dest = publicRtspDestination(legacyDest);
   return [
     "-hide_banner", "-loglevel", process.env.PUBLIC_REPUBLISH_DEBUG === "true" ? "info" : "warning", "-nostats", "-nostdin",
     ...publicRepublishInputArgs(),
     "-i", source,
     "-map", "0:v:0",
     "-map", "0:a:0?",
+    "-map", "0:a:0?",
     "-c:v", "copy",
-    "-c:a", "copy",
+    // One public MediaMTX path serves multiple playback protocols. HLS keeps
+    // the source AAC track; WebRTC selects the parallel Opus track instead of
+    // logging "skipping MPEG-4 Audio" and producing silent video.
+    "-c:a:0", "copy",
+    "-c:a:1", "libopus",
+    "-b:a:1", process.env.PUBLIC_WEBRTC_OPUS_BITRATE || "128k",
+    "-ar:a:1", "48000",
+    "-ac:a:1", "2",
     "-avoid_negative_ts", "make_zero",
     "-flush_packets", "1",
-    ...liveMuxArgs(dest, "flv"),
+    "-rtsp_transport", "tcp",
+    "-muxdelay", "0.1",
+    "-f", "rtsp",
     dest,
   ];
 }
@@ -76,7 +91,7 @@ function installPublicRepublishSpawnPolicy({ logger = console } = {}) {
 
     const nextArgs = buildStablePublicRepublishArgs(args);
     const dest = nextArgs[nextArgs.length - 1];
-    logger.log?.(`[dashboard] stable low-latency public republish -> ${dest.replace(/^rtmp:\/\/127\.0\.0\.1:1935\//, "")}`);
+    logger.log?.(`[dashboard] dual-audio public republish -> ${dest.replace(/^rtsp:\/\/127\.0\.0\.1:8554\//, "")} (AAC HLS + Opus WebRTC)`);
     const child = originalSpawn.call(this, command, nextArgs, options);
 
     if (child?.stderr) {
@@ -99,5 +114,6 @@ module.exports = {
   isLegacyPublicRepublish,
   publicRepublishInputArgs,
   buildStablePublicRepublishArgs,
+  publicRtspDestination,
   installPublicRepublishSpawnPolicy,
 };
