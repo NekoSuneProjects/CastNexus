@@ -105,7 +105,7 @@ function detectLanIp() {
   return "127.0.0.1";
 }
 
-function startMediaMTX() {
+async function startMediaMTX() {
   const dataDir = getDataDir();
   const lanIp = store.get("lanIp") || detectLanIp();
   const recordRoot = path.join(dataDir, "recordings").replace(/\\/g, "/");
@@ -148,7 +148,7 @@ paths:
 
   fs.writeFileSync(configPath, config.trim() + "\n");
 
-  const mtxBin = downloadManager.ensureMediaMTX();
+  const mtxBin = await downloadManager.ensureMediaMTX();
   if (!mtxBin) {
     throw new Error("MediaMTX binary not found and could not be downloaded. Please download from bluenviron/mediamtx");
   }
@@ -380,7 +380,7 @@ app.on("ready", async () => {
             setupWindow.webContents.send('setup:progress', { status: 'Starting services...', progress: 0.7 });
 
             // Now start services
-            startMediaMTX();
+            await startMediaMTX();
             startDashboard();
 
             setupWindow.webContents.send('setup:progress', { status: 'Opening dashboard...', progress: 0.95 });
@@ -398,14 +398,18 @@ app.on("ready", async () => {
       }, 500);
     } else {
       // Normal startup (not first run)
-      startMediaMTX();
-      console.log("[electron] MediaMTX started");
+      (async () => {
+        await startMediaMTX();
+        console.log("[electron] MediaMTX started");
 
-      startDashboard();
-      console.log("[electron] Dashboard started");
+        startDashboard();
+        console.log("[electron] Dashboard started");
 
-      console.log("[electron] creating window in 2.5s...");
-      setTimeout(createWindow, 2500);
+        console.log("[electron] creating window in 2.5s...");
+        setTimeout(createWindow, 2500);
+      })().catch(err => {
+        console.error("[electron] startup error:", err);
+      });
     }
   } catch (err) {
     console.error(`[electron] startup failed: ${err.message}`);

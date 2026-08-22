@@ -6,6 +6,7 @@ const os = require("node:os");
 const https = require("node:https");
 const { createWriteStream, promises: fsPromises } = require("node:fs");
 const { pipeline } = require("node:stream/promises");
+const { execSync } = require("node:child_process");
 
 // In packaged app, tools are downloaded to user's home directory (writable)
 // In dev, they're in ../tools relative to electron directory
@@ -17,6 +18,33 @@ function getPlatformArch() {
   const platform = process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
   const arch = process.arch === "x64" ? "x64" : process.arch === "arm64" ? "arm64" : "x86";
   return { platform, arch };
+}
+
+async function extractArchive(archivePath, extractDir) {
+  const ext = path.extname(archivePath).toLowerCase();
+
+  try {
+    if (ext === '.zip') {
+      // Use built-in Windows unzip or Node modules
+      if (process.platform === 'win32') {
+        // PowerShell unzip for Windows
+        execSync(`powershell -Command "Expand-Archive -Path '${archivePath}' -DestinationPath '${extractDir}' -Force"`, { stdio: 'inherit' });
+      } else {
+        // Use unzip command on Unix
+        execSync(`unzip -o "${archivePath}" -d "${extractDir}"`, { stdio: 'inherit' });
+      }
+    } else if (ext === '.gz') {
+      // tar.gz extraction
+      execSync(`tar -xzf "${archivePath}" -C "${extractDir}"`, { stdio: 'inherit' });
+    }
+
+    console.log(`[tools] Extracted ${archivePath} to ${extractDir}`);
+    // Delete archive after extraction
+    fs.unlinkSync(archivePath);
+  } catch (err) {
+    console.error(`[tools] Extraction failed:`, err.message);
+    throw err;
+  }
 }
 
 async function downloadFile(url, outputPath, onProgress, maxRedirects = 5) {
@@ -138,6 +166,11 @@ async function ensureMediaMTX(onProgress) {
 
     await downloadFile(downloadUrl, archivePath, onProgress);
     console.log("[tools] MediaMTX downloaded successfully");
+
+    // Extract the archive
+    const extractDir = path.join(TOOLS_DIR, "mediamtx");
+    await extractArchive(archivePath, extractDir);
+
     return mtxPath;
   } catch (err) {
     console.error("[tools] MediaMTX download failed:", err.message);
