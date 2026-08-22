@@ -1,4 +1,4 @@
-name: CastNexus CI
+name: CastNexus Release
 
 on:
   pull_request:
@@ -8,7 +8,22 @@ on:
       - beta
       - "feature/**"
       - "fix/**"
+    tags:
+      - "v*"
   workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        type: choice
+        options:
+          - beta
+          - stable
+        default: beta
+      version:
+        description: Version (example 1.2.0 or 1.2.0-beta.1)
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -17,6 +32,63 @@ env:
   MEDIAMTX_VERSION: v1.19.2
 
 jobs:
+  meta:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      channel: ${{ steps.meta.outputs.channel }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - id: meta
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            if [[ "$VERSION" == *-* ]]; then CHANNEL=beta; else CHANNEL=stable; fi
+          else
+            VERSION="${INPUT_VERSION#v}"
+            CHANNEL="${INPUT_CHANNEL}"
+            if [[ "$CHANNEL" == "beta" && "$VERSION" != *-* ]]; then
+              VERSION="${VERSION}-beta.${GITHUB_RUN_NUMBER}"
+            fi
+          fi
+
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version: $VERSION" >&2
+            exit 1
+          fi
+
+          if [[ "$CHANNEL" == "stable" && "$VERSION" == *-* ]]; then
+            echo "Stable releases cannot use a prerelease version: $VERSION" >&2
+            exit 1
+          fi
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "$CHANNEL" == "stable" && "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "Stable releases must be dispatched from the main branch." >&2
+            exit 1
+          fi
+
+          if [[ "$CHANNEL" == "beta" ]]; then
+            PRERELEASE=true
+          else
+            PRERELEASE=false
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+          echo "CastNexus $VERSION ($CHANNEL)"
+
+
   javascript:
     runs-on: ubuntu-latest
     steps:
@@ -233,7 +305,186 @@ jobs:
       - run: npm ci --omit=dev
         working-directory: dashboard
       - run: npm install
-        working-directory: desktop
-      - name: Package Linux desktop smoke build
-        working-directory: desktop
-        run: npx pkg . --targets node18-linux-x64 --output dist/CastNexus
+        working-directory: electron
+      - name: Package Electron smoke build
+        working-directory: electron
+        run: npm run build
+
+  build-electron:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: javascript
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+          - os: ubuntu-latest
+            target: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: npm
+      - run: npm run install:all
+      - name: Build Electron
+        run: npm --prefix electron run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: electron-${{ matrix.target }}
+          path: |
+            electron/dist/*.exe
+            electron/dist/*.AppImage
+            electron/dist/*.dmg
+            electron/dist/*.zip
+
+  build-cli:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: javascript
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: win-x64
+          - os: ubuntu-latest
+            target: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: npm
+      - run: npm --prefix cli install
+      - name: Build CLI binary
+        run: npm --prefix cli run pkg:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: |
+            cli/dist/castnexus-cli*
+
+  docker-publish:
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: [javascript, meta]
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [dashboard, dns, intercept]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: tags
+        shell: bash
+        run: |
+          VERSION="${{ needs.meta.outputs.version || 'dev' }}"
+          CHANNEL="${{ needs.meta.outputs.channel || 'dev' }}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+      - name: Build and push ${{ matrix.service }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.service }}
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            CASTNEXUS_VERSION=${{ steps.tags.outputs.version }}
+            CASTNEXUS_CHANNEL=${{ steps.tags.outputs.channel }}
+            CASTNEXUS_REVISION=${{ github.sha }}
+          tags: |
+            ghcr.io/${{ github.repository }}-${{ matrix.service }}:${{ steps.tags.outputs.version }}
+            ghcr.io/${{ github.repository }}-${{ matrix.service }}:latest
+          labels: |
+            org.opencontainers.image.title=CastNexus ${{ matrix.service }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.tags.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=castnexus-${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=castnexus-${{ matrix.service }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [meta, build-electron, build-cli, docker-publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+      - name: Create checksums
+        run: |
+          mkdir -p checksums
+          cd electron-win && sha256sum *.exe > ../checksums/checksums.txt 2>/dev/null || true && cd ..
+          cd electron-linux && sha256sum *.AppImage >> ../checksums/checksums.txt 2>/dev/null || true && cd ..
+          cd cli-win-x64 && sha256sum *.exe >> ../checksums/checksums.txt 2>/dev/null || true && cd ..
+          cd cli-linux-x64 && sha256sum castnexus-cli* >> ../checksums/checksums.txt 2>/dev/null || true && cd ..
+      - name: Write release notes
+        shell: bash
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## CastNexus ${{ needs.meta.outputs.version }}
+
+          **Channel:** ${{ needs.meta.outputs.channel }}
+
+          ### Downloads
+
+          #### Desktop App (Electron)
+          - **Windows**: CastNexus desktop installer
+          - **Linux**: CastNexus AppImage
+
+          #### CLI (Headless / Server)
+          - **Windows**: `castnexus-cli-win-x64.exe` - Command-line launcher
+          - **Linux**: `castnexus-cli-linux-x64` - Command-line launcher
+
+          #### Docker
+          All services including dashboard, DNS gateway, and RTMP intercept:
+          ```bash
+          docker pull ghcr.io/${{ github.repository }}-dashboard:${{ needs.meta.outputs.version }}
+          docker-compose -f compose.yaml up -d
+          ```
+
+          ### Updating
+
+          - **Desktop**: Download the new installer/AppImage below. CastNexus checks this release feed and notifies when updates are available.
+          - **CLI**: Download the binary for your platform and replace your existing installation.
+          - **Docker**: Pull the new image with the version tag above and restart your containers.
+
+          ### Installation & Deployment
+
+          See [INSTALL.md](https://github.com/${{ github.repository }}/blob/main/INSTALL.md) for detailed setup instructions for all deployment methods.
+
+          ### Documentation
+
+          - [README](https://github.com/${{ github.repository }}/blob/main/README.md) — Project overview
+          - [INSTALL.md](https://github.com/${{ github.repository }}/blob/main/INSTALL.md) — Desktop, CLI, and Docker setup
+          - [Contributing](https://github.com/${{ github.repository }}/blob/main/CONTRIBUTING.md) — How to contribute
+
+          GitHub's automatically generated notes below list the code changes included since the previous release.
+          EOF
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: CastNexus ${{ needs.meta.outputs.version }}
+          prerelease: ${{ needs.meta.outputs.prerelease }}
+          make_latest: ${{ needs.meta.outputs.channel == 'stable' }}
+          generate_release_notes: true
+          body_path: release-notes.md
+          files: |
+            electron-*/*.exe
+            electron-*/*.AppImage
+            cli-*/*
+            checksums/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
