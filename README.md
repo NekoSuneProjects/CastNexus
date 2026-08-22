@@ -1,5 +1,7 @@
 # CastNexus
 
+<p align="center"><img src="assets/brand/castnexus-logo.png" alt="CastNexus logo" width="220"></p>
+
 **CastNexus** is a self-hosted broadcast control studio for restreaming sources to multiple destinations, adding browser/HTML overlays, switching broadcast profiles, running an always-on music station, and rerunning authorized Twitch/YouTube/video content.
 
 It is designed around three main profile workflows:

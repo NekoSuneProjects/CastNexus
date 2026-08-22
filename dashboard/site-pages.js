@@ -10,6 +10,8 @@ function layout(title, content, path = "/") {
   return `<!doctype html>
 <html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title} · CastNexus</title><meta name="description" content="${description}"><link rel="canonical" href="${canonical}">
+<link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" type="image/png" href="/logo.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<style>.brand{display:flex!important;align-items:center;gap:10px}.brand:before{content:"";width:38px;height:38px;background:url('/logo.png') center/contain no-repeat}.login-mark{font-size:0;background:url('/logo.png') center/contain no-repeat!important}</style>
 <meta property="og:title" content="${title} · CastNexus"><meta property="og:description" content="${description}"><meta property="og:type" content="website"><meta property="og:url" content="${canonical}"><meta property="og:image" content="https://castnexus.nekosunevr.co.uk/og.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${title} · CastNexus"><meta name="twitter:description" content="${description}"><meta name="twitter:image" content="https://castnexus.nekosunevr.co.uk/og.png"><style>
 :root{color-scheme:dark;--bg:#080a12;--panel:#10131f;--text:#f4f6ff;--muted:#adb5ca;--line:#292d3b;--accent:#8d73ff;--cyan:#38e8ff}

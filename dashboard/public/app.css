@@ -90,7 +90,9 @@ a { color: inherit; }
   letter-spacing: -.06em;
   background: linear-gradient(135deg, var(--purple), #5839eb 58%, var(--cyan));
   box-shadow: 0 10px 30px rgba(124,92,255,.35), inset 0 1px rgba(255,255,255,.25);
+  overflow: hidden;
 }
+.brand-mark img { width:100%; height:100%; object-fit:contain; display:block; }
 .brand-mark-large { width: 64px; height: 64px; border-radius: 18px; font-size: 1.2rem; margin-bottom: 28px; }
 .eyebrow {
   color: var(--muted-2);

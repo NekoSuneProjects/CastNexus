@@ -10,6 +10,7 @@ const { spawn } = require("node:child_process");
 const downloadManager = require("./download-manager");
 const oauthBridge = require("./oauth-bridge");
 const OFFICIAL_OAUTH_BROKER = "https://castnexus.nekosunevr.co.uk/oauth";
+const APP_ICON = path.join(__dirname, "assets", "icon.png");
 
 // Setup file-based logging for debugging startup issues
 const logFile = path.join(os.homedir(), ".castnexus", "startup.log");
@@ -231,6 +232,7 @@ function waitForServer(port, timeoutMs = 30000) {
 
 function createLoadingWindow() {
   loadingWindow = new BrowserWindow({
+    icon: APP_ICON,
     width: 600,
     height: 400,
     center: true,
@@ -315,6 +317,7 @@ function setLoadingStatus(message, fraction, detail = "") {
 
 function createSetupWindow() {
   setupWindow = new BrowserWindow({
+    icon: APP_ICON,
     width: 650,
     height: 780,
     center: true,
@@ -383,6 +386,7 @@ async function openMainWindow() {
   }
 
   mainWindow = new BrowserWindow({
+    icon: APP_ICON,
     width: 1400,
     height: 900,
     minWidth: 800,

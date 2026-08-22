@@ -16,7 +16,7 @@
     "electron-store": "^8.1.0"
   },
   "devDependencies": {
-    "electron": "^28.3.3",
+    "electron": "28.3.3",
     "electron-builder": "^24.6.4"
   },
   "build": {
@@ -32,6 +32,7 @@
       "download-manager.js",
       "oauth-bridge.js",
       "setup.html",
+      "assets/**/*",
       "package.json"
     ],
     "extraFiles": [
@@ -45,6 +46,7 @@
       }
     ],
     "win": {
+      "icon": "assets/icon.ico",
       "target": [
         "nsis",
         "portable"
@@ -59,6 +61,7 @@
       "createStartMenuShortcut": true
     },
     "linux": {
+      "icon": "assets/icon.png",
       "target": [
         "AppImage",
         "deb"
@@ -66,4 +69,3 @@
     }
   }
 }
-
