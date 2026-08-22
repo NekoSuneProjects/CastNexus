@@ -20,6 +20,7 @@ test("fixed provider presets build complete secure destination URLs", () => {
 test("event-specific providers retain an editable server URL", () => {
   const catalog = loadCatalog();
   assert.equal(catalog.byId("facebook").autoUrl, undefined);
+  assert.equal(catalog.byId("patreon").autoUrl, undefined);
   assert.equal(catalog.destinationUrl(catalog.byId("facebook"), "rtmps://example.test/live/", "secret"), "rtmps://example.test/live/secret");
   assert.ok(catalog.presets.length >= 15);
 });

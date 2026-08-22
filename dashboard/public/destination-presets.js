@@ -14,6 +14,7 @@
     { id:"mixcloud", name:"Mixcloud", mark:"≋", colour:"#52aad8", help:"Copy the server URL and key shown when creating a Mixcloud Live broadcast." },
     { id:"amazon-live", name:"Amazon Live", mark:"a", colour:"#ff9900", help:"Use the encoder URL and key assigned to your Amazon Live event." },
     { id:"telegram", name:"Telegram", mark:"➤", colour:"#2aabee", help:"Copy the server URL and stream key from the Telegram live-stream dialog." },
+    { id:"patreon", name:"Patreon", mark:"P", colour:"#ff424d", help:"Paste the RTMP server URL and stream key supplied for your Patreon live event or connected streaming provider." },
     { id:"steam", name:"Steam", mark:"●", colour:"#66c0f4", help:"Steam broadcast ingest details are account and region specific." },
     { id:"dailymotion", name:"Dailymotion", mark:"dM", colour:"#00aaff", help:"Copy the RTMP ingest URL and key from Dailymotion Studio." },
     { id:"nimo", name:"Nimo TV", mark:"N", colour:"#5b45f5", help:"Use the RTMP server and key issued by the platform." },
