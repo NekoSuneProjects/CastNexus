@@ -348,7 +348,7 @@ async function pollLive() {
   }
   for (const raw of Object.values(state.accounts)) reconcileSelectedProfile(getAccount(raw.twitchUserId));
 }
-setInterval(pollLive, POLL_MS);
+const pollLiveTimer=setInterval(pollLive, POLL_MS);
 
 const app = express();
 app.set("trust proxy", 1);
@@ -479,4 +479,20 @@ app.delete("/api/destinations/:id",requireAuth,requireOnboarded,(req,res)=>{cons
 app.post("/api/destinations/:id/toggle",requireAuth,requireOnboarded,(req,res)=>{const dest=findDestination(req.account,req.params.id);if(!dest)return res.status(404).json({error:"unknown destination"});dest.enabled=Boolean(req.body?.enabled);saveState(state);const source=destinationSourcePathFor(req.account);if(source){if(dest.enabled)startDestination(req.account,dest,source);else stopDestination(req.account.twitchUserId,dest.id);}res.json({ok:true});});
 
 app.use(express.static(path.join(__dirname,"public"),{index:false}));
-app.listen(PORT,()=>{const encoder=gpuEncoder.status().selected;console.log(`[dashboard] listening on :${PORT}`);console.log(`[dashboard] video encoder: ${encoder.label}${encoder.hardware?" (hardware)":" (software fallback)"}`);if(hostedOauth.enabled())console.log(`[dashboard] hosted OAuth broker: ${hostedOauth.baseUrl}`);if(!hostedOauth.enabled()&&(!TWITCH_CLIENT_ID||!TWITCH_CLIENT_SECRET))console.warn("[dashboard] Twitch OAuth is not configured");if(!hostedOauth.enabled()&&(!YOUTUBE_CLIENT_ID||!YOUTUBE_CLIENT_SECRET))console.warn("[dashboard] YouTube OAuth is not configured");});
+const httpServer=app.listen(PORT,()=>{const encoder=gpuEncoder.status().selected;console.log(`[dashboard] listening on :${PORT}`);console.log(`[dashboard] video encoder: ${encoder.label}${encoder.hardware?" (hardware)":" (software fallback)"}`);if(hostedOauth.enabled())console.log(`[dashboard] hosted OAuth broker: ${hostedOauth.baseUrl}`);if(!hostedOauth.enabled()&&(!TWITCH_CLIENT_ID||!TWITCH_CLIENT_SECRET))console.warn("[dashboard] Twitch OAuth is not configured");if(!hostedOauth.enabled()&&(!YOUTUBE_CLIENT_ID||!YOUTUBE_CLIENT_SECRET))console.warn("[dashboard] YouTube OAuth is not configured");});
+
+let dashboardShuttingDown=false;
+async function shutdown(){
+  if(dashboardShuttingDown)return;
+  dashboardShuttingDown=true;
+  clearInterval(pollLiveTimer);
+  for(const grace of graceState.values())clearTimeout(grace.timer);
+  graceState.clear();activeFeedPath.clear();
+  for(const child of activeDestinations.values()){child.removeAllListeners("exit");try{child.kill("SIGTERM");}catch{}}
+  for(const child of activeRepublish.values()){child.removeAllListeners("exit");try{child.kill("SIGTERM");}catch{}}
+  activeDestinations.clear();activeRepublish.clear();
+  await Promise.allSettled([...compositors.values()].map(compositor=>compositor.stop()));
+  compositors.clear();
+  await new Promise(resolve=>{try{let done=false;const finish=()=>{if(done)return;done=true;clearTimeout(timer);resolve();};const timer=setTimeout(finish,2000);httpServer.close(finish);httpServer.closeAllConnections?.();}catch{resolve();}});
+}
+module.exports={shutdown};

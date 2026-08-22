@@ -49,6 +49,7 @@ let setupWindow = null;
 let loadingWindow = null;
 let mediaProcess = null;
 let music24Service = null;
+let dashboardService = null;
 let shuttingDown = false;
 
 // Guards the window-all-closed handler. Closing the loading window to open the
@@ -223,7 +224,7 @@ function startDashboard() {
   console.log(`[electron] Loading dashboard from: ${dashboardPath}`);
 
   require(path.join(dashboardPath, "public-republish-runtime.js")).installPublicRepublishSpawnPolicy();
-  require(path.join(dashboardPath, "server.js"));
+  dashboardService = require(path.join(dashboardPath, "server.js"));
   music24Service = require(path.join(dashboardPath, "music24.js"));
   music24Service.startMusic24();
 
@@ -454,7 +455,13 @@ async function openMainWindow() {
     console.error(`[electron] renderer process gone: ${details.reason}`);
   });
 
-  mainWindow.on("closed", () => { mainWindow = null; });
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+    // An offscreen compositor BrowserWindow can still exist, so Electron does
+    // not emit window-all-closed when the visible Studio window is closed.
+    // Treat closing the primary window as an explicit request to exit.
+    if(!windowTransition&&!shuttingDown)shutdown().finally(()=>app.quit());
+  });
   return mainWindow;
 }
 
@@ -580,7 +587,11 @@ async function shutdown() {
 
   try { oauthBridge.stopCallbackServer(); } catch {}
   try { await music24Service?.shutdown?.("shutdown", { exit: false }); } catch {}
-  try { mediaProcess?.kill?.(); } catch {}
+  try { await dashboardService?.shutdown?.(); } catch {}
+  if(mediaProcess){
+    const child=mediaProcess;mediaProcess=null;
+    await new Promise(resolve=>{const timer=setTimeout(()=>{try{child.kill("SIGKILL");}catch{}resolve();},3000);child.once("exit",()=>{clearTimeout(timer);resolve();});try{child.kill("SIGTERM");}catch{clearTimeout(timer);resolve();}});
+  }
 }
 
 process.on("uncaughtException", (err) => {

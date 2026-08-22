@@ -68,3 +68,10 @@ test("Music worker signature is identical for None, Starting Soon, BRB and Endin
   assert.equal(brb, live, "BRB must stay on the same Music24 worker");
   assert.equal(ending, live, "Ending must stay on the same Music24 worker");
 });
+
+test("Music 24/7 defaults to an efficient 3500 Kbps video bitrate", () => {
+  const signature=JSON.parse(musicWorkerSignature(account(null),profile));
+  assert.equal(signature.video.bitrate,"3500k");
+  assert.equal(signature.video.maxrate,"3500k");
+  assert.equal(signature.video.bufsize,"7000k");
+});

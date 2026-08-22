@@ -47,12 +47,20 @@ function profileMusicState(account, profile) {
 function profileVideo(profile) {
   const vertical = profile?.canvasMode === "vertical";
   const detected = detectEncoder();
-  return safeCanvas(vertical ? "vertical" : "landscape", {
+  const canvas=safeCanvas(vertical ? "vertical" : "landscape", {
     hardwareEncoder:detected.hardware,
     width:Number(process.env.MUSIC24_WIDTH || (vertical ? 1080 : 1920)),
     height:Number(process.env.MUSIC24_HEIGHT || (vertical ? 1920 : 1080)),
     fps:Number(process.env.MUSIC24_FPS || 30),
   });
+  return {
+    ...canvas,
+    // Music visualisers contain far less motion/detail than gameplay. This
+    // keeps Twitch quality clean while reducing viewer decode/network load.
+    bitrate:process.env.MUSIC24_VIDEO_BITRATE||"3500k",
+    maxrate:process.env.MUSIC24_VIDEO_MAXRATE||process.env.MUSIC24_VIDEO_BITRATE||"3500k",
+    bufsize:process.env.MUSIC24_VIDEO_BUFSIZE||"7000k",
+  };
 }
 
 function musicSceneUrl(account, profile) {

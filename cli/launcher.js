@@ -18,6 +18,7 @@ const store = new Store({
 
 let mediaProcess = null;
 let music24Service = null;
+let dashboardService = null;
 let shuttingDown = false;
 
 function detectLanIp() {
@@ -153,7 +154,7 @@ paths:
 function startDashboard() {
   setTimeout(() => {
     require("../dashboard/public-republish-runtime.js").installPublicRepublishSpawnPolicy();
-    require("../dashboard/server.js");
+    dashboardService = require("../dashboard/server.js");
     music24Service = require("../dashboard/music24.js");
     music24Service.startMusic24();
 
@@ -171,6 +172,10 @@ async function shutdown() {
 
   try {
     await music24Service?.shutdown?.("shutdown", { exit: false });
+  } catch {}
+
+  try {
+    await dashboardService?.shutdown?.();
   } catch {}
 
   try {
