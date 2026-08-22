@@ -8,6 +8,29 @@ const fs = require("node:fs");
 const { spawn } = require("node:child_process");
 const downloadManager = require("./download-manager");
 
+// Setup file-based logging for debugging startup issues
+const logFile = path.join(os.homedir(), ".castnexus", "startup.log");
+function setupLogging() {
+  const logDir = path.dirname(logFile);
+  try { fs.mkdirSync(logDir, { recursive: true }); } catch {}
+  const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args) => {
+    originalLog(...args);
+    logStream.write("[INFO] " + args.join(" ") + "\n");
+  };
+  console.error = (...args) => {
+    originalError(...args);
+    logStream.write("[ERROR] " + args.join(" ") + "\n");
+  };
+  process.on('uncaughtException', (err) => {
+    console.error("[UNCAUGHT]", err);
+    logStream.write("[UNCAUGHT] " + err.message + "\n" + err.stack + "\n");
+  });
+}
+setupLogging();
+
 const isWin = process.platform === "win32";
 const store = new Store();
 
