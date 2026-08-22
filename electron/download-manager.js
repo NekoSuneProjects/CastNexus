@@ -105,11 +105,11 @@ async function ensureMediaMTX(onProgress) {
     const mappedArch = archMap[arch] || arch;
 
     if (platform === "windows") {
-      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion.substring(1)}_windows_${mappedArch}.zip`;
+      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion}_windows_${mappedArch}.zip`;
     } else if (platform === "linux") {
-      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion.substring(1)}_linux_${mappedArch}.tar.gz`;
+      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion}_linux_${mappedArch}.tar.gz`;
     } else if (platform === "macos") {
-      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion.substring(1)}_macos_${mappedArch}.tar.gz`;
+      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion}_darwin_${mappedArch}.tar.gz`;
     }
 
     if (!downloadUrl) throw new Error(`Unsupported platform: ${platform}`);
