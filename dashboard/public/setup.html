@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CastNexus Setup</title>
+  <link rel="stylesheet" href="/app.css">
+  <style>
+    body {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    .setup-container {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+      width: 90%;
+      max-width: 500px;
+      padding: 40px;
+    }
+    .setup-header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .setup-header h1 {
+      margin: 0 0 8px;
+      color: #333;
+      font-size: 28px;
+    }
+    .setup-header p {
+      margin: 0;
+      color: #999;
+      font-size: 14px;
+    }
+    .setup-steps {
+      display: none;
+    }
+    .setup-steps.active {
+      display: block;
+    }
+    .step-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      color: #333;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      color: #555;
+      font-size: 14px;
+    }
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+    .button-group {
+      display: flex;
+      gap: 10px;
+      margin-top: 30px;
+    }
+    button {
+      flex: 1;
+      padding: 12px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: #667eea;
+      color: white;
+    }
+    .btn-primary:hover {
+      background: #5568d3;
+    }
+    .btn-secondary {
+      background: #f0f0f0;
+      color: #333;
+    }
+    .btn-secondary:hover {
+      background: #e0e0e0;
+    }
+    .step-indicator {
+      text-align: center;
+      margin-bottom: 30px;
+      font-size: 12px;
+      color: #999;
+    }
+    .error {
+      background: #fee;
+      color: #c00;
+      padding: 12px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      font-size: 13px;
+    }
+    .help-text {
+      font-size: 12px;
+      color: #999;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="setup-container">
+    <div class="setup-header">
+      <h1>CastNexus Setup</h1>
+      <p>Welcome! Let's configure your broadcast studio.</p>
+    </div>
+
+    <div id="setupSteps"></div>
+
+    <div class="button-group">
+      <button id="prevBtn" class="btn-secondary" onclick="previousStep()" style="display: none;">Back</button>
+      <button id="nextBtn" class="btn-primary" onclick="nextStep()">Continue</button>
+    </div>
+  </div>
+
+  <script>
+    const steps = [
+      {
+        id: "twitch-oauth",
+        title: "Connect Twitch Account",
+        fields: [
+          {
+            name: "twitchClientId",
+            label: "Twitch Client ID",
+            type: "text",
+            help: "Get this from dev.twitch.tv",
+            required: true
+          },
+          {
+            name: "twitchClientSecret",
+            label: "Twitch Client Secret",
+            type: "password",
+            help: "Keep this secret!",
+            required: true
+          },
+          {
+            name: "twitchRedirectUri",
+            label: "Redirect URI",
+            type: "text",
+            placeholder: "http://localhost:8090/auth/twitch/callback",
+            required: true
+          }
+        ]
+      },
+      {
+        id: "rtmp-key",
+        title: "RTMP Configuration",
+        fields: [
+          {
+            name: "rtmpKey",
+            label: "RTMP Stream Key",
+            type: "password",
+            help: "For destinations like Twitch, YouTube, etc.",
+            required: true
+          },
+          {
+            name: "rtmpUrl",
+            label: "RTMP Server URL",
+            type: "text",
+            placeholder: "rtmp://live.twitch.tv/app/",
+            required: false
+          }
+        ]
+      }
+    ];
+
+    let currentStep = 0;
+    const formData = {};
+
+    function renderStep() {
+      const step = steps[currentStep];
+      const html = `
+        <div class="setup-steps active">
+          <div class="step-indicator">Step ${currentStep + 1} of ${steps.length}</div>
+          <div class="step-title">${step.title}</div>
+          <div id="stepFields"></div>
+        </div>
+      `;
+
+      const container = document.querySelector(".setup-header").parentElement;
+      const stepsDiv = container.querySelector("#setupSteps");
+      stepsDiv.innerHTML = html;
+
+      const fieldsDiv = container.querySelector("#stepFields");
+      step.fields.forEach(field => {
+        const value = formData[field.name] || "";
+        fieldsDiv.innerHTML += `
+          <div class="form-group">
+            <label for="${field.name}">${field.label}</label>
+            <input
+              type="${field.type}"
+              id="${field.name}"
+              name="${field.name}"
+              value="${value}"
+              placeholder="${field.placeholder || ""}"
+              ${field.required ? 'required' : ''}
+            >
+            ${field.help ? `<div class="help-text">${field.help}</div>` : ''}
+          </div>
+        `;
+      });
+
+      document.getElementById("prevBtn").style.display = currentStep > 0 ? "block" : "none";
+      document.getElementById("nextBtn").textContent = currentStep === steps.length - 1 ? "Complete Setup" : "Continue";
+    }
+
+    function saveCurrentStep() {
+      const step = steps[currentStep];
+      step.fields.forEach(field => {
+        const input = document.getElementById(field.name);
+        if (input) {
+          formData[field.name] = input.value;
+        }
+      });
+    }
+
+    function validateCurrentStep() {
+      const step = steps[currentStep];
+      for (const field of step.fields) {
+        if (field.required && !formData[field.name]) {
+          alert(`${field.label} is required`);
+          return false;
+        }
+      }
+      return true;
+    }
+
+    async function nextStep() {
+      saveCurrentStep();
+
+      if (!validateCurrentStep()) return;
+
+      if (currentStep === steps.length - 1) {
+        await completeSetup();
+        return;
+      }
+
+      currentStep++;
+      renderStep();
+    }
+
+    function previousStep() {
+      saveCurrentStep();
+      if (currentStep > 0) {
+        currentStep--;
+        renderStep();
+      }
+    }
+
+    async function completeSetup() {
+      try {
+        const response = await fetch("/api/setup/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(formData)
+        });
+
+        if (!response.ok) throw new Error("Setup failed");
+
+        window.location.href = "/";
+      } catch (err) {
+        alert("Setup error: " + err.message);
+      }
+    }
+
+    renderStep();
+  </script>
+</body>
+</html>

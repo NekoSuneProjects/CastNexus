@@ -347,6 +347,10 @@ setInterval(pollLive, POLL_MS);
 const app = express();
 app.set("trust proxy", 1);
 function fixRedirectPrefix(prefix) { return proxyRes => { const location = proxyRes.headers.location; if (location && location.startsWith("/")) proxyRes.headers.location = prefix + location; }; }
+
+const setupRoutes = require("./setup-routes");
+app.use("/setup", setupRoutes);
+
 app.use("/hls", createProxyMiddleware({ target:"http://127.0.0.1:8888", changeOrigin:true, pathRewrite:{ "^/hls":"" }, ws:true, onProxyRes:fixRedirectPrefix("/hls") }));
 app.use("/webrtc", createProxyMiddleware({ target:"http://127.0.0.1:8889", changeOrigin:true, pathRewrite:{ "^/webrtc":"" }, ws:true, onProxyRes:fixRedirectPrefix("/webrtc") }));
 app.use("/overlay", createOverlayRouter({
