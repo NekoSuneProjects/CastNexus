@@ -1,12 +1,6 @@
 name: Build
 
 on:
-  push:
-    branches:
-      - main
-      - beta
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       channel:
@@ -30,7 +24,6 @@ env:
 
 jobs:
   meta:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -86,7 +79,6 @@ jobs:
           echo "CastNexus $VERSION ($CHANNEL)"
 
   build-electron:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         include:
@@ -114,7 +106,6 @@ jobs:
             electron/dist/*.zip
 
   build-cli:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         include:
@@ -139,7 +130,7 @@ jobs:
             cli/dist/castnexus-cli*
 
   docker-publish:
-    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: meta
     strategy:
       fail-fast: false
       matrix:
@@ -160,13 +151,8 @@ jobs:
       - id: tags
         shell: bash
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-            if [[ "$VERSION" == *-* ]]; then CHANNEL=beta; else CHANNEL=stable; fi
-          else
-            VERSION="dev"
-            CHANNEL="dev"
-          fi
+          VERSION="${{ needs.meta.outputs.version }}"
+          CHANNEL="${{ needs.meta.outputs.channel }}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
       - name: Build and push ${{ matrix.service }} image
@@ -191,7 +177,6 @@ jobs:
           cache-to: type=gha,mode=max,scope=castnexus-${{ matrix.service }}
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: [meta, build-electron, build-cli, docker-publish]
     runs-on: ubuntu-latest
     permissions:
