@@ -22,6 +22,11 @@ app.commandLine.appendSwitch("enable-zero-copy");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+// The hidden music scene must decode its <audio> element to feed WebAudio's
+// analyser. Without this, play() is rejected for lack of a user gesture and
+// the spectrum only changes when its one-second metadata poll seeks again.
+// webContents.setAudioMuted(true) still prevents any local speaker output.
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
 // Setup file-based logging for debugging startup issues
 const logFile = path.join(os.homedir(), ".castnexus", "startup.log");
