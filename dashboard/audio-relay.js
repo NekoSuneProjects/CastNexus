@@ -45,14 +45,26 @@ class PcmAudioRelay {
     this.pacer=null;
     this.inputServer=null;
     this.outputServer=null;
+    this.worker=null;
+    this.readyPromise=null;
+    this._resolveReady=null;
   }
+
+  // Resolves once both loopback listeners accept connections. FFmpeg taps that
+  // connect before that just exit and get respawned, which is survivable but
+  // noisy - and on Docker it delayed first audio by seconds.
+  ready(){return this.readyPromise||Promise.resolve(!isMainThread);}
 
   start(){
     if(isMainThread){
-      if(this.worker)return;
+      if(this.worker)return this.readyPromise;
+      this.readyPromise=new Promise(resolve=>{this._resolveReady=resolve;});
+      const settle=value=>{const resolve=this._resolveReady;this._resolveReady=null;resolve?.(value);};
       this.worker=new Worker(__filename,{workerData:{castNexusPcmRelay:true,inputPort:this.inputPort,outputPort:this.outputPort}});
-      this.worker.on("error",error=>this.logger.warn?.(`[audio-relay:${this.inputPort}] worker error: ${error.message}`));
-      return;
+      this.worker.on("message",message=>{if(message?.ready)settle(true);});
+      this.worker.on("error",error=>{this.logger.warn?.(`[audio-relay:${this.inputPort}] worker error: ${error.message}`);settle(false);});
+      this.worker.on("exit",()=>settle(false));
+      return this.readyPromise;
     }
     if(this.pacer)return;
     this.inputServer=net.createServer(socket=>{
@@ -73,8 +85,10 @@ class PcmAudioRelay {
       socket.on("close",clear);
       socket.on("error",clear);
     });
+    let pendingListeners=2;
+    const announceReady=()=>{if(--pendingListeners===0)parentPort?.postMessage({ready:true});};
     this.inputServer.on("error",error=>this.logger.warn?.(`[audio-relay:${this.inputPort}] input error: ${error.message}`));
-    this.inputServer.listen(this.inputPort,"127.0.0.1");
+    this.inputServer.listen(this.inputPort,"127.0.0.1",announceReady);
 
     this.outputServer=net.createServer(socket=>{
       if(this.consumer){try{this.consumer.destroy();}catch{}}
@@ -86,7 +100,7 @@ class PcmAudioRelay {
       socket.on("close",()=>{if(this.consumer===socket)this.consumer=null;});
     });
     this.outputServer.on("error",error=>this.logger.warn?.(`[audio-relay:${this.outputPort}] output error: ${error.message}`));
-    this.outputServer.listen(this.outputPort,"127.0.0.1");
+    this.outputServer.listen(this.outputPort,"127.0.0.1",announceReady);
     this.pacer=setInterval(()=>this._tick(),TICK_MS);
   }
 
@@ -122,6 +136,9 @@ class PcmAudioRelay {
     if(this.worker){
       const worker=this.worker;
       this.worker=null;
+      this.readyPromise=null;
+      this._resolveReady?.(false);
+      this._resolveReady=null;
       worker.postMessage("stop");
       worker.terminate().catch(()=>{});
       return;

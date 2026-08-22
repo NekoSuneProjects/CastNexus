@@ -5,7 +5,8 @@ function renderSettings() {
     <section class="grid grid-2">
       <div class="card-panel"><div class="card-title-row"><h3>Account</h3><img class="avatar" src="${esc(S.status?.profileImageUrl || "")}" alt=""></div><p>Signed in as <strong>${esc(S.status?.displayName || S.status?.twitchLogin)}</strong> · @${esc(S.status?.twitchLogin || "")}</p><button class="btn btn-ghost btn-sm" data-action="logout">Sign out</button></div>
       <div class="card-panel"><h3>Active workspace</h3><p>${esc(p?.name || "—")} · ${esc(MODE_LABELS[p?.mode] || "—")} · ${p?.canvasMode === "vertical" ? "9:16 Vertical" : "16:9 Landscape"}</p><button class="btn btn-ghost btn-sm" data-nav="profiles">Manage profiles</button></div>
-      <div class="card-panel"><h3>Public playback</h3><p>When a source is live CastNexus exposes WebRTC/WHEP, HLS, RTSP and SRT playback URLs.</p>${S.status?.playback ? Object.entries(S.status.playback).map(([k,v]) => `<label>${esc(k)}</label><div class="copy-field"><input readonly value="${esc(v)}"><button class="btn btn-ghost btn-sm" data-copy="${esc(v)}">Copy</button></div>`).join("") : `<div class="callout">Playback URLs appear once a source is live.</div>`}</div>
+      ${renderPublicPlaybackPanel()}
+      ${renderPublicAddressPanel()}
       <div class="card-panel"><h3>Security notes</h3><p>Use Browser / iframe overlays for third-party widget URLs. They are sandboxed. Raw HTML/CSS overlays are intentionally trusted code and should only contain code you control.</p><div class="callout warn">The real Twitch stream key is only required for Console profiles and is masked after saving. PC and Music profiles use the separate CastNexus-generated PC ingest key.</div></div>
     </section>`;
 }

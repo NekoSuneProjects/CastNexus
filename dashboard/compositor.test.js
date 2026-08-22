@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildChromiumGpuArgs, audioTransportFor, useElectronOffscreen, watchdogActivityAt, audioInputPlan, compositorFilterGraph, videoInputArgs, defaultVideoConfig, electronOffscreenWindowOptions } = require("./compositor");
+const { buildChromiumGpuArgs, audioTransportFor, useElectronOffscreen, watchdogActivityAt, audioInputPlan, compositorFilterGraph, videoInputArgs, framePumpBacklogLimit, nextFrameDelay, resyncFrameIndex, defaultVideoConfig, electronOffscreenWindowOptions } = require("./compositor");
 
 test("Electron install uses its bundled Chromium offscreen renderer", () => {
   assert.equal(useElectronOffscreen("electron", { electron:"37.0.0" }), true);
@@ -86,8 +86,46 @@ test("Windows audio uses independently paced loopback TCP carriers", () => {
   assert.notEqual(transport.music.inputPort, transport.music.outputPort);
 });
 
-test("Linux and Docker audio retain named pipes", () => {
+test("Docker audio gets the same independently paced carriers as Desktop", () => {
   const transport = audioTransportFor("account-profile", "/tmp/castnexus", "linux");
+  assert.equal(transport.fifo, false);
+  assert.equal(transport.paced, true);
+  assert.match(transport.music.output, /^tcp:\/\/127\.0\.0\.1:/);
+  assert.notEqual(transport.music.inputPort, transport.music.outputPort);
+  // Same account must land on the same ports on both platforms so nothing
+  // depends on which renderer produced the transport.
+  assert.deepEqual(transport, audioTransportFor("account-profile", "C:\temp\castnexus", "win32"));
+});
+
+test("named pipes remain available on Linux as an explicit fallback", () => {
+  const transport = audioTransportFor("account-profile", "/tmp/castnexus", "linux", { forceFifo:true });
   assert.equal(transport.fifo, true);
   assert.match(transport.music.input.replaceAll("\\", "/"), /\/tmp\/castnexus\/music-audio\.fifo$/);
+});
+
+test("the Docker frame pump allows whole frames instead of a flat 256 KB", () => {
+  // A 1080p screencast JPEG on a busy scene comfortably exceeds 256 KB, so the
+  // old cap dropped nearly every frame as soon as the encoder blinked.
+  assert.ok(framePumpBacklogLimit(300 * 1024) > 256 * 1024);
+  assert.equal(framePumpBacklogLimit(300 * 1024), 300 * 1024 * 4);
+  assert.equal(framePumpBacklogLimit(1024), 512 * 1024, "tiny frames still get a usable floor");
+  assert.equal(framePumpBacklogLimit(64 * 1024 * 1024), 32 * 1024 * 1024, "and a hard ceiling so backlog never becomes latency");
+});
+
+test("the Docker frame pump is scheduled on the wall clock, not a drifting interval", () => {
+  const interval = 1000 / 30;
+  // Frame 30 of a 30 fps stream is due one second after the pump started,
+  // whatever time the previous tick actually ran at.
+  assert.equal(nextFrameDelay(1000, 30, interval, 1000), 1000);
+  assert.equal(nextFrameDelay(1000, 30, interval, 1990), 10);
+  assert.equal(nextFrameDelay(1000, 30, interval, 2500), 0, "never schedules into the past");
+});
+
+test("a badly late frame pump resynchronises instead of bursting frames", () => {
+  const interval = 1000 / 30;
+  // Slightly behind: keep the schedule so short stalls are absorbed.
+  assert.equal(resyncFrameIndex(0, 10, interval, 10 * interval + 2 * interval), 10);
+  // A whole second behind: bursting 30 frames with wallclock timestamps would
+  // just turn the lateness into permanent latency, so skip ahead instead.
+  assert.equal(resyncFrameIndex(0, 10, interval, 40 * interval), 40);
 });

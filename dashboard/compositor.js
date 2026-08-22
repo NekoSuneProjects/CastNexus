@@ -11,8 +11,16 @@ const { cpuX264Preset, liveMuxArgs } = require("./rtmp-pipeline");
 const { PcmAudioRelay } = require("./audio-relay");
 const FFMPEG_BIN = process.env.FFMPEG_BIN || "ffmpeg";
 
-function audioTransportFor(accountId, runtimeDir, platform = process.platform) {
-  if (platform !== "win32") return {
+// Both Desktop and Docker now carry PCM over the independently paced relay.
+// FFmpeg treats audio as the timing master, so the producer must never stall
+// (video delivery stalls with it) and must never build a backlog (the backlog
+// becomes A/V drift). A named pipe gave Docker neither guarantee: whatever the
+// previous song's decoder had already written stayed buffered in the pipe and
+// played on into the next track. Set COMPOSITOR_AUDIO_FIFO=true to fall back
+// to the old Linux named pipes.
+function audioTransportFor(accountId, runtimeDir, platform = process.platform, options = {}) {
+  const forceFifo=String(options.forceFifo??process.env.COMPOSITOR_AUDIO_FIFO??"").toLowerCase()==="true";
+  if (platform !== "win32" && forceFifo) return {
     live:{ input:path.join(runtimeDir,"live-audio.fifo"), output:path.join(runtimeDir,"live-audio.fifo") },
     music:{ input:path.join(runtimeDir,"music-audio.fifo"), output:path.join(runtimeDir,"music-audio.fifo") },
     fifo:true,
@@ -64,6 +72,34 @@ function compositorFilterGraph({ fps, encoder, audioPlan }) {
 function videoInputArgs({electronOffscreen,fps,width,height}){
   if(electronOffscreen)return ["-thread_queue_size","1024","-framerate",String(fps),"-use_wallclock_as_timestamps","1","-f","rawvideo","-pixel_format","bgra","-video_size",`${width}x${height}`,"-i","-"];
   return ["-thread_queue_size","1024","-framerate",String(fps),"-use_wallclock_as_timestamps","1","-f","image2pipe","-vcodec","mjpeg","-i","-"];
+}
+
+// Docker's Chromium path pumps the most recent screencast frame at the output
+// cadence (CDP only emits on visual change). Two things decide whether that
+// pump is actually realtime:
+//
+//   * the backlog cap. It used to be a flat 256 KB, but a single 1080p
+//     screencast JPEG can exceed that on its own, so the pump dropped almost
+//     every frame the moment the encoder blinked. Allow a few frames' worth,
+//     matching what the Electron paint path allows for raw BGRA.
+//   * the schedule. setInterval drifts and coalesces under Chromium + FFmpeg
+//     load, which made complete Docker scenes render slower than realtime even
+//     though no frame was missing. Anchor every tick on the wall clock instead.
+function framePumpBacklogLimit(frameBytes, maxFrames = 4) {
+  const bytes=(Number(frameBytes)||0)*maxFrames;
+  return Math.max(512*1024,Math.min(32*1024*1024,bytes));
+}
+
+function nextFrameDelay(startedAt, frameIndex, intervalMs, now) {
+  return Math.max(0,Math.round(startedAt+frameIndex*intervalMs-now));
+}
+
+// If the pump has fallen far behind, resynchronise the schedule rather than
+// bursting the missed frames: the input uses wallclock timestamps, so a burst
+// would only convert lateness into permanent latency.
+function resyncFrameIndex(startedAt, frameIndex, intervalMs, now, maxLagFrames = 4) {
+  const elapsed=(now-startedAt)/intervalMs;
+  return elapsed-frameIndex>maxLagFrames?Math.floor(elapsed):frameIndex;
 }
 
 function electronOffscreenWindowOptions(width, height) {
@@ -130,7 +166,9 @@ class Compositor extends EventEmitter {
     this.lastFrameAt=null;
     this.lastPaintAt=null;
     this.latestFrame=null;
+    this.lastScreencastAt=null;
     this.framePumpTimer=null;
+    this.framePumpRunning=false;
     this.paintKeepaliveTimer=null;
     this.electronOffscreen=useElectronOffscreen();
     this.offscreenWindow=null;
@@ -159,6 +197,7 @@ class Compositor extends EventEmitter {
       frameCount:this.frameCount,
       framesDropped:this.framesDropped,
       lastFrameAt:this.lastFrameAt,
+      lastRenderAt:this.electronOffscreen?this.lastPaintAt:this.lastScreencastAt,
       firstFrameReady:!!this.latestFrame,
       encoder:enc.label,
       hardwareEncoder:!!enc.hardware,
@@ -194,7 +233,7 @@ class Compositor extends EventEmitter {
 
   async _runOnce(){
     fs.mkdirSync(this.runtimeDir,{recursive:true});
-    this._startAudioRelays();
+    await this._startAudioRelays();
     if(this.includeLiveAudio)this._startLiveAudioTap();
     await this._startMusicAudioTap();
     await this._launchBrowser();
@@ -311,6 +350,7 @@ class Compositor extends EventEmitter {
       cdp.send("Page.screencastFrameAck",{sessionId}).catch(()=>{});
       try{
         this.latestFrame=Buffer.from(data,"base64");
+        this.lastScreencastAt=Date.now();
         if(this.debug&&firstCapture){
           firstCapture=false;
           this.logger.log(`[compositor:${this.accountId}] first Chromium frame (${this.latestFrame.length} bytes)`);
@@ -333,14 +373,17 @@ class Compositor extends EventEmitter {
 
   _startFramePump(){
     this._stopFramePump();
-    const interval=Math.max(10,Math.round(1000/Math.max(1,Number(this.video.fps||30))));
-    const pump=()=>{
+    const interval=1000/Math.max(1,Number(this.video.fps||30));
+    const startedAt=Date.now();
+    let frameIndex=0;
+    this.framePumpRunning=true;
+    const writeFrame=()=>{
       const ffmpeg=this.ffmpeg;
       const frame=this.latestFrame;
       if(!ffmpeg||!frame)return;
       const stdin=ffmpeg.stdin;
       if(!stdin?.writable)return;
-      if(stdin.writableLength>256*1024){this.framesDropped++;return;}
+      if(stdin.writableLength>framePumpBacklogLimit(frame.length)){this.framesDropped++;return;}
       try{
         stdin.write(frame);
         this.frameCount++;
@@ -349,12 +392,21 @@ class Compositor extends EventEmitter {
         if(err?.code!=="EPIPE")this.logger.warn(`[compositor:${this.accountId}] frame pump error: ${err.message}`);
       }
     };
-    this.framePumpTimer=setInterval(pump,interval);
-    pump();
+    const tick=()=>{
+      this.framePumpTimer=null;
+      if(!this.framePumpRunning)return;
+      writeFrame();
+      frameIndex++;
+      const now=Date.now();
+      frameIndex=resyncFrameIndex(startedAt,frameIndex,interval,now);
+      this.framePumpTimer=setTimeout(tick,nextFrameDelay(startedAt,frameIndex,interval,now));
+    };
+    tick();
   }
 
   _stopFramePump(){
-    if(this.framePumpTimer){clearInterval(this.framePumpTimer);this.framePumpTimer=null;}
+    this.framePumpRunning=false;
+    if(this.framePumpTimer){clearTimeout(this.framePumpTimer);this.framePumpTimer=null;}
     if(this.paintKeepaliveTimer){clearInterval(this.paintKeepaliveTimer);this.paintKeepaliveTimer=null;}
     if(this.offscreenWindow&&this.electronPaintHandler){
       try{this.offscreenWindow.webContents.removeListener("paint",this.electronPaintHandler);}catch{}
@@ -362,17 +414,23 @@ class Compositor extends EventEmitter {
     this.electronPaintHandler=null;
     this.latestFrame=null;
     this.lastPaintAt=null;
+    this.lastScreencastAt=null;
   }
 
   _fifoPath(name){return path.join(this.runtimeDir,`${name}.fifo`);}
 
-  _startAudioRelays(){
+  async _startAudioRelays(){
     if(!this.audioTransport.paced||this.audioRelays.length)return;
     for(const endpoint of [this.audioTransport.live,this.audioTransport.music]){
       const relay=new PcmAudioRelay({inputPort:endpoint.inputPort,outputPort:endpoint.outputPort,logger:this.logger});
       relay.start();
       this.audioRelays.push(relay);
     }
+    // Wait for the loopback listeners before the FFmpeg taps try to connect,
+    // but never block startup on them: a relay that cannot listen still lets
+    // the taps respawn into it later.
+    const deadline=new Promise(resolve=>setTimeout(resolve,Number(process.env.COMPOSITOR_AUDIO_READY_TIMEOUT_MS||3000)));
+    await Promise.race([Promise.all(this.audioRelays.map(relay=>relay.ready())),deadline]);
   }
 
   _stopAudioRelays(){
@@ -619,4 +677,4 @@ class Compositor extends EventEmitter {
   }
 }
 
-module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan,compositorFilterGraph,videoInputArgs,electronOffscreenWindowOptions};
+module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan,compositorFilterGraph,videoInputArgs,framePumpBacklogLimit,nextFrameDelay,resyncFrameIndex,electronOffscreenWindowOptions};

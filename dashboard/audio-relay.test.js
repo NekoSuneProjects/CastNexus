@@ -25,3 +25,28 @@ test("desktop audio queue stays low latency and discards stale PCM",()=>{
   assert.equal(bytes,TARGET_SOURCE_BUFFER);
   assert.equal(chunks.reduce((sum,chunk)=>sum+chunk.length,0),TARGET_SOURCE_BUFFER);
 });
+
+test("the relay listens before FFmpeg taps connect, on Docker as well as Desktop",async()=>{
+  const net=require("node:net");
+  const {PcmAudioRelay}=require("./audio-relay");
+  const relay=new PcmAudioRelay({inputPort:39412,outputPort:39413,logger:{warn(){}}});
+  try{
+    assert.equal(await relay.start(),true,"start() resolves once both loopback listeners are up");
+    const writer=await new Promise((resolve,reject)=>{const s=net.connect(39412,"127.0.0.1",()=>resolve(s));s.on("error",reject);});
+    const consumer=await new Promise((resolve,reject)=>{const s=net.connect(39413,"127.0.0.1",()=>resolve(s));s.on("error",reject);});
+    // A quarter second of silence in, paced audio out at 48k/stereo/16-bit.
+    writer.write(Buffer.alloc(BYTES_PER_SEC/4));
+    const received=await new Promise(resolve=>{
+      let total=0;
+      consumer.on("data",chunk=>{total+=chunk.length;});
+      setTimeout(()=>resolve(total),400);
+    });
+    // Paced, not dumped: roughly realtime, never the whole queue at once.
+    assert.ok(received>BYTES_PER_SEC*0.15,`expected roughly realtime output, got ${received} bytes`);
+    assert.ok(received<BYTES_PER_SEC*0.75,`expected paced output, got ${received} bytes`);
+    writer.destroy();
+    consumer.destroy();
+  }finally{
+    relay.stop();
+  }
+});

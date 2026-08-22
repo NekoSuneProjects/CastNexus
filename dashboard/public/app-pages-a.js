@@ -136,6 +136,10 @@ function renderOverview() {
         <div class="section-title">Quick scene</div>
         ${sceneButtons()}
       </div>
+    </section>
+    <div class="section-title">Watch this feed</div>
+    <section class="grid">
+      ${renderPublicPlaybackPanel({ title:"Playback URLs", showBase:true })}
     </section>`;
 }
 

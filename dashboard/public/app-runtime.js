@@ -19,6 +19,8 @@ function wirePage() {
   $$('[data-edit-track]',root).forEach(b=>b.onclick=()=>openTrackModal(S.tracks.find(t=>t.id===b.dataset.editTrack)));
   $$('[data-delete-track]',root).forEach(b=>b.onclick=async()=>{ const t=S.tracks.find(x=>x.id===b.dataset.deleteTrack); if(!t)return; if(!(await confirmAction("Delete track",`Remove ${t.title} from ${activeProfile()?.name || "this profile"}'s music library?`)))return; try{await api(musicApiUrl(`/tracks/${encodeURIComponent(t.id)}`, activeProfile()?.id),{method:"DELETE"});await refreshAndRender();toast("Track deleted","success");}catch(e){toast(e.message,"error");} });
 
+  wirePublicAddressPanel(root);
+
   const comp=$("#compositor-toggle",root); if(comp)comp.onchange=async()=>{ try{await api("/api/compositor",{method:"POST",body:{enabled:comp.checked}});S.compositor.enabled=comp.checked;const p=activeProfile();if(p){p.compositorEnabled=comp.checked;await saveProfileStore();}toast(`Compositor ${comp.checked?"enabled":"disabled"}`,"success");}catch(e){comp.checked=!comp.checked;toast(e.message,"error");} };
 
   const file=$("#music-file-input",root); if(file)file.onchange=()=>uploadMusic(file.files);

@@ -120,3 +120,61 @@ For Claude to complete later:
   `https://castnexus.nekosunevr.co.uk` and a direct HTTP IP/local address such
   as `http://192.168.1.10:8090`. Confirm the copied HLS `.m3u8` URL opens from a
   separate device and can be pasted directly into a VRChat video player.
+
+### Status of the two sections above
+
+Code work is done; on-hardware validation is not, because this workstation has
+no Docker, no Pi/VPS and no VRChat client. Validation happens on the Pi from
+the published Docker image.
+
+Implemented (Docker parity):
+
+- `audioTransportFor` now returns the paced loopback-TCP carriers on every
+  platform, so Docker gets the same worker-thread `PcmAudioRelay` that fixed
+  Desktop in `68506f3`: stale PCM is discarded when a new writer connects (song
+  change), the queue is trimmed, and pacing runs off the main event loop.
+  `COMPOSITOR_AUDIO_FIFO=true` restores the old Linux named pipes.
+- The screencast frame pump is anchored to the wall clock (`nextFrameDelay`)
+  instead of `setInterval`, and `resyncFrameIndex` skips ahead when badly late
+  rather than bursting frames - the input uses wallclock timestamps, so a burst
+  would become permanent latency.
+- `framePumpBacklogLimit` replaces the flat 256 KB backlog cap, which was
+  smaller than a single 1080p screencast JPEG and dropped almost every frame
+  whenever the encoder blinked.
+- `PcmAudioRelay.ready()` gives a worker->main handshake so the FFmpeg taps stop
+  racing the loopback listeners; the wait is bounded by
+  `COMPOSITOR_AUDIO_READY_TIMEOUT_MS` (3s) and never blocks startup.
+- Desktop/Electron paths are untouched; the dual-codec public path (AAC for
+  HLS, Opus for WebRTC) from `3456ae0` is preserved.
+
+Implemented (playback endpoints):
+
+- New `dashboard/public-playback.js` builds every URL: explicit base >
+  outermost forwarded hop > request, with bare IPs, `localhost` and `.local`
+  never inferring `https://`. `PUBLIC_MEDIA_HOST` can point RTSP/SRT at a
+  separate host. MediaMTX's own paths are not rewritten.
+- `GET`/`POST /api/public-base-url` persist the override; `PUBLIC_BASE_URL`
+  wins and locks the field in the UI. `/api/status` returns the labelled link
+  list.
+- `dashboard/public/app-playback.js` renders the HLS URL as a prominent
+  "VRChat / media player URL" card with copy/open, then the other clients with
+  friendly labels and hints. Shown on Overview and in Settings.
+
+Still to do on real hardware - run `tools/docker-parity-check.sh <login>`
+inside the container, on both the Pi and the VPS:
+
+- Real-time cadence, A/V drift and audible programme audio measured from the
+  encoded output (the script does this).
+- Audio matching the visible progress/spectrum across at least two automatic
+  song changes (needs eyes and ears).
+- The copied `.m3u8` pasted into a VRChat video player, over both the HTTPS
+  domain and a direct `http://IP:8090`.
+- A real RTMP/Twitch destination not accumulating buffering.
+- CPU-only vs GPU (NVENC/VAAPI) runs, recording fps, CPU/GPU, memory and
+  dropped/duplicated frames.
+
+Known risk not changed here: `config/mediamtx.yml` sets
+`hlsVariant: lowLatency`, which serves fMP4 partial segments. VRChat's
+AVPro/Unity player usually needs `hlsVariant: mpegts`. MediaMTX cannot serve
+both at once and switching raises browser-player latency, so this is flagged
+rather than flipped - decide it after testing on a headset.
