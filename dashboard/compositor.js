@@ -36,6 +36,10 @@ function buildChromiumGpuArgs(gpuEnabled, platform = process.platform) {
   return ["--ignore-gpu-blocklist", "--enable-gpu-rasterization", "--enable-zero-copy", ...backend, "--disable-frame-rate-limit"];
 }
 
+function useElectronOffscreen(installType = process.env.CASTNEXUS_INSTALL_TYPE, versions = process.versions) {
+  return String(installType || "").toLowerCase() === "electron" && !!versions?.electron;
+}
+
 function defaultVideoConfig() {
   const detected = detectEncoder();
   const mode = String(process.env.COMPOSITOR_GPU || "auto").toLowerCase();
@@ -75,6 +79,9 @@ class Compositor extends EventEmitter {
     this.lastFrameAt=null;
     this.latestFrame=null;
     this.framePumpTimer=null;
+    this.paintKeepaliveTimer=null;
+    this.electronOffscreen=useElectronOffscreen();
+    this.offscreenWindow=null;
     this.browser=null;
     this.browserProfileDir=null;
     this.page=null;
@@ -144,10 +151,33 @@ class Compositor extends EventEmitter {
     this._startWatchdog();
     this._startMusicPoll();
     const enc=this.forceCpu?CPU_PROFILE:this.encoder;
-    this.logger.log(`[compositor:${this.accountId}] running (${this.video.width}x${this.video.height}@${this.video.fps}, encoder=${enc.label}, chromiumGpu=${this.video.gpuEnabled})`);
+    const renderer=this.electronOffscreen?"electron-offscreen":"chromium-cdp";
+    this.logger.log(`[compositor:${this.accountId}] running (${this.video.width}x${this.video.height}@${this.video.fps}, encoder=${enc.label}, renderer=${renderer}, chromiumGpu=${this.video.gpuEnabled})`);
   }
 
   async _launchBrowser(){
+    if(this.electronOffscreen){
+      const { BrowserWindow }=require("electron");
+      this.offscreenWindow=new BrowserWindow({
+        width:this.video.width,
+        height:this.video.height,
+        show:false,
+        frame:false,
+        webPreferences:{
+          offscreen:true,
+          backgroundThrottling:false,
+          nodeIntegration:false,
+          contextIsolation:true,
+          sandbox:true,
+        },
+      });
+      this.offscreenWindow.webContents.setFrameRate(Math.max(1,Math.min(Number(this.video.fps||30),60)));
+      this.offscreenWindow.once("closed",()=>{
+        this.offscreenWindow=null;
+        if(this.shouldRun&&this.state!=="stopping")this._scheduleReconnect();
+      });
+      return;
+    }
     const execPath=process.env.PUPPETEER_EXECUTABLE_PATH||"/usr/bin/chromium-browser";
     const profileRoot=path.join(this.runtimeDir,"profiles");
     fs.mkdirSync(profileRoot,{recursive:true});
@@ -173,6 +203,11 @@ class Compositor extends EventEmitter {
   }
 
   async _openScene(){
+    if(this.electronOffscreen){
+      await this.offscreenWindow.webContents.loadURL(this.pageUrl);
+      if(this.debug)this.logger.log(`[compositor:${this.accountId}] scene loaded ${this.pageUrl} in Electron offscreen renderer`);
+      return;
+    }
     this.page=await this.browser.newPage();
     await this.page.setViewport({width:this.video.width,height:this.video.height,deviceScaleFactor:1});
     await this.page.goto(this.pageUrl,{waitUntil:"domcontentloaded",timeout:30000});
@@ -182,6 +217,43 @@ class Compositor extends EventEmitter {
   async _startScreencast(){
     this._stopFramePump();
     this.latestFrame=null;
+    if(this.electronOffscreen){
+      const wc=this.offscreenWindow.webContents;
+      let firstCapture=true;
+      const onPaint=(_event,_dirty,image)=>{
+        const ffmpeg=this.ffmpeg;
+        const stdin=ffmpeg?.stdin;
+        if(!stdin?.writable)return;
+        // Prefer a fresh live frame over building latency during a brief
+        // encoder or network stall. 1080p JPEG frames need more headroom
+        // than the Docker CDP frame pump's single-frame buffer.
+        if(stdin.writableLength>12*1024*1024){this.framesDropped++;return;}
+        let frame;
+        try{frame=image.toJPEG(this.video.screencastQuality);}catch{return;}
+        if(!frame?.length)return;
+        this.latestFrame=frame;
+        this.frameCount++;
+        this.lastFrameAt=Date.now();
+        if(this.debug&&firstCapture){
+          firstCapture=false;
+          this.logger.log(`[compositor:${this.accountId}] first Electron offscreen frame (${frame.length} bytes)`);
+        }
+        try{stdin.write(frame);}catch(err){if(err?.code!=="EPIPE")this.logger.warn(`[compositor:${this.accountId}] offscreen paint error: ${err.message}`);}
+      };
+      this.electronPaintHandler=onPaint;
+      wc.on("paint",onPaint);
+      // Static pages only paint when damaged. Keep the watchdog and FFmpeg
+      // alive without forcing animated scenes to do extra work.
+      this.paintKeepaliveTimer=setInterval(()=>{
+        try{if(this.offscreenWindow&&!this.offscreenWindow.isDestroyed())this.offscreenWindow.webContents.invalidate();}catch{}
+      },1000);
+      wc.invalidate();
+      const firstFrameTimeout=Math.max(1000,Number(process.env.COMPOSITOR_FIRST_FRAME_TIMEOUT_MS||10000));
+      const deadline=Date.now()+firstFrameTimeout;
+      while(!this.latestFrame&&this.shouldRun&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,50));
+      if(!this.latestFrame)throw new Error(`Electron did not produce an offscreen compositor frame within ${firstFrameTimeout}ms`);
+      return;
+    }
     this.client=await this.page.target().createCDPSession();
     const cdp=this.client;
     let firstCapture=true;
@@ -233,6 +305,11 @@ class Compositor extends EventEmitter {
 
   _stopFramePump(){
     if(this.framePumpTimer){clearInterval(this.framePumpTimer);this.framePumpTimer=null;}
+    if(this.paintKeepaliveTimer){clearInterval(this.paintKeepaliveTimer);this.paintKeepaliveTimer=null;}
+    if(this.offscreenWindow&&this.electronPaintHandler){
+      try{this.offscreenWindow.webContents.removeListener("paint",this.electronPaintHandler);}catch{}
+    }
+    this.electronPaintHandler=null;
     this.latestFrame=null;
   }
 
@@ -448,6 +525,7 @@ class Compositor extends EventEmitter {
       }
       if(this.page){try{await this.page.close({runBeforeUnload:false});}catch{}this.page=null;}
       if(this.browser){const proc=this.browser.process?.();try{await this.browser.close();}catch{}try{proc?.kill?.("SIGKILL");}catch{}this.browser=null;}
+      if(this.offscreenWindow){const win=this.offscreenWindow;this.offscreenWindow=null;try{win.destroy();}catch{}}
       this._cleanupBrowserProfile();
     })();
     let timedOut=false;
@@ -470,4 +548,4 @@ class Compositor extends EventEmitter {
   }
 }
 
-module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor};
+module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen};

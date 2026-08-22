@@ -13,6 +13,16 @@ const oauthBridge = require("./oauth-bridge");
 const OFFICIAL_OAUTH_BROKER = "https://castnexus.nekosunevr.co.uk/oauth";
 const APP_ICON = path.join(__dirname, "assets", "icon.png");
 
+// The stream scene is rendered by Electron itself in an invisible offscreen
+// window. Keep that renderer GPU accelerated and prevent Chromium from
+// throttling it as a hidden/occluded window.
+app.commandLine.appendSwitch("ignore-gpu-blocklist");
+app.commandLine.appendSwitch("enable-gpu-rasterization");
+app.commandLine.appendSwitch("enable-zero-copy");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+
 // Setup file-based logging for debugging startup issues
 const logFile = path.join(os.homedir(), ".castnexus", "startup.log");
 function setupLogging() {
@@ -122,9 +132,12 @@ function setupEnvironment() {
   if (downloadManager.hasUsableBinary(tools.ytdlp)) process.env.YTDLP_BIN = tools.ytdlp;
   if (downloadManager.hasUsableBinary(tools.deno)) process.env.DENO_BIN = tools.deno;
 
-  const chromium = downloadManager.findChromium();
-  if (chromium && !process.env.PUPPETEER_EXECUTABLE_PATH) {
-    process.env.PUPPETEER_EXECUTABLE_PATH = chromium;
+  // Docker/server installs still use Puppeteer. Desktop rendering stays
+  // entirely inside Electron's bundled Chromium and never opens a user's
+  // Chrome/Edge profile or extensions.
+  if (process.env.CASTNEXUS_INSTALL_TYPE !== "electron" && !process.env.PUPPETEER_EXECUTABLE_PATH) {
+    const chromium = downloadManager.findChromium();
+    if (chromium) process.env.PUPPETEER_EXECUTABLE_PATH = chromium;
   }
 
   store.set("lanIp", lanIp);
