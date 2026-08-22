@@ -23,14 +23,6 @@ jobs:
         working-directory: dns
         run: npm install
 
-      - name: Install Electron dependencies
-        working-directory: electron
-        run: npm install
-
-      - name: Install CLI dependencies
-        working-directory: cli
-        run: npm install
-
       - name: Syntax check server and browser modules
         shell: bash
         run: |
