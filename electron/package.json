@@ -16,7 +16,7 @@
     "electron-store": "^8.1.0"
   },
   "devDependencies": {
-    "electron": "28.3.3",
+    "electron": "^33.4.11",
     "electron-builder": "^24.6.4"
   },
   "build": {

@@ -1,7 +1,5 @@
 "use strict";
 
-const fs = require("node:fs");
-const path = require("node:path");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
@@ -31,42 +29,33 @@ const profile = {
   },
 };
 
-test("Music 24/7 permanent Program page contains music and master layers", () => {
+test("Music 24/7 renders the animated music scene directly", () => {
   const acc = account(null);
   assert.equal(activeProgramScene(acc), null);
-
-  const url = new URL(programSceneUrl(acc, profile));
-  assert.equal(url.pathname, "/music-program.html");
-  assert.equal(url.searchParams.get("music"), musicSceneUrl(acc, profile));
-  assert.equal(url.searchParams.get("master"), "http://127.0.0.1:8090/overlay/tester/master");
-
-  const shell = fs.readFileSync(path.join(__dirname, "public", "music-program.html"), "utf8");
-  assert.match(shell, /id="music-layer"/);
-  assert.match(shell, /id="scene-layer"/);
-  assert.match(shell, /url\.origin !== location\.origin/);
-  assert.match(shell, /url\.pathname\.startsWith\("\/overlay\/"\)/);
+  assert.equal(programSceneUrl(acc, profile), musicSceneUrl(acc, profile));
 });
 
-test("Program page URL never changes when Music scene changes", () => {
+test("Program scenes switch the compositor to the direct master scene", () => {
   const live = programSceneUrl(account(null), profile);
   const starting = programSceneUrl(account({ kind: "builtin", name: "startingSoon" }), profile);
   const brb = programSceneUrl(account({ kind: "builtin", name: "brb" }), profile);
   const ending = programSceneUrl(account({ kind: "builtin", name: "ending" }), profile);
 
-  assert.equal(starting, live);
-  assert.equal(brb, live);
-  assert.equal(ending, live);
+  assert.notEqual(starting, live);
+  assert.equal(starting, "http://127.0.0.1:8090/overlay/tester/master");
+  assert.equal(brb, starting);
+  assert.equal(ending, starting);
 });
 
-test("Music worker signature is identical for None, Starting Soon, BRB and Ending", () => {
+test("Music worker signature changes when entering or leaving Program Scene mode", () => {
   const live = musicWorkerSignature(account(null), profile);
   const starting = musicWorkerSignature(account({ kind: "builtin", name: "startingSoon" }), profile);
   const brb = musicWorkerSignature(account({ kind: "builtin", name: "brb" }), profile);
   const ending = musicWorkerSignature(account({ kind: "builtin", name: "ending" }), profile);
 
-  assert.equal(starting, live, "entering Program Scene mode must not restart Music24");
-  assert.equal(brb, live, "BRB must stay on the same Music24 worker");
-  assert.equal(ending, live, "Ending must stay on the same Music24 worker");
+  assert.notEqual(starting, live);
+  assert.notEqual(brb, live);
+  assert.notEqual(ending, live);
 });
 
 test("Music 24/7 defaults to an efficient 3500 Kbps video bitrate", () => {

@@ -49,12 +49,25 @@ function audioInputPlan(includeLiveAudio, live, music) {
   const pcm=input=>["-thread_queue_size","1024","-f","s16le","-ar","48000","-ac","2","-i",input];
   if(!includeLiveAudio)return {
     args:pcm(music),
-    filter:"[1:a]aresample=async=1:first_pts=0[a]",
+    filter:"[1:a]asplit=2[aprogram][avis];[aprogram]aresample=async=1:first_pts=0[a]",
+    visualLabel:"avis",
   };
   return {
     args:[...pcm(live),...pcm(music)],
-    filter:"[1:a][2:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0[a]",
+    filter:"[1:a][2:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[amixed];[amixed]asplit=2[aprogram][avis];[aprogram]aresample=async=1:first_pts=0[a]",
+    visualLabel:"avis",
   };
+}
+
+function compositorFilterGraph({ fps, width, height, encoder, audioPlan, musicOnly }) {
+  if(musicOnly&&width>=height){
+    const x=Math.round(width*.453),y=Math.round(height*.541),w=Math.round(width*.519),h=Math.round(height*.148);
+    const bars=48,barWidth=20,spectrumWidth=bars*barWidth,spectrumX=x+Math.round((w-spectrumWidth)/2);
+    const spectrum=`[${audioPlan.visualLabel}]showfreqs=s=${bars}x${h}:r=${fps}:mode=bar:ascale=sqrt:fscale=log:win_size=2048:averaging=2:colors=0x00f0ff:channels=FL,scale=${spectrumWidth}:${h}:flags=neighbor,drawgrid=w=${barWidth}:h=${h}:t=3:c=0x050913[spectrum]`;
+    const video=`[0:v]fps=${fps},setsar=1,drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=0x050913@0.98:t=fill[vbase];[vbase][spectrum]overlay=${spectrumX}:${y}:shortest=1[vraw]`;
+    return [audioPlan.filter,spectrum,video,encoderFilterSuffix(encoder,"vraw","v")].join(";");
+  }
+  return [`[0:v]fps=${fps},setsar=1[vbase]`,encoderFilterSuffix(encoder,"vbase","v"),audioPlan.filter,`[${audioPlan.visualLabel}]anullsink`].join(";");
 }
 
 function electronOffscreenWindowOptions(width, height) {
@@ -255,15 +268,10 @@ class Compositor extends EventEmitter {
       const wc=this.offscreenWindow.webContents;
       let firstCapture=true;
       const onPaint=(_event,_dirty,image)=>{
-        // Record renderer activity before checking FFmpeg backpressure. A
-        // dropped frame means the live pipe is busy, not that Electron's
-        // renderer has stalled.
         this.lastPaintAt=Date.now();
         const ffmpeg=this.ffmpeg;
         const stdin=ffmpeg?.stdin;
         if(!stdin?.writable)return;
-        // Match the proven NekoStreamAPP desktop backend: allow a few hundred
-        // milliseconds of encoded-frame headroom, then prefer fresh paints.
         if(stdin.writableLength>12*1024*1024){this.framesDropped++;return;}
         let frame;
         try{
@@ -286,14 +294,9 @@ class Compositor extends EventEmitter {
       };
       this.electronPaintHandler=onPaint;
       wc.on("paint",onPaint);
-      // Animated scenes already paint at the frame rate selected above. A
-      // slow keepalive is only needed so a completely static page remains
-      // observable by the watchdog; forcing invalidation at 30 Hz overloads
-      // Electron's main process with redundant 1080p JPEG conversions.
-      const invalidateMs=1000;
       this.paintKeepaliveTimer=setInterval(()=>{
         try{if(this.offscreenWindow&&!this.offscreenWindow.isDestroyed())this.offscreenWindow.webContents.invalidate();}catch{}
-      },invalidateMs);
+      },1000);
       wc.invalidate();
       const firstFrameTimeout=Math.max(1000,Number(process.env.COMPOSITOR_FIRST_FRAME_TIMEOUT_MS||10000));
       const deadline=Date.now()+firstFrameTimeout;
@@ -494,7 +497,7 @@ class Compositor extends EventEmitter {
     const bitrate=this.video.bitrate||process.env.COMPOSITOR_VIDEO_BITRATE||(this.video.width<=1280&&this.video.height<=1280?"4000k":"6000k");
     const maxrate=this.video.maxrate||process.env.COMPOSITOR_VIDEO_MAXRATE||bitrate;
     const bufsize=this.video.bufsize||process.env.COMPOSITOR_VIDEO_BUFSIZE||(this.video.width<=1280&&this.video.height<=1280?"8000k":"12000k");
-    const filter=[`[0:v]fps=${this.video.fps},setsar=1[vbase]`,encoderFilterSuffix(enc,"vbase","v"),audioPlan.filter].join(";");
+    const filter=compositorFilterGraph({fps:this.video.fps,width:this.video.width,height:this.video.height,encoder:enc,audioPlan,musicOnly:!this.includeLiveAudio});
     const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats",...globalEncoderArgs(enc),"-thread_queue_size","1024","-framerate",String(this.video.fps),"-use_wallclock_as_timestamps","1","-f","image2pipe","-vcodec","mjpeg","-i","-",...audioPlan.args,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,gop:this.video.fps,bitrate,maxrate,bufsize,x264Preset:process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
     if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg command: ffmpeg ${args.join(" ")}`);
     const started=Date.now();
@@ -616,4 +619,4 @@ class Compositor extends EventEmitter {
   }
 }
 
-module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan,electronOffscreenWindowOptions};
+module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan,compositorFilterGraph,electronOffscreenWindowOptions};

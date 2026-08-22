@@ -80,15 +80,15 @@ function activeProgramScene(account) {
 }
 
 function programSceneUrl(account, profile) {
-  // Music 24/7 always loads one permanent two-layer page:
-  //   bottom = normal spectrum / now-playing music scene
-  //   top    = transparent master Program Scene (SSE-driven)
-  // None simply clears the top layer, so FFmpeg/Chromium never restart when
-  // moving between Music -> Starting Soon -> BRB -> Ending -> Music.
-  const music = musicSceneUrl(account, profile);
-  const master = `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/master`;
-  const params = new URLSearchParams({ music, master });
-  return `${DASHBOARD_ORIGIN}/music-program.html?${params.toString()}`;
+  // Render the active page directly in Electron. Nesting the animated music
+  // canvas inside music-program.html caused offscreen Chromium to coalesce
+  // iframe damage into ~1-3 meaningful paints per second even while FFmpeg
+  // padded the output to 30 fps. NekoStreamAPP's proven desktop backend loads
+  // its scene directly; use the same architecture here.
+  if (activeProgramScene(account)) {
+    return `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/master`;
+  }
+  return musicSceneUrl(account, profile);
 }
 
 function musicWorkerSignature(account, profile) {
@@ -99,8 +99,9 @@ function musicWorkerSignature(account, profile) {
     canvasMode:profile?.canvasMode || "landscape",
     video:profileVideo(profile),
     visual:profile?.musicVisual || {},
-    // currentScene is deliberately excluded. Scene changes are delivered over
-    // SSE inside the permanent master iframe and must never restart the worker.
+    // Direct rendering requires a quick worker reload when the operator enters
+    // or leaves a Program Scene. Normal music playback remains uninterrupted.
+    currentScene:activeProgramScene(account),
   });
 }
 
