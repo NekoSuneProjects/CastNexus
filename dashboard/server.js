@@ -20,6 +20,7 @@ const { homePage, loginPage, privacyPage, termsPage } = require("./site-pages");
 const profileRtmp = require("./profile-rtmp");
 const gpuEncoder = require("./gpu-encoder");
 const { OUTPUT_LAYOUTS, normaliseLayout, destinationFfmpegArgs } = require("./destination-output");
+const { EncryptedFileSessionStore, accountSessionIsValid } = require("./persistent-session-store");
 
 const PORT = Number(process.env.DASHBOARD_PORT || 8090);
 const MEDIAMTX_API = process.env.MEDIAMTX_API || "http://127.0.0.1:9997";
@@ -368,16 +369,19 @@ app.use("/overlay", createOverlayRouter({
   musicFilePathFor:(account, profileId, trackId) => profileMusic.filePathFor(account, profileId, trackId),
 }));
 app.use(express.json());
-app.use(session({ secret:state.sessionSecret, resave:false, saveUninitialized:false, cookie:{ httpOnly:true, sameSite:"lax", secure:"auto" } }));
-function requireAuth(req,res,next){const account=getAccount(req.session.accountId);if(!account)return res.status(401).json({error:"not authenticated"});req.account=account;next();}
+const SESSION_MAX_AGE_MS=Math.max(60*60*1000,Number(process.env.CASTNEXUS_SESSION_MAX_AGE_MS||365*24*60*60*1000));
+const sessionStore=new EncryptedFileSessionStore({dir:process.env.CASTNEXUS_SESSION_DIR||path.join(path.dirname(STATE_FILE),"sessions"),secret:state.sessionSecret});
+app.use(session({name:"castnexus.sid",store:sessionStore,secret:state.sessionSecret,resave:false,saveUninitialized:false,cookie:{httpOnly:true,sameSite:"lax",secure:"auto",maxAge:SESSION_MAX_AGE_MS}}));
+function sessionAccount(req){const account=getAccount(req.session.accountId);if(accountSessionIsValid(account))return account;if(req.session.accountId)req.session.destroy(()=>{});return null;}
+function requireAuth(req,res,next){const account=sessionAccount(req);if(!account)return res.status(401).json({error:"not authenticated or OAuth authorization expired"});req.account=account;next();}
 const STUDIO_HTML = path.join(__dirname,"public","index.html");
 function siteHeaders(res){res.setHeader("X-Content-Type-Options","nosniff");res.setHeader("X-Frame-Options","DENY");res.setHeader("Referrer-Policy","strict-origin-when-cross-origin");}
 function sendPublicPage(res,html){siteHeaders(res);res.setHeader("Cache-Control","public, max-age=300");res.type("html").send(html);}
 app.get("/",(_req,res)=>sendPublicPage(res,homePage()));
 app.get("/privacy",(_req,res)=>sendPublicPage(res,privacyPage()));
 app.get("/terms",(_req,res)=>sendPublicPage(res,termsPage()));
-app.get("/login",(req,res)=>{if(getAccount(req.session.accountId))return res.redirect("/dashboard");sendPublicPage(res,loginPage());});
-app.get("/dashboard",(req,res)=>{if(!getAccount(req.session.accountId))return res.redirect("/login");siteHeaders(res);res.setHeader("Cache-Control","no-store");res.sendFile(STUDIO_HTML);});
+app.get("/login",(req,res)=>{if(sessionAccount(req))return res.redirect("/dashboard");sendPublicPage(res,loginPage());});
+app.get("/dashboard",(req,res)=>{if(!sessionAccount(req))return res.redirect("/login");siteHeaders(res);res.setHeader("Cache-Control","no-store");res.sendFile(STUDIO_HTML);});
 const SOURCE_MODES=["console","pc","both"];
 function needsStreamKeyFor(account){return (account.sourceMode==="console"||account.sourceMode==="both")&&!account.streamKey;}
 function requireOnboarded(req,res,next){if(!req.account.sourceMode)return res.status(403).json({error:"pick a source mode first"});if(needsStreamKeyFor(req.account))return res.status(403).json({error:"must set stream key"});next();}

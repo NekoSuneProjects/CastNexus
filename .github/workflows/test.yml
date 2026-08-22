@@ -129,6 +129,9 @@ jobs:
       - name: CPU-only Chromium compositor regression test
         run: node --test dashboard/compositor.test.js
 
+      - name: Persistent encrypted login session tests
+        run: node --test dashboard/persistent-session-store.test.js
+
       - name: Public RTMP republish regression test
         run: node --test dashboard/public-republish-runtime.test.js
 
