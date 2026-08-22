@@ -93,12 +93,12 @@ async function pollStatus() {
       const ls=liveState();
       const pill=$(".big-status");if(pill)pill.innerHTML=`<span class="status-dot ${ls.key!=="idle"?ls.key:""}"></span>${esc(ls.title)}`;
     }
-  } catch(e){ if(e.status===401){clearInterval(S.pollTimer);setView("login-view");} }
+  } catch(e){ if(e.status===401){clearInterval(S.pollTimer);location.replace("/login");} }
 }
 
 async function logout() {
   try{await api("/api/logout",{method:"POST"});}catch{}
-  if(S.pollTimer)clearInterval(S.pollTimer);stopMusicNowPolling();setView("login-view");
+  if(S.pollTimer)clearInterval(S.pollTimer);stopMusicNowPolling();location.replace("/login");
 }
 
 async function setupMode(mode) {
@@ -122,6 +122,7 @@ async function enterApp() {
   // the newly created profile gets its own music bucket immediately.
   if(S.activeProfileId) await fetchCore();
   setView("app-view");
+  if(location.pathname!=="/dashboard")history.replaceState(null,"","/dashboard"+location.search);
   updateChrome();renderProfileSelect();renderPage();
   if(S.pollTimer)clearInterval(S.pollTimer);S.pollTimer=setInterval(pollStatus,2500);
 }
@@ -133,7 +134,7 @@ async function boot() {
     if(S.status.needsStreamKey){setView("streamkey-view");return;}
     await enterApp();
   } catch(e) {
-    if(e.status===401)setView("login-view");
+    if(e.status===401)location.replace("/login");
     else {setView("login-view");toast(e.message,"error");}
   }
 }

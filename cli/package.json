@@ -26,6 +26,7 @@
     ],
     "scripts": [
       "../dashboard/server.js",
+      "../dashboard/site-pages.js",
       "../dashboard/overlays.js",
       "../dashboard/scenes.js",
       "../dashboard/music-scene.js",

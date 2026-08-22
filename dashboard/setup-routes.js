@@ -9,7 +9,7 @@ function isSetupComplete(req) {
 
 router.get("/", (req, res) => {
   if (isSetupComplete(req)) {
-    return res.redirect("/");
+    return res.redirect("/dashboard");
   }
   res.sendFile(__dirname + "/public/setup.html");
 });

@@ -183,7 +183,9 @@ The web dashboard is a responsive dark/glass broadcast control interface with:
 Open it at:
 
 ```text
-http://<CASTNEXUS_HOST>:8090
+Homepage: http://<CASTNEXUS_HOST>:8090/
+Login:    http://<CASTNEXUS_HOST>:8090/login
+Studio:   http://<CASTNEXUS_HOST>:8090/dashboard
 ```
 
 ---

@@ -54,6 +54,7 @@ jobs:
           node --check dns/server.js
           node --check oauth-broker/server.js
           node --check dashboard/hosted-oauth.js
+          node --check dashboard/site-pages.js
           bash -n intercept/intercept.sh
           node --check dashboard/public/app-brand.js
           node --check dashboard/public/app-core.js
@@ -77,6 +78,7 @@ jobs:
         run: |
           node --test oauth-broker/server.test.js
           node --test dashboard/hosted-oauth.test.js
+          node --test dashboard/site-pages.test.js
 
       - name: VPS intercept configuration smoke test
         shell: bash

@@ -5,7 +5,18 @@ const express = require("express");
 
 const PORT = Number(process.env.OAUTH_BROKER_PORT || 8091);
 const PUBLIC_URL = String(process.env.OAUTH_BROKER_PUBLIC_URL || "").replace(/\/$/, "");
+const SITE_URL = String(process.env.CASTNEXUS_SITE_URL || PUBLIC_URL.replace(/\/oauth$/, "")).replace(/\/$/, "");
 const SIGNING_SECRET = process.env.OAUTH_BROKER_SIGNING_SECRET || "";
+function brokerMountPath(publicUrl = PUBLIC_URL) {
+  try {
+    const pathname = new URL(publicUrl).pathname.replace(/\/$/, "");
+    return pathname === "/" ? "" : pathname;
+  } catch { return ""; }
+}
+function stripBrokerMount(url, mountPath = brokerMountPath()) {
+  if (!mountPath || (url !== mountPath && !url.startsWith(`${mountPath}/`) && !url.startsWith(`${mountPath}?`))) return url;
+  return url.slice(mountPath.length) || "/";
+}
 const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID || "";
 const TWITCH_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET || "";
 const GOOGLE_CLIENT_ID = process.env.YOUTUBE_CLIENT_ID || "";
@@ -132,10 +143,18 @@ function createApp() {
   const app = express();
   if (TRUST_PROXY) app.set("trust proxy", TRUST_PROXY);
   app.disable("x-powered-by");
+  // Support reverse proxies that either preserve or strip the public mount
+  // path. This keeps /oauth portable across Nginx, OpenResty and managed
+  // proxy configurations without exposing a second public service.
+  app.use((req, _res, next) => {
+    req.url = stripBrokerMount(req.url);
+    next();
+  });
   app.use(securityHeaders);
   app.use(express.json({ limit:"16kb", strict:true }));
 
-  app.get("/health", (_req, res) => res.json({ ok:true, providers:{ twitch:providerConfigured("twitch"), youtube:providerConfigured("youtube") } }));
+  app.get("/", (_req, res) => res.json({ service:"CastNexus OAuth broker", ok:true, homepage:SITE_URL, privacy:`${SITE_URL}/privacy`, terms:`${SITE_URL}/terms` }));
+  app.get("/health", (_req, res) => res.json({ ok:true, providers:{ twitch:providerConfigured("twitch"), youtube:providerConfigured("youtube") }, legal:{ privacy:`${SITE_URL}/privacy`, terms:`${SITE_URL}/terms` } }));
   app.post("/v1/transactions", rateLimit({ limit:20 }), (req, res) => {
     pruneTransactions();
     const provider = String(req.body?.provider || "");
@@ -247,4 +266,4 @@ if (require.main === module) {
   catch (error) { console.error(`[oauth-broker] ${error.message}`); process.exit(1); }
 }
 
-module.exports = { createApp, base64url, sha256, safeEqual, verifyOauthState, validChallenge, signBrokerToken, verifyBrokerToken };
+module.exports = { createApp, base64url, sha256, safeEqual, verifyOauthState, validChallenge, signBrokerToken, verifyBrokerToken, brokerMountPath, stripBrokerMount };

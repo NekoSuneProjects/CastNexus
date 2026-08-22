@@ -16,6 +16,7 @@ const { createTwitchApi } = require("./twitch-api");
 const { createMediaMtxRecordings } = require("./mediamtx-recordings");
 const { createYoutubeUploadService } = require("./youtube-upload");
 const { createHostedOauth } = require("./hosted-oauth");
+const { homePage, loginPage, privacyPage, termsPage } = require("./site-pages");
 const profileRtmp = require("./profile-rtmp");
 const gpuEncoder = require("./gpu-encoder");
 const { OUTPUT_LAYOUTS, normaliseLayout, destinationFfmpegArgs } = require("./destination-output");
@@ -368,6 +369,14 @@ app.use("/overlay", createOverlayRouter({
 app.use(express.json());
 app.use(session({ secret:state.sessionSecret, resave:false, saveUninitialized:false, cookie:{ httpOnly:true, sameSite:"lax", secure:"auto" } }));
 function requireAuth(req,res,next){const account=getAccount(req.session.accountId);if(!account)return res.status(401).json({error:"not authenticated"});req.account=account;next();}
+const STUDIO_HTML = path.join(__dirname,"public","index.html");
+function siteHeaders(res){res.setHeader("X-Content-Type-Options","nosniff");res.setHeader("X-Frame-Options","DENY");res.setHeader("Referrer-Policy","strict-origin-when-cross-origin");}
+function sendPublicPage(res,html){siteHeaders(res);res.setHeader("Cache-Control","public, max-age=300");res.type("html").send(html);}
+app.get("/",(_req,res)=>sendPublicPage(res,homePage()));
+app.get("/privacy",(_req,res)=>sendPublicPage(res,privacyPage()));
+app.get("/terms",(_req,res)=>sendPublicPage(res,termsPage()));
+app.get("/login",(req,res)=>{if(getAccount(req.session.accountId))return res.redirect("/dashboard");sendPublicPage(res,loginPage());});
+app.get("/dashboard",(req,res)=>{if(!getAccount(req.session.accountId))return res.redirect("/login");siteHeaders(res);res.setHeader("Cache-Control","no-store");res.sendFile(STUDIO_HTML);});
 const SOURCE_MODES=["console","pc","both"];
 function needsStreamKeyFor(account){return (account.sourceMode==="console"||account.sourceMode==="both")&&!account.streamKey;}
 function requireOnboarded(req,res,next){if(!req.account.sourceMode)return res.status(403).json({error:"pick a source mode first"});if(needsStreamKeyFor(req.account))return res.status(403).json({error:"must set stream key"});next();}
@@ -394,8 +403,8 @@ app.get("/auth/hosted/:provider/status",async(req,res)=>{
   if(!flow||flow.provider!==provider)return res.status(404).json({error:"authorization request not found"});
   if(Date.now()>flow.expiresAt){delete req.session.hostedOauth;return res.status(410).json({error:"authorization request expired"});}
   try{const result=await hostedOauth.exchange(flow);if(result.pending)return res.status(202).json({status:"pending"});delete req.session.hostedOauth;
-    if(provider==="twitch"){const account=loginTwitchUser(req,result.result.user);account.oauthBrokerToken=result.result.brokerToken;saveState(state);return res.json({ok:true,redirect:"/"});}
-    const account=getAccount(req.session.accountId);if(!account)return res.status(401).json({error:"Sign in with Twitch first"});youtubeUploads.storeTokens(account,result.result);res.json({ok:true,redirect:"/?youtube=connected"});
+    if(provider==="twitch"){const account=loginTwitchUser(req,result.result.user);account.oauthBrokerToken=result.result.brokerToken;saveState(state);return res.json({ok:true,redirect:"/dashboard"});}
+    const account=getAccount(req.session.accountId);if(!account)return res.status(401).json({error:"Sign in with Twitch first"});youtubeUploads.storeTokens(account,result.result);res.json({ok:true,redirect:"/dashboard?youtube=connected"});
   }catch(err){delete req.session.hostedOauth;res.status(err.status||400).json({error:err.message});}
 });
 
@@ -415,11 +424,11 @@ app.get("/auth/twitch/callback",async(req,res)=>{
     const tokenRes=await fetch("https://id.twitch.tv/oauth2/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:TWITCH_CLIENT_ID,client_secret:TWITCH_CLIENT_SECRET,code,grant_type:"authorization_code",redirect_uri:TWITCH_REDIRECT_URI})});
     const tokenData=await tokenRes.json();if(!tokenRes.ok)throw new Error(tokenData.message||"token exchange failed");
     const userRes=await fetch("https://api.twitch.tv/helix/users",{headers:{Authorization:`Bearer ${tokenData.access_token}`,"Client-Id":TWITCH_CLIENT_ID}});const userData=await userRes.json();if(!userRes.ok||!userData.data?.[0])throw new Error("failed to fetch Twitch user info");
-    loginTwitchUser(req,userData.data[0]);res.redirect("/");
+    loginTwitchUser(req,userData.data[0]);res.redirect("/dashboard");
   }catch(err){console.error("[dashboard] Twitch OAuth error:",err.message);res.status(500).send("Twitch login failed - please try again");}
 });
 app.get("/auth/youtube",requireAuth,(req,res)=>{if(hostedOauth.enabled())return beginHostedOauth(req,res,"youtube");if(!youtubeUploads.configured())return res.status(500).send("YouTube OAuth is not configured");const oauthState=crypto.randomBytes(24).toString("hex");req.session.youtubeOauthState=oauthState;const url=new URL("https://accounts.google.com/o/oauth2/v2/auth");url.searchParams.set("client_id",YOUTUBE_CLIENT_ID);url.searchParams.set("redirect_uri",YOUTUBE_REDIRECT_URI);url.searchParams.set("response_type","code");url.searchParams.set("scope","https://www.googleapis.com/auth/youtube.upload");url.searchParams.set("access_type","offline");url.searchParams.set("prompt","consent");url.searchParams.set("include_granted_scopes","true");url.searchParams.set("state",oauthState);res.redirect(url.toString());});
-app.get("/auth/youtube/callback",async(req,res)=>{const account=getAccount(req.session.accountId);if(!account)return res.status(401).send("Sign in to CastNexus with Twitch first");const{code,state:returnedState,error,error_description}=req.query;if(error)return res.status(400).send(`YouTube authorization failed: ${error_description||error}`);if(!code||!returnedState||returnedState!==req.session.youtubeOauthState)return res.status(400).send("Invalid YouTube OAuth state");delete req.session.youtubeOauthState;try{youtubeUploads.storeTokens(account,await youtubeUploads.exchangeCode(String(code)));res.redirect("/?youtube=connected");}catch(err){res.status(500).send(`YouTube authorization failed: ${err.message}`);}});
+app.get("/auth/youtube/callback",async(req,res)=>{const account=getAccount(req.session.accountId);if(!account)return res.status(401).send("Sign in to CastNexus with Twitch first");const{code,state:returnedState,error,error_description}=req.query;if(error)return res.status(400).send(`YouTube authorization failed: ${error_description||error}`);if(!code||!returnedState||returnedState!==req.session.youtubeOauthState)return res.status(400).send("Invalid YouTube OAuth state");delete req.session.youtubeOauthState;try{youtubeUploads.storeTokens(account,await youtubeUploads.exchangeCode(String(code)));res.redirect("/dashboard?youtube=connected");}catch(err){res.status(500).send(`YouTube authorization failed: ${err.message}`);}});
 
 app.post("/api/logout",(req,res)=>req.session.destroy(()=>res.json({ok:true})));
 app.post("/api/streamkey",requireAuth,(req,res)=>{const{streamKey}=req.body||{};if(!streamKey||!String(streamKey).trim())return res.status(400).json({error:"stream key is required"});req.account.streamKey=String(streamKey).trim();saveState(state);res.json({ok:true});});
@@ -464,5 +473,5 @@ app.put("/api/destinations/:id",requireAuth,requireOnboarded,(req,res)=>{const d
 app.delete("/api/destinations/:id",requireAuth,requireOnboarded,(req,res)=>{const dest=findDestination(req.account,req.params.id);if(!dest)return res.status(404).json({error:"unknown destination"});stopDestination(req.account.twitchUserId,dest.id);req.account.destinations=req.account.destinations.filter(d=>d.id!==dest.id);saveState(state);res.json({ok:true});});
 app.post("/api/destinations/:id/toggle",requireAuth,requireOnboarded,(req,res)=>{const dest=findDestination(req.account,req.params.id);if(!dest)return res.status(404).json({error:"unknown destination"});dest.enabled=Boolean(req.body?.enabled);saveState(state);const source=destinationSourcePathFor(req.account);if(source){if(dest.enabled)startDestination(req.account,dest,source);else stopDestination(req.account.twitchUserId,dest.id);}res.json({ok:true});});
 
-app.use(express.static(path.join(__dirname,"public")));
+app.use(express.static(path.join(__dirname,"public"),{index:false}));
 app.listen(PORT,()=>{const encoder=gpuEncoder.status().selected;console.log(`[dashboard] listening on :${PORT}`);console.log(`[dashboard] video encoder: ${encoder.label}${encoder.hardware?" (hardware)":" (software fallback)"}`);if(hostedOauth.enabled())console.log(`[dashboard] hosted OAuth broker: ${hostedOauth.baseUrl}`);if(!hostedOauth.enabled()&&(!TWITCH_CLIENT_ID||!TWITCH_CLIENT_SECRET))console.warn("[dashboard] Twitch OAuth is not configured");if(!hostedOauth.enabled()&&(!YOUTUBE_CLIENT_ID||!YOUTUBE_CLIENT_SECRET))console.warn("[dashboard] YouTube OAuth is not configured");});

@@ -28,8 +28,9 @@ docker compose -f docker-compose.oauth-broker.yml up -d
 ```
 
 Configure the existing HTTPS reverse proxy so the public `/oauth` location
-forwards to `http://127.0.0.1:8091` **after stripping the `/oauth` prefix**.
-For example, Nginx uses a trailing slash on `proxy_pass`:
+forwards to `http://127.0.0.1:8091`. The broker accepts both preserved and
+stripped `/oauth` prefixes. For example, Nginx can strip it with a trailing
+slash on `proxy_pass`:
 
 ```nginx
 location /oauth/ {
@@ -56,6 +57,23 @@ Verify deployment with:
 ```text
 https://castnexus.nekosunevr.co.uk/oauth/health
 ```
+
+Public CastNexus application pages are served by the main dashboard, not the
+OAuth broker:
+
+```text
+Homepage:       https://castnexus.nekosunevr.co.uk/
+Login:          https://castnexus.nekosunevr.co.uk/login
+Studio:         https://castnexus.nekosunevr.co.uk/dashboard
+Privacy policy: https://castnexus.nekosunevr.co.uk/privacy
+Terms:          https://castnexus.nekosunevr.co.uk/terms
+```
+
+Use the homepage, privacy-policy and terms URLs in the Google OAuth consent
+screen and other provider application settings. `/oauth/` remains a narrowly
+scoped global authentication proxy for CastNexus installations. Review the policy text and
+ensure the stated operator identity, contact route, infrastructure log
+retention and operational practices match the production deployment.
 
 ## Security properties
 

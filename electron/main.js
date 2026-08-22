@@ -363,7 +363,7 @@ async function runExternalLogin(provider, port) {
       dashboardPort: port,
       session: mainWindow.webContents.session,
     });
-    mainWindow?.loadURL(`http://localhost:${port}/`);
+    mainWindow?.loadURL(`http://localhost:${port}/dashboard`);
     mainWindow?.focus();
   } catch (err) {
     console.error(`[oauth] ${provider} sign-in failed: ${err.message}`);
@@ -400,7 +400,7 @@ async function openMainWindow() {
 
   // localhost, not 127.0.0.1 — the Twitch OAuth redirect URI uses localhost and
   // the origins must match or the session cookie is dropped on callback.
-  mainWindow.loadURL(`http://localhost:${port}`);
+  mainWindow.loadURL(`http://localhost:${port}/dashboard`);
   mainWindow.once("ready-to-show", () => mainWindow?.show());
 
   // Sign-in must happen in the user's real browser, and anything else pointing
