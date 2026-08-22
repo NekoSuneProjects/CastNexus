@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildChromiumGpuArgs, audioTransportFor, useElectronOffscreen, watchdogActivityAt, audioInputPlan, compositorFilterGraph, defaultVideoConfig, electronOffscreenWindowOptions } = require("./compositor");
+const { buildChromiumGpuArgs, audioTransportFor, useElectronOffscreen, watchdogActivityAt, audioInputPlan, compositorFilterGraph, videoInputArgs, defaultVideoConfig, electronOffscreenWindowOptions } = require("./compositor");
 
 test("Electron install uses its bundled Chromium offscreen renderer", () => {
   assert.equal(useElectronOffscreen("electron", { electron:"37.0.0" }), true);
@@ -50,6 +50,13 @@ test("Electron offscreen dimensions describe the content surface", () => {
   assert.equal(options.height,1080);
   assert.equal(options.useContentSize,true);
   assert.equal(options.webPreferences.offscreen,true);
+});
+
+test("Electron sends raw BGRA frames without main-process JPEG compression",()=>{
+  const args=videoInputArgs({electronOffscreen:true,fps:30,width:1920,height:1080});
+  assert.deepEqual(args.slice(-8),["-f","rawvideo","-pixel_format","bgra","-video_size","1920x1080","-i","-"]);
+  assert.doesNotMatch(args.join(" "),/mjpeg/);
+  assert.match(videoInputArgs({electronOffscreen:false,fps:30,width:1920,height:1080}).join(" "),/image2pipe .*mjpeg/);
 });
 
 test("CPU-only Chromium keeps software rasterization available", () => {

@@ -70,6 +70,11 @@ function compositorFilterGraph({ fps, width, height, encoder, audioPlan, musicOn
   return [`[0:v]fps=${fps},setsar=1[vbase]`,encoderFilterSuffix(encoder,"vbase","v"),audioPlan.filter,`[${audioPlan.visualLabel}]anullsink`].join(";");
 }
 
+function videoInputArgs({electronOffscreen,fps,width,height}){
+  if(electronOffscreen)return ["-thread_queue_size","1024","-framerate",String(fps),"-f","rawvideo","-pixel_format","bgra","-video_size",`${width}x${height}`,"-i","-"];
+  return ["-thread_queue_size","1024","-framerate",String(fps),"-use_wallclock_as_timestamps","1","-f","image2pipe","-vcodec","mjpeg","-i","-"];
+}
+
 function electronOffscreenWindowOptions(width, height) {
   return {
     width,
@@ -272,7 +277,7 @@ class Compositor extends EventEmitter {
         const ffmpeg=this.ffmpeg;
         const stdin=ffmpeg?.stdin;
         if(!stdin?.writable)return;
-        if(stdin.writableLength>12*1024*1024){this.framesDropped++;return;}
+        if(stdin.writableLength>32*1024*1024){this.framesDropped++;return;}
         let frame;
         try{
           const size=image.getSize();
@@ -280,7 +285,11 @@ class Compositor extends EventEmitter {
             ? image
             : image.resize({width:this.video.width,height:this.video.height,quality:"good"});
           if(firstCapture&&exact!==image)this.logger.warn(`[compositor:${this.accountId}] Electron painted ${size.width}x${size.height}; correcting to ${this.video.width}x${this.video.height}`);
-          frame=exact.toJPEG(this.video.screencastQuality);
+          // NativeImage bitmaps are tightly packed BGRA on Windows/Linux.
+          // Passing them directly avoids synchronously JPEG-compressing every
+          // 1080p frame in Electron's main process, which reduced complete
+          // scene motion to a few updates per second despite a 30 fps page.
+          frame=exact.getBitmap();
         }catch{return;}
         if(!frame?.length)return;
         this.latestFrame=frame;
@@ -498,7 +507,7 @@ class Compositor extends EventEmitter {
     const maxrate=this.video.maxrate||process.env.COMPOSITOR_VIDEO_MAXRATE||bitrate;
     const bufsize=this.video.bufsize||process.env.COMPOSITOR_VIDEO_BUFSIZE||(this.video.width<=1280&&this.video.height<=1280?"8000k":"12000k");
     const filter=compositorFilterGraph({fps:this.video.fps,width:this.video.width,height:this.video.height,encoder:enc,audioPlan,musicOnly:!this.includeLiveAudio});
-    const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats",...globalEncoderArgs(enc),"-thread_queue_size","1024","-framerate",String(this.video.fps),"-use_wallclock_as_timestamps","1","-f","image2pipe","-vcodec","mjpeg","-i","-",...audioPlan.args,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,gop:this.video.fps,bitrate,maxrate,bufsize,x264Preset:process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
+    const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats",...globalEncoderArgs(enc),...videoInputArgs({electronOffscreen:this.electronOffscreen,fps:this.video.fps,width:this.video.width,height:this.video.height}),...audioPlan.args,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,gop:this.video.fps,bitrate,maxrate,bufsize,x264Preset:process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
     if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg command: ffmpeg ${args.join(" ")}`);
     const started=Date.now();
     this.ffmpeg=spawn(FFMPEG_BIN,args,{stdio:["pipe","ignore","pipe"]});
@@ -619,4 +628,4 @@ class Compositor extends EventEmitter {
   }
 }
 
-module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan,compositorFilterGraph,electronOffscreenWindowOptions};
+module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan,compositorFilterGraph,videoInputArgs,electronOffscreenWindowOptions};
