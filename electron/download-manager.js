@@ -19,30 +19,48 @@ function getPlatformArch() {
   return { platform, arch };
 }
 
-async function downloadFile(url, outputPath, onProgress) {
+async function downloadFile(url, outputPath, onProgress, maxRedirects = 5) {
   return new Promise((resolve, reject) => {
     const dir = path.dirname(outputPath);
     fs.mkdirSync(dir, { recursive: true });
 
-    const file = createWriteStream(outputPath);
-    https.get(url, res => {
-      if (res.statusCode !== 200) {
-        file.destroy();
-        return reject(new Error(`Download failed: HTTP ${res.statusCode}`));
-      }
+    const attemptDownload = (downloadUrl, redirectsRemaining) => {
+      const file = createWriteStream(outputPath);
 
-      const totalSize = parseInt(res.headers['content-length'], 10);
-      let downloadedSize = 0;
-
-      res.on('data', chunk => {
-        downloadedSize += chunk.length;
-        if (onProgress && totalSize) {
-          onProgress({ downloaded: downloadedSize, total: totalSize });
+      https.get(downloadUrl, res => {
+        // Handle redirects (3xx status codes)
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          file.destroy();
+          if (redirectsRemaining <= 0) {
+            return reject(new Error(`Download failed: Too many redirects`));
+          }
+          // Follow redirect
+          const redirectUrl = res.headers.location.startsWith('http')
+            ? res.headers.location
+            : new URL(res.headers.location, downloadUrl).toString();
+          return attemptDownload(redirectUrl, redirectsRemaining - 1);
         }
-      });
 
-      pipeline(res, file).then(resolve).catch(reject);
-    }).on("error", reject);
+        if (res.statusCode !== 200) {
+          file.destroy();
+          return reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+        }
+
+        const totalSize = parseInt(res.headers['content-length'], 10);
+        let downloadedSize = 0;
+
+        res.on('data', chunk => {
+          downloadedSize += chunk.length;
+          if (onProgress && totalSize) {
+            onProgress({ downloaded: downloadedSize, total: totalSize });
+          }
+        });
+
+        pipeline(res, file).then(resolve).catch(reject);
+      }).on("error", reject);
+    };
+
+    attemptDownload(url, maxRedirects);
   });
 }
 
