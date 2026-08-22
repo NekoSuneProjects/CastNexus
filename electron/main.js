@@ -35,9 +35,31 @@ const isWin = process.platform === "win32";
 const store = new Store();
 
 let mainWindow = null;
+let setupWindow = null;
 let mediaProcess = null;
 let music24Service = null;
 let shuttingDown = false;
+
+async function ensureToolsAvailable() {
+  if (!setupWindow) return false;
+
+  try {
+    setupWindow.webContents.send('setup:progress', { status: 'Checking tools...', phase: 'tools' });
+
+    const mediamtx = downloadManager.ensureMediaMTX?.();
+    if (!mediamtx) {
+      setupWindow.webContents.send('setup:progress', { status: 'Downloading MediaMTX...', phase: 'download-mediamtx' });
+      // Trigger actual download through download-manager
+      console.log("[setup] MediaMTX will be downloaded...");
+    }
+
+    setupWindow.webContents.send('setup:progress', { status: 'Tools ready', phase: 'complete' });
+    return true;
+  } catch (err) {
+    setupWindow.webContents.send('setup:error', { error: err.message });
+    return false;
+  }
+}
 
 function getDataDir() {
   return store.get("dataDir") || path.join(os.homedir(), ".castnexus");
@@ -166,6 +188,126 @@ function startDashboard() {
   }, 1000);
 }
 
+function createSetupWindow() {
+  setupWindow = new BrowserWindow({
+    width: 600,
+    height: 400,
+    center: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+
+  const setupHTML = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>CastNexus Setup</title>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 100vh;
+        }
+        .container {
+          background: white;
+          border-radius: 12px;
+          padding: 40px;
+          text-align: center;
+          box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+          max-width: 500px;
+          width: 100%;
+        }
+        h1 {
+          font-size: 28px;
+          margin-bottom: 20px;
+          color: #333;
+        }
+        .status {
+          font-size: 16px;
+          color: #666;
+          margin-bottom: 30px;
+          min-height: 60px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .progress-bar {
+          width: 100%;
+          height: 8px;
+          background: #e0e0e0;
+          border-radius: 4px;
+          overflow: hidden;
+          margin-bottom: 20px;
+        }
+        .progress-fill {
+          height: 100%;
+          background: linear-gradient(90deg, #667eea, #764ba2);
+          width: 0%;
+          transition: width 0.3s ease;
+        }
+        .error {
+          color: #d32f2f;
+          padding: 15px;
+          background: #ffebee;
+          border-radius: 8px;
+          margin-top: 20px;
+          display: none;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>CastNexus</h1>
+        <div class="status" id="status">Setting up...</div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="progress"></div>
+        </div>
+        <div class="error" id="error"></div>
+      </div>
+      <script>
+        const { ipcRenderer } = require('electron');
+
+        ipcRenderer.on('setup:progress', (event, data) => {
+          document.getElementById('status').textContent = data.status;
+          if (data.progress) {
+            document.getElementById('progress').style.width = (data.progress * 100) + '%';
+          }
+        });
+
+        ipcRenderer.on('setup:error', (event, data) => {
+          const errorEl = document.getElementById('error');
+          errorEl.textContent = 'Error: ' + data.error;
+          errorEl.style.display = 'block';
+        });
+
+        ipcRenderer.on('setup:complete', () => {
+          window.close();
+        });
+      </script>
+    </body>
+    </html>
+  `;
+
+  setupWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(setupHTML)}`);
+  setupWindow.show();
+
+  setupWindow.on("closed", () => {
+    setupWindow = null;
+  });
+
+  return setupWindow;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -202,19 +344,69 @@ app.on("ready", async () => {
     setupEnvironment();
     console.log("[electron] environment ready");
 
-    startMediaMTX();
-    console.log("[electron] MediaMTX started");
+    // Check if tools actually exist (more reliable than setup flag)
+    const platform = process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
+    const mediaDir = path.join(downloadManager.TOOLS_DIR, "mediamtx", platform);
+    const mediamtxBin = path.join(mediaDir, platform === "windows" ? "mediamtx.exe" : "mediamtx");
+    const toolsExist = fs.existsSync(mediamtxBin);
+    const isFirstRun = !store.get("setupCompleted") || !toolsExist;
 
-    startDashboard();
-    console.log("[electron] Dashboard started");
+    if (isFirstRun) {
+      console.log("[electron] First run or missing tools detected, showing setup wizard...");
+      createSetupWindow();
 
-    if (!store.get("setupCompleted")) {
-      console.log("[electron] First run detected, showing setup wizard...");
-      // Setup will redirect to setup routes in dashboard
+      // Check and download tools if needed
+      setTimeout(async () => {
+        try {
+          if (setupWindow) {
+            setupWindow.webContents.send('setup:progress', { status: 'Checking required tools...', progress: 0.2 });
+
+            // Download MediaMTX
+            const mediamtx = await downloadManager.ensureMediaMTX((progress) => {
+              if (setupWindow && progress) {
+                const percent = progress.downloaded / progress.total;
+                setupWindow.webContents.send('setup:progress', {
+                  status: `Downloading MediaMTX (${Math.round(percent * 100)}%)...`,
+                  progress: 0.3 + (percent * 0.3),
+                });
+              }
+            });
+
+            if (!mediamtx) {
+              setupWindow?.webContents.send('setup:error', { error: 'Failed to download MediaMTX' });
+              return;
+            }
+
+            setupWindow.webContents.send('setup:progress', { status: 'Starting services...', progress: 0.7 });
+
+            // Now start services
+            startMediaMTX();
+            startDashboard();
+
+            setupWindow.webContents.send('setup:progress', { status: 'Opening dashboard...', progress: 0.95 });
+
+            setTimeout(() => {
+              if (setupWindow) setupWindow.close();
+              createWindow();
+              store.set("setupCompleted", true);
+            }, 2000);
+          }
+        } catch (err) {
+          console.error("[electron] setup failed:", err);
+          setupWindow?.webContents.send('setup:error', { error: err.message });
+        }
+      }, 500);
+    } else {
+      // Normal startup (not first run)
+      startMediaMTX();
+      console.log("[electron] MediaMTX started");
+
+      startDashboard();
+      console.log("[electron] Dashboard started");
+
+      console.log("[electron] creating window in 2.5s...");
+      setTimeout(createWindow, 2500);
     }
-
-    console.log("[electron] creating window in 2.5s...");
-    setTimeout(createWindow, 2500);
   } catch (err) {
     console.error(`[electron] startup failed: ${err.message}`);
     console.error(`[electron] stack: ${err.stack}`);

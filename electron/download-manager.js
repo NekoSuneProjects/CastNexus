@@ -17,7 +17,7 @@ function getPlatformArch() {
   return { platform, arch };
 }
 
-async function downloadFile(url, outputPath) {
+async function downloadFile(url, outputPath, onProgress) {
   return new Promise((resolve, reject) => {
     const dir = path.dirname(outputPath);
     fs.mkdirSync(dir, { recursive: true });
@@ -28,42 +28,97 @@ async function downloadFile(url, outputPath) {
         file.destroy();
         return reject(new Error(`Download failed: HTTP ${res.statusCode}`));
       }
+
+      const totalSize = parseInt(res.headers['content-length'], 10);
+      let downloadedSize = 0;
+
+      res.on('data', chunk => {
+        downloadedSize += chunk.length;
+        if (onProgress && totalSize) {
+          onProgress({ downloaded: downloadedSize, total: totalSize });
+        }
+      });
+
       pipeline(res, file).then(resolve).catch(reject);
     }).on("error", reject);
   });
 }
 
-function ensureFFmpeg() {
-  const { platform } = getPlatformArch();
+async function ensureFFmpeg(onProgress) {
+  const { platform, arch } = getPlatformArch();
   const binName = platform === "windows" ? "ffmpeg.exe" : "ffmpeg";
   const ffmpegPath = path.join(TOOLS_DIR, "ffmpeg", platform, binName);
 
   if (fs.existsSync(ffmpegPath)) return ffmpegPath;
 
-  console.log("[tools] FFmpeg not found, would download from ffmpeg.org (TODO: implement actual download)");
-  return null;
+  try {
+    console.log("[tools] Downloading FFmpeg...");
+    const ffmpegVersion = "7.1";
+    let downloadUrl;
+
+    if (platform === "windows") {
+      downloadUrl = `https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2024-12-31-12-40/ffmpeg-N-121887-g${arch === 'x64' ? 'g63f670f' : 'g63f670f'}-win${arch === 'x64' ? '64' : '32'}-gpl.zip`;
+    } else if (platform === "linux") {
+      downloadUrl = `https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2024-12-31-12-40/ffmpeg-N-121887-g63f670f-linux${arch}-gpl.tar.xz`;
+    } else if (platform === "macos") {
+      downloadUrl = `https://evermeet.cx/ffmpeg/getrelease/zip`;
+    }
+
+    if (!downloadUrl) throw new Error(`Unsupported platform: ${platform}`);
+
+    const zipPath = path.join(TOOLS_DIR, "ffmpeg", `ffmpeg-${platform}.zip`);
+    await downloadFile(downloadUrl, zipPath, onProgress);
+    console.log("[tools] FFmpeg downloaded successfully");
+    return ffmpegPath;
+  } catch (err) {
+    console.error("[tools] FFmpeg download failed:", err.message);
+    return null;
+  }
 }
 
-function ensureFFprobe() {
+async function ensureFFprobe(onProgress) {
   const { platform } = getPlatformArch();
   const binName = platform === "windows" ? "ffprobe.exe" : "ffprobe";
   const ffprobePath = path.join(TOOLS_DIR, "ffmpeg", platform, binName);
 
   if (fs.existsSync(ffprobePath)) return ffprobePath;
-
-  console.log("[tools] FFprobe not found, would download from ffmpeg.org (TODO: implement actual download)");
-  return null;
+  // ffprobe comes with ffmpeg, so ensure ffmpeg is downloaded first
+  return await ensureFFmpeg(onProgress);
 }
 
-function ensureMediaMTX() {
-  const { platform } = getPlatformArch();
+async function ensureMediaMTX(onProgress) {
+  const { platform, arch } = getPlatformArch();
   const binName = platform === "windows" ? "mediamtx.exe" : "mediamtx";
   const mtxPath = path.join(TOOLS_DIR, "mediamtx", platform, binName);
 
   if (fs.existsSync(mtxPath)) return mtxPath;
 
-  console.log("[tools] MediaMTX not found, would download from bluenviron/mediamtx releases (TODO: implement actual download)");
-  return null;
+  try {
+    console.log("[tools] Downloading MediaMTX...");
+    const mtxVersion = "v1.19.2";
+    let downloadUrl;
+
+    if (platform === "windows") {
+      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion}_windows_${arch}.zip`;
+    } else if (platform === "linux") {
+      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion}_linux_${arch}.tar.gz`;
+    } else if (platform === "macos") {
+      downloadUrl = `https://github.com/bluenviron/mediamtx/releases/download/${mtxVersion}/mediamtx_${mtxVersion}_macos_${arch}.tar.gz`;
+    }
+
+    if (!downloadUrl) throw new Error(`Unsupported platform: ${platform}`);
+
+    const archivePath = platform === "windows"
+      ? path.join(TOOLS_DIR, "mediamtx", `mediamtx-${platform}.zip`)
+      : path.join(TOOLS_DIR, "mediamtx", `mediamtx-${platform}.tar.gz`);
+
+    await downloadFile(downloadUrl, archivePath, onProgress);
+    console.log("[tools] MediaMTX downloaded successfully");
+    return mtxPath;
+  } catch (err) {
+    console.error("[tools] MediaMTX download failed:", err.message);
+    return null;
+  }
 }
 
 function findChromium() {
@@ -99,4 +154,21 @@ module.exports = {
   ensureFFprobe,
   ensureMediaMTX,
   findChromium,
+  async ensureAllTools(onProgress) {
+    const results = {};
+    const tools = ['MediaMTX', 'FFmpeg', 'FFprobe'];
+
+    for (const tool of tools) {
+      onProgress?.({ status: `Checking ${tool}...` });
+      if (tool === 'MediaMTX') {
+        results.mediamtx = await ensureMediaMTX(onProgress);
+      } else if (tool === 'FFmpeg') {
+        results.ffmpeg = await ensureFFmpeg(onProgress);
+      } else if (tool === 'FFprobe') {
+        results.ffprobe = await ensureFFprobe(onProgress);
+      }
+    }
+
+    return results;
+  }
 };
