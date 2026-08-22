@@ -14,7 +14,10 @@ function buildChromiumGpuArgs(gpuEnabled) {
   // produce compositor frames. Disabling both GPU and software rasterization
   // can leave Page.startScreencast() alive but with no frames at all, which in
   // turn leaves FFmpeg waiting forever and Music 24/7 stuck at Idle.
-  if (!gpuEnabled) return ["--disable-gpu", "--enable-software-rasterization"];
+  // "--use-gl=swiftshader" is a legacy GL selector that current Chromium no
+  // longer recognizes and silently falls back to "--use-gl=disabled" (no
+  // rendering at all). The ANGLE-routed selector below is what still works.
+  if (!gpuEnabled) return ["--disable-gpu", "--enable-software-rasterization", "--use-gl=angle", "--use-angle=swiftshader"];
   return ["--ignore-gpu-blocklist", "--enable-gpu-rasterization", "--enable-zero-copy", "--use-gl=egl", "--disable-frame-rate-limit"];
 }
 
@@ -244,7 +247,11 @@ class Compositor extends EventEmitter {
         this.liveAudioFifoFd=null;
       }
     }
-    const child=spawn("ffmpeg",["-hide_banner","-loglevel",this.debug?"info":"warning","-nostdin","-y","-thread_queue_size","1024","-i",this.audioSourceUrl,"-vn","-af","aresample=async=1:first_pts=0","-f","s16le","-ar","48000","-ac","2",fifo]);
+    // The live source (including the Music 24/7 silence placeholder) is intentionally
+    // tiny (~20KB/s). FFmpeg's default probesize (5MB) can take minutes to satisfy at
+    // that bitrate, so this tap sits producing zero audio well past the compositor's
+    // watchdog timeout unless probing is explicitly bounded to something it can hit fast.
+    const child=spawn("ffmpeg",["-hide_banner","-loglevel",this.debug?"info":"warning","-nostdin","-y","-analyzeduration","1000000","-probesize","32768","-thread_queue_size","1024","-i",this.audioSourceUrl,"-vn","-af","aresample=async=1:first_pts=0","-f","s16le","-ar","48000","-ac","2",fifo]);
     child.stderr.on("data",chunk=>{if(this.debug){const line=chunk.toString().trim();if(line)this.logger.log(`[compositor:${this.accountId}] live-audio: ${line}`);}});
     child.on("exit",()=>{
       if(this.liveAudioTap===child)this.liveAudioTap=null;
