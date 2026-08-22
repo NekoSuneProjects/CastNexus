@@ -160,29 +160,49 @@ function createWindow() {
   const port = process.env.DASHBOARD_PORT;
   mainWindow.loadURL(`http://127.0.0.1:${port}`);
 
-  mainWindow.webContents.openDevTools();
+  // Uncomment for development:
+  // mainWindow.webContents.openDevTools();
 
   mainWindow.on("closed", () => {
     mainWindow = null;
+  });
+
+  mainWindow.webContents.on("crashed", () => {
+    console.error("[electron] renderer process crashed");
+    app.quit();
   });
 }
 
 app.on("ready", async () => {
   try {
+    console.log("[electron] starting setup...");
     setupEnvironment();
+    console.log("[electron] environment ready");
+
     startMediaMTX();
+    console.log("[electron] MediaMTX started");
+
     startDashboard();
+    console.log("[electron] Dashboard started");
 
     if (!store.get("setupCompleted")) {
       console.log("[electron] First run detected, showing setup wizard...");
       // Setup will redirect to setup routes in dashboard
     }
 
+    console.log("[electron] creating window in 2.5s...");
     setTimeout(createWindow, 2500);
   } catch (err) {
     console.error(`[electron] startup failed: ${err.message}`);
-    app.quit();
+    console.error(`[electron] stack: ${err.stack}`);
+    setTimeout(() => {
+      app.quit();
+    }, 1000);
   }
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("[electron] uncaught exception:", err);
 });
 
 app.on("window-all-closed", async () => {
