@@ -80,8 +80,10 @@ function safeCanvas(layout, { arch = process.arch, hardwareEncoder = false, widt
   return safeRenderConfig(layout, desired);
 }
 
-function liveInputArgs() {
-  return ["-thread_queue_size", String(process.env.RTMP_INPUT_QUEUE || 1024), "-fflags", "+genpts+discardcorrupt"];
+function liveInputArgs({ lowLatency = false } = {}) {
+  const args=["-thread_queue_size", String(process.env.RTMP_INPUT_QUEUE || 1024), "-fflags", lowLatency?"+genpts+discardcorrupt+nobuffer":"+genpts+discardcorrupt"];
+  if(lowLatency)args.push("-probesize","32768","-analyzeduration","0","-rtmp_live","live");
+  return args;
 }
 
 function stableAudioArgs({ bitrate = process.env.DESTINATION_AUDIO_BITRATE || "128k", sampleRate = process.env.DESTINATION_AUDIO_RATE || "44100" } = {}) {

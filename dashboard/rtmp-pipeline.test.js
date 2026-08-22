@@ -69,6 +69,11 @@ assert.equal(source[source.indexOf("-b:a") + 1], "128k");
 assert.equal(source[source.indexOf("-ar") + 1], "44100");
 assert.ok(source.includes("+genpts+discardcorrupt"));
 
+const twitchSource = destinationFfmpegArgs("rtmp://source/live", { url:"rtmps://ingest.global-contribute.live-video.net/app/key", layout:"source" });
+assert.equal(twitchSource[twitchSource.indexOf("-c:a") + 1], "copy", "stable compositor AAC should stay timestamp-identical on Twitch");
+assert.match(twitchSource[twitchSource.indexOf("-fflags") + 1], /nobuffer/);
+assert.equal(twitchSource[twitchSource.indexOf("-flush_packets") + 1], "1");
+
 const forcedLandscape = destinationFfmpegArgs(
   "rtmp://source/live",
   { url:"rtmp://youtube.example/live/key2", layout:"landscape" },

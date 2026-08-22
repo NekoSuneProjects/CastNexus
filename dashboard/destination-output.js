@@ -13,10 +13,15 @@ function outputFormatFor(url) {
   return String(url || "").startsWith("srt://") ? "mpegts" : "flv";
 }
 
+function isTwitchIngest(url){
+  try{return new URL(String(url||"")).hostname.toLowerCase().endsWith("live-video.net");}catch{return false;}
+}
+
 function destinationFfmpegArgs(sourceUrl, destination, options = {}) {
   const layout = normaliseLayout(destination.layout);
+  const twitchSource=layout === "source"&&isTwitchIngest(destination.url);
   const profile = options.forceCpu ? { id:"libx264", encoder:"libx264", hardware:false, label:"CPU · x264" } : detectEncoder();
-  const input = ["-hide_banner", "-loglevel", "warning", ...liveInputArgs(), ...(layout === "source" ? [] : globalEncoderArgs(profile)), "-i", sourceUrl];
+  const input = ["-hide_banner", "-loglevel", "warning", ...liveInputArgs({lowLatency:twitchSource}), ...(layout === "source" ? [] : globalEncoderArgs(profile)), "-i", sourceUrl];
   const mux = [...liveMuxArgs(destination.url, outputFormatFor(destination.url)), destination.url];
 
   // Source/passthrough keeps video copy-light for Raspberry Pi and other small
@@ -29,7 +34,7 @@ function destinationFfmpegArgs(sourceUrl, destination, options = {}) {
       "-map", "0:v:0",
       "-map", "0:a:0?",
       "-c:v", "copy",
-      ...stableAudioArgs(),
+      ...(twitchSource?["-c:a","copy","-flush_packets","1"]:stableAudioArgs()),
       ...mux,
     ];
   }
@@ -83,4 +88,4 @@ function destinationFfmpegArgs(sourceUrl, destination, options = {}) {
   ];
 }
 
-module.exports = { OUTPUT_LAYOUTS, normaliseLayout, outputFormatFor, destinationFfmpegArgs };
+module.exports = { OUTPUT_LAYOUTS, normaliseLayout, outputFormatFor, isTwitchIngest, destinationFfmpegArgs };
