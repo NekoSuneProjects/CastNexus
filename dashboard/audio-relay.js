@@ -8,9 +8,23 @@ const BYTES_PER_SAMPLE = 2;
 const FRAME_BYTES = CHANNELS * BYTES_PER_SAMPLE;
 const BYTES_PER_SEC = SAMPLE_RATE * FRAME_BYTES;
 const TICK_MS = 25;
-const MAX_SOURCE_BUFFER = BYTES_PER_SEC * 2;
-const PRIME_BYTES = Math.round(BYTES_PER_SEC * 0.25);
+const MAX_SOURCE_BUFFER = Math.round(BYTES_PER_SEC * 0.25);
+const TARGET_SOURCE_BUFFER = Math.round(BYTES_PER_SEC * 0.10);
+const PRIME_BYTES = Math.round(BYTES_PER_SEC * 0.075);
 const MAX_CONSUMER_BACKLOG = BYTES_PER_SEC;
+
+function trimPcmQueue(chunks,chunkBytes,maxBytes){
+  let excess=Math.max(0,chunkBytes-maxBytes);
+  excess-=excess%FRAME_BYTES;
+  while(excess>0&&chunks.length){
+    const head=chunks[0],take=Math.min(head.length,excess);
+    if(take===head.length)chunks.shift();
+    else chunks[0]=head.subarray(take);
+    chunkBytes-=take;
+    excess-=take;
+  }
+  return chunkBytes;
+}
 
 // Port of the proven NekoStreamAPP desktop audio carrier. FFmpeg uses audio
 // as a timing master, so a stalled producer must become silence rather than
@@ -41,10 +55,7 @@ class PcmAudioRelay {
         if(socket!==this.writer)return;
         this.chunks.push(chunk);
         this.chunkBytes+=chunk.length;
-        while(this.chunkBytes>MAX_SOURCE_BUFFER&&this.chunks.length>1){
-          const old=this.chunks.shift();
-          this.chunkBytes-=old.length;
-        }
+        if(this.chunkBytes>MAX_SOURCE_BUFFER)this.chunkBytes=trimPcmQueue(this.chunks,this.chunkBytes,MAX_SOURCE_BUFFER);
       });
       const clear=()=>{if(this.writer===socket)this.writer=null;};
       socket.on("close",clear);
@@ -75,6 +86,9 @@ class PcmAudioRelay {
     if(need<=0)return;
     if((consumer.writableLength||0)>MAX_CONSUMER_BACKLOG){this.bytesSent+=need;return;}
     if(!this.primed&&this.chunkBytes>=PRIME_BYTES)this.primed=true;
+    if(this.primed&&this.chunkBytes>TARGET_SOURCE_BUFFER+need){
+      this.chunkBytes=trimPcmQueue(this.chunks,this.chunkBytes,TARGET_SOURCE_BUFFER+need);
+    }
     const output=Buffer.allocUnsafe(need);
     let filled=0;
     if(this.primed){
@@ -104,4 +118,4 @@ class PcmAudioRelay {
   }
 }
 
-module.exports={PcmAudioRelay,SAMPLE_RATE,BYTES_PER_SEC};
+module.exports={PcmAudioRelay,SAMPLE_RATE,BYTES_PER_SEC,PRIME_BYTES,TARGET_SOURCE_BUFFER,MAX_SOURCE_BUFFER,trimPcmQueue};
