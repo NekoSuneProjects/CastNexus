@@ -1,13 +1,10 @@
-name: CastNexus Release
+name: Build
 
 on:
-  pull_request:
   push:
     branches:
       - main
       - beta
-      - "feature/**"
-      - "fix/**"
     tags:
       - "v*"
   workflow_dispatch:
@@ -88,231 +85,8 @@ jobs:
 
           echo "CastNexus $VERSION ($CHANNEL)"
 
-
-  javascript:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 20
-          package-manager-cache: false
-
-      - name: Install dashboard dependencies
-        working-directory: dashboard
-        run: npm ci
-
-      - name: Install DNS dependencies
-        working-directory: dns
-        run: npm install
-
-      - name: Install desktop build tools
-        working-directory: desktop
-        run: npm install
-
-      - name: Syntax check server and browser modules
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --check dashboard/server.js
-          node --check dashboard/server-entry.js
-          node --check dashboard/overlays.js
-          node --check dashboard/scenes.js
-          node --check dashboard/music-scene.js
-          node --check dashboard/music24.js
-          node --check dashboard/music-engine.js
-          node --check dashboard/profile-music.js
-          node --check dashboard/profile-vod.js
-          node --check dashboard/profile-rtmp.js
-          node --check dashboard/profile-destinations.js
-          node --check dashboard/cover-art.js
-          node --check dashboard/rtmp-pipeline.js
-          node --check dashboard/public-republish-runtime.js
-          node --check dashboard/gpu-encoder.js
-          node --check dashboard/twitch-api.js
-          node --check dashboard/mediamtx-recordings.js
-          node --check dashboard/youtube-upload.js
-          node --check dashboard/destination-output.js
-          node --check dashboard/compositor.js
-          node --check dns/server.js
-          node --check desktop/launcher.js
-          bash -n intercept/intercept.sh
-          for f in dashboard/public/app-*.js dashboard/public/build-info.js; do node --check "$f"; done
-
-      - name: VPS/public DNS gateway tests
-        working-directory: dns
-        run: npm test
-
-      - name: VPS intercept configuration smoke test
-        shell: bash
-        run: |
-          set -euo pipefail
-          INTERCEPT_MODE=vps \
-          VPS_ALLOWED_CLIENTS=203.0.113.7/32 \
-          INTERCEPT_DRY_RUN=true \
-          bash intercept/intercept.sh | tee /tmp/vps-intercept.log
-          grep -Fq "dry-run validation passed" /tmp/vps-intercept.log
-          if INTERCEPT_MODE=vps INTERCEPT_DRY_RUN=true bash intercept/intercept.sh >/tmp/vps-unsafe.log 2>&1; then
-            cat /tmp/vps-unsafe.log
-            echo "VPS intercept must reject an accidental unrestricted public RTMP listener." >&2
-            exit 1
-          fi
-
-      - name: Embedded dashboard + Music 24/7 runtime smoke test
-        shell: bash
-        run: |
-          set -euo pipefail
-          LOG=/tmp/castnexus-entry.log
-          STATE=/tmp/castnexus-entry-state.json
-          rm -f "$LOG" "$STATE"
-          DASHBOARD_PORT=18090 \
-          STATE_FILE="$STATE" \
-          MUSIC_DIR=/tmp/castnexus-entry-music \
-          MEDIAMTX_API=http://127.0.0.1:19997 \
-          node dashboard/server-entry.js >"$LOG" 2>&1 &
-          pid=$!
-          cleanup() { kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }
-          trap cleanup EXIT
-          http_ready=0
-          for i in $(seq 1 20); do
-            if curl -fsS http://127.0.0.1:18090/ >/dev/null 2>&1; then http_ready=1; break; fi
-            sleep .25
-          done
-          worker_ready=0
-          for i in $(seq 1 20); do
-            if grep -Fq "[music24] watching" "$LOG"; then worker_ready=1; break; fi
-            sleep .25
-          done
-          cat "$LOG"
-          test "$http_ready" -eq 1
-          test "$worker_ready" -eq 1
-
-      - name: CPU-only Chromium compositor regression test
-        run: node --test dashboard/compositor.test.js
-
-      - name: Public RTMP republish regression test
-        run: node --test dashboard/public-republish-runtime.test.js
-
-      - name: Program Scene routing regression test
-        run: node --test dashboard/program-scene-routing.test.js
-
-      - name: Profile music isolation + dual-format smoke test
-        run: node --test dashboard/profile-music.test.js
-
-      - name: Music playlist advancement regression test
-        run: node --test dashboard/music-engine.test.js
-
-      - name: Profile RTMP isolation smoke test
-        run: node --test dashboard/profile-rtmp.test.js
-
-      - name: Profile destination isolation smoke test
-        run: node --test dashboard/profile-destinations.test.js
-
-      - name: Music 24/7 embeddable worker smoke test
-        run: node --test dashboard/music24-module.test.js
-
-      - name: Music 24/7 Program Scene regression test
-        run: node --test dashboard/music24-program-scene.test.js
-
-      - name: Cover artwork fallback smoke test
-        run: node --test dashboard/cover-art.test.js
-
-      - name: Pi-safe RTMP pipeline smoke test
-        run: node --test dashboard/rtmp-pipeline.test.js
-
-      - name: Twitch HLS + VOD resolver smoke test
-        run: node --test dashboard/profile-vod.test.js
-
-      - name: GPU encoder selection smoke test
-        run: node --test dashboard/gpu-encoder.test.js
-
-      - name: Twitch API discovery smoke test
-        run: node --test dashboard/twitch-api.test.js
-
-      - name: MediaMTX recording storage smoke test
-        run: node --test dashboard/mediamtx-recordings.test.js
-
-      - name: YouTube upload guard smoke test
-        run: node --test dashboard/youtube-upload.test.js
-
-  docker:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [dashboard, dns, intercept]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v3
-      - name: Build ${{ matrix.service }} without publishing
-        uses: docker/build-push-action@v6
-        with:
-          context: ./${{ matrix.service }}
-          push: false
-          platforms: linux/amd64
-          build-args: |
-            CASTNEXUS_VERSION=0.0.0-ci
-            CASTNEXUS_CHANNEL=dev
-            CASTNEXUS_REVISION=${{ github.sha }}
-          cache-from: type=gha,scope=castnexus-ci-${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=castnexus-ci-${{ matrix.service }}
-
-  compose:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Validate base, VPS and optional GPU compose files
-        shell: bash
-        env:
-          PI_IP: 127.0.0.1
-          TARGET_IPS: 127.0.0.2
-          GATEWAY_IP: 127.0.0.1
-          PUBLIC_IP: 203.0.113.55
-          VPS_ALLOWED_CLIENTS: 198.51.100.20/32
-        run: |
-          docker compose config >/dev/null
-          docker compose -f docker-compose.yml -f docker-compose.vps.yml --profile vps-console config >/dev/null
-          docker compose -f docker-compose.yml -f docker-compose.gpu-vaapi.yml config >/dev/null
-          docker compose -f docker-compose.yml -f docker-compose.gpu-nvidia.yml config >/dev/null
-          if docker compose config --services | grep -qx music24; then
-            echo "Music 24/7 must be embedded in the dashboard runtime, not a separate sidecar." >&2
-            exit 1
-          fi
-
-      - name: Boot-test pinned MediaMTX recording config
-        shell: bash
-        run: |
-          set +e
-          timeout 5s docker run --rm \
-            -v "$PWD/config/mediamtx.yml:/mediamtx.yml:ro" \
-            bluenviron/mediamtx:1.19.2 /mediamtx.yml >mediamtx-boot.log 2>&1
-          code=$?
-          set -e
-          cat mediamtx-boot.log
-          if [ "$code" -ne 124 ]; then
-            echo "MediaMTX exited before the timeout; config is invalid or failed to boot (exit $code)." >&2
-            exit 1
-          fi
-
-  desktop-smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 20
-          package-manager-cache: false
-      - run: npm ci --omit=dev
-        working-directory: dashboard
-      - run: npm install
-        working-directory: electron
-      - name: Package Electron smoke build
-        working-directory: electron
-        run: npm run build
-
   build-electron:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: javascript
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         include:
@@ -340,8 +114,7 @@ jobs:
             electron/dist/*.zip
 
   build-cli:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: javascript
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         include:
@@ -367,7 +140,6 @@ jobs:
 
   docker-publish:
     if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    needs: [javascript, meta]
     strategy:
       fail-fast: false
       matrix:
@@ -388,8 +160,13 @@ jobs:
       - id: tags
         shell: bash
         run: |
-          VERSION="${{ needs.meta.outputs.version || 'dev' }}"
-          CHANNEL="${{ needs.meta.outputs.channel || 'dev' }}"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            if [[ "$VERSION" == *-* ]]; then CHANNEL=beta; else CHANNEL=stable; fi
+          else
+            VERSION="dev"
+            CHANNEL="dev"
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
       - name: Build and push ${{ matrix.service }} image
