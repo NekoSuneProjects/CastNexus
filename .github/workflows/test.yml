@@ -17,7 +17,7 @@ jobs:
 
       - name: Install dashboard dependencies
         working-directory: dashboard
-        run: npm ci
+        run: npm install --prefer-offline --no-audit
 
       - name: Install DNS dependencies
         working-directory: dns
