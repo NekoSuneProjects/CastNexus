@@ -40,6 +40,10 @@ function useElectronOffscreen(installType = process.env.CASTNEXUS_INSTALL_TYPE, 
   return String(installType || "").toLowerCase() === "electron" && !!versions?.electron;
 }
 
+function watchdogActivityAt(electronOffscreen, lastPaintAt, lastFrameAt) {
+  return electronOffscreen ? lastPaintAt : lastFrameAt;
+}
+
 function defaultVideoConfig() {
   const detected = detectEncoder();
   const mode = String(process.env.COMPOSITOR_GPU || "auto").toLowerCase();
@@ -77,6 +81,7 @@ class Compositor extends EventEmitter {
     this.frameCount=0;
     this.framesDropped=0;
     this.lastFrameAt=null;
+    this.lastPaintAt=null;
     this.latestFrame=null;
     this.framePumpTimer=null;
     this.paintKeepaliveTimer=null;
@@ -217,10 +222,16 @@ class Compositor extends EventEmitter {
   async _startScreencast(){
     this._stopFramePump();
     this.latestFrame=null;
+    this.lastPaintAt=null;
     if(this.electronOffscreen){
       const wc=this.offscreenWindow.webContents;
       let firstCapture=true;
       const onPaint=(_event,_dirty,image)=>{
+        // Record renderer activity before checking FFmpeg backpressure. A
+        // dropped frame means the live pipe is busy, not that Electron's
+        // renderer has stalled; treating it as a stalled paint loop caused a
+        // false reconnect every ~15 seconds on 1080p streams.
+        this.lastPaintAt=Date.now();
         const ffmpeg=this.ffmpeg;
         const stdin=ffmpeg?.stdin;
         if(!stdin?.writable)return;
@@ -311,6 +322,7 @@ class Compositor extends EventEmitter {
     }
     this.electronPaintHandler=null;
     this.latestFrame=null;
+    this.lastPaintAt=null;
   }
 
   _fifoPath(name){return path.join(this.runtimeDir,`${name}.fifo`);}
@@ -373,11 +385,13 @@ class Compositor extends EventEmitter {
     const fifo=this.audioTransport.music.output;
     if(this.audioTransport.fifo)this._ensureFifo(fifo);
     if(this.musicAudioFifoFd!=null){try{fs.closeSync(this.musicAudioFifoFd);}catch{}}
-    try{
-      this.musicAudioFifoFd=fs.openSync(fifo,fs.constants.O_RDWR|fs.constants.O_NONBLOCK);
-    }catch(err){
-      this.logger.warn(`[compositor:${this.accountId}] could not keep-alive music fifo: ${err.message}`);
-      this.musicAudioFifoFd=null;
+    this.musicAudioFifoFd=null;
+    if(this.audioTransport.fifo){
+      try{
+        this.musicAudioFifoFd=fs.openSync(fifo,fs.constants.O_RDWR|fs.constants.O_NONBLOCK);
+      }catch(err){
+        this.logger.warn(`[compositor:${this.accountId}] could not keep-alive music fifo: ${err.message}`);
+      }
     }
     this._syncMusicTap();
   }
@@ -458,13 +472,15 @@ class Compositor extends EventEmitter {
     this.watchdogTimer=setInterval(()=>{
       if(this.state!=="running")return;
       const timeout=Number(process.env.COMPOSITOR_WATCHDOG_MS||15000);
-      if(!this.lastFrameAt){
+      const activityAt=watchdogActivityAt(this.electronOffscreen,this.lastPaintAt,this.lastFrameAt);
+      if(!activityAt){
         if(this.frameCount===0)this.logger.warn(`[compositor:${this.accountId}] watchdog: waiting for first frame`);
         return;
       }
-      const idle=Date.now()-this.lastFrameAt;
+      const idle=Date.now()-activityAt;
       if(idle>timeout){
-        this.logger.warn(`[compositor:${this.accountId}] watchdog: frame pump stalled for ${idle}ms, forcing reconnect`);
+        const source=this.electronOffscreen?"Electron paint loop":"frame pump";
+        this.logger.warn(`[compositor:${this.accountId}] watchdog: ${source} stalled for ${idle}ms, forcing reconnect`);
         this._stopWatchdog();
         this._scheduleReconnect();
       }
@@ -548,4 +564,4 @@ class Compositor extends EventEmitter {
   }
 }
 
-module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen};
+module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt};

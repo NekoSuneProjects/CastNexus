@@ -2,12 +2,17 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildChromiumGpuArgs, audioTransportFor, useElectronOffscreen } = require("./compositor");
+const { buildChromiumGpuArgs, audioTransportFor, useElectronOffscreen, watchdogActivityAt } = require("./compositor");
 
 test("Electron install uses its bundled Chromium offscreen renderer", () => {
   assert.equal(useElectronOffscreen("electron", { electron:"37.0.0" }), true);
   assert.equal(useElectronOffscreen("electron", {}), false);
   assert.equal(useElectronOffscreen("docker", { electron:"37.0.0" }), false);
+});
+
+test("Electron watchdog tracks paints even while FFmpeg drops backpressured frames", () => {
+  assert.equal(watchdogActivityAt(true, 200, 100), 200);
+  assert.equal(watchdogActivityAt(false, 200, 100), 100);
 });
 
 test("CPU-only Chromium keeps software rasterization available", () => {
