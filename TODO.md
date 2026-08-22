@@ -81,3 +81,27 @@ For Claude to complete later:
   snapshot. Do not remove the known-good Desktop fixes.
 - Do not push intermediate Docker experiments as completed fixes. Commit and
   push only after the Docker image passes the end-to-end checks above.
+
+### Docker dashboard playback endpoints
+
+- Expose clear, copyable playback URLs on the Docker dashboard whenever a
+  profile is live:
+  - WebRTC player: `/webrtc/public/:profile/`
+  - WHEP endpoint: `/webrtc/public/:profile/whep`
+  - HLS playlist: `/hls/public/:profile/index.m3u8`
+- Build each URL from the public dashboard address. Preserve `https://` when
+  the dashboard is reached through a domain/reverse proxy, and use `http://`
+  when it is reached directly through a local or server IP address. Correctly
+  honour trusted forwarded host/protocol headers, and support an explicit
+  public-base-URL setting for Docker installations behind another VPS/proxy.
+- Show friendly labels rather than raw API property names. Make the HLS URL
+  especially prominent as a **VRChat / media-player URL**, with one-click copy
+  and open actions. Keep WebRTC, WHEP, RTSP and SRT available for their relevant
+  clients.
+- Display these endpoints on the relevant dashboard/playback page as well as
+  the existing Public Playback settings area, without changing MediaMTX's
+  underlying paths or reverse-proxy behaviour.
+- Test both access patterns end to end: a public HTTPS domain such as
+  `https://castnexus.nekosunevr.co.uk` and a direct HTTP IP/local address such
+  as `http://192.168.1.10:8090`. Confirm the copied HLS `.m3u8` URL opens from a
+  separate device and can be pasted directly into a VRChat video player.
