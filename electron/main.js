@@ -177,10 +177,15 @@ paths:
 
 function startDashboard() {
   setTimeout(() => {
-    // Resolve dashboard paths correctly in both dev and packaged contexts
-    const dashboardDir = path.join(__dirname, process.env.NODE_ENV === 'development' ? '../dashboard' : '../dashboard');
-
     try {
+      // In packaged app, dashboard is in app.asar root; in dev, it's at ../dashboard
+      const isPackaged = __dirname.includes('app.asar');
+      const dashboardDir = isPackaged
+        ? path.join(__dirname, 'dashboard')  // Inside asar: ./dashboard
+        : path.join(__dirname, '../dashboard');  // Dev: ../dashboard
+
+      console.log(`[electron] Loading dashboard from: ${dashboardDir}`);
+
       require(path.join(dashboardDir, "public-republish-runtime.js")).installPublicRepublishSpawnPolicy();
       require(path.join(dashboardDir, "server.js"));
       music24Service = require(path.join(dashboardDir, "music24.js"));
