@@ -31,6 +31,7 @@
       "preload.js",
       "download-manager.js",
       "oauth-bridge.js",
+      "ffmpeg-selector.js",
       "setup.html",
       "assets/**/*",
       "package.json"

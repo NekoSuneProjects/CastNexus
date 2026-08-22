@@ -8,6 +8,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const { spawn } = require("node:child_process");
 const downloadManager = require("./download-manager");
+const { selectFfmpeg } = require("./ffmpeg-selector");
 const oauthBridge = require("./oauth-bridge");
 const OFFICIAL_OAUTH_BROKER = "https://castnexus.nekosunevr.co.uk/oauth";
 const APP_ICON = path.join(__dirname, "assets", "icon.png");
@@ -108,8 +109,15 @@ function setupEnvironment() {
   process.env.YOUTUBE_REDIRECT_URI =
     store.get("youtube_redirect_uri") || oauthBridge.getRedirectUri("youtube", port);
 
-  // Prefer our downloaded tools, fall back to whatever is on PATH.
-  if (downloadManager.hasUsableBinary(tools.ffmpeg)) process.env.FFMPEG_BIN = tools.ffmpeg;
+  // Prefer the bundled tool, unless its NVENC API is newer than the installed
+  // NVIDIA driver and the system FFmpeg can encode successfully. This is
+  // common on older Maxwell cards that remain perfectly capable of H.264.
+  if (downloadManager.hasUsableBinary(tools.ffmpeg)) {
+    const selectedFfmpeg = selectFfmpeg({ bundled:tools.ffmpeg });
+    process.env.FFMPEG_BIN = selectedFfmpeg.binary;
+    console.log(`[electron] FFmpeg: ${selectedFfmpeg.source}${selectedFfmpeg.nvenc ? " · NVENC ready" : " · hardware probe deferred"}`);
+    if (selectedFfmpeg.fallbackReason && selectedFfmpeg.source === "system") console.warn("[electron] bundled FFmpeg NVENC incompatible; using working system FFmpeg");
+  }
   if (downloadManager.hasUsableBinary(tools.ffprobe)) process.env.FFPROBE_BIN = tools.ffprobe;
   if (downloadManager.hasUsableBinary(tools.ytdlp)) process.env.YTDLP_BIN = tools.ytdlp;
   if (downloadManager.hasUsableBinary(tools.deno)) process.env.DENO_BIN = tools.deno;

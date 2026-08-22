@@ -70,6 +70,7 @@ jobs:
           node --check dashboard/public/app-updater.js
           node --check dashboard/public/app-vod.js
           node --check dashboard/public/build-info.js 2>/dev/null || true
+          node --check electron/ffmpeg-selector.js
 
       - name: VPS/public DNS gateway tests
         working-directory: dns
@@ -133,6 +134,9 @@ jobs:
 
       - name: Destination platform preset tests
         run: node --test dashboard/destination-presets.test.js
+
+      - name: Electron FFmpeg compatibility tests
+        run: node --test electron/ffmpeg-selector.test.js
 
       - name: Program Scene routing regression test
         run: node --test dashboard/program-scene-routing.test.js
