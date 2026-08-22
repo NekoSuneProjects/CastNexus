@@ -89,6 +89,10 @@ services:
       YOUTUBE_REDIRECT_URI: ${YOUTUBE_REDIRECT_URI:-}
       YOUTUBE_UPLOAD_ALLOWLIST: ${YOUTUBE_UPLOAD_ALLOWLIST:-}
       YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT: ${YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT:-90}
+      # Closed instance: only accounts already in state.json may sign in, or
+      # only the Twitch logins named in ALLOWED_TWITCH_LOGINS.
+      DISABLE_REGISTRATION: ${DISABLE_REGISTRATION:-false}
+      ALLOWED_TWITCH_LOGINS: ${ALLOWED_TWITCH_LOGINS:-}
       CASTNEXUS_CHANNEL: ${CASTNEXUS_CHANNEL:-stable}
       # Official hosted OAuth keeps Twitch/Google client secrets out of user
       # installations. Set this blank to use local BYO credentials instead.
