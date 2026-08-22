@@ -46,3 +46,38 @@
     legitimate lighter-weight complement for OBS-mode users specifically.
 
   Full design + phased rollout: [`docs/design/overlays.md`](docs/design/overlays.md).
+
+## Docker parity with the working Desktop app
+
+For Claude to complete later:
+
+- Treat the current Electron/Desktop implementation as the proven reference.
+  Port the same complete-frame pacing, audio timing and public playback model
+  to the Docker compositor without changing or regressing the Desktop path.
+- Preserve the working Desktop behaviour introduced through commit `68506f3`:
+  raw complete-scene frames use wall-clock timestamps, audio cannot accumulate
+  behind video, stale audio is discarded on song changes, and the original
+  gradient spectrum/progress/cover/background remain smooth.
+- Give the Docker audio relay an equivalent isolated timing mechanism. Do not
+  allow Chromium rendering or frame encoding to block PCM reads or build a
+  hidden TCP/pipe backlog.
+- Keep the public MediaMTX path dual-codec: AAC stereo for HLS and Opus stereo
+  for WebRTC. Twitch/destination output remains on its separate H.264/AAC path.
+- Test inside the real Docker image, not only with unit tests. Verify:
+  - the entire scene is visually real-time at the configured output FPS;
+  - song audio matches the visible progress/spectrum throughout a full track
+    and immediately after at least two automatic song changes;
+  - no repeated, doubled, skipped or cut-out audio;
+  - WebRTC negotiates H.264 + Opus and is audible;
+  - HLS contains audible 48 kHz stereo AAC;
+  - Twitch or a local RTMP destination does not buffer or accumulate A/V drift;
+  - MediaMTX reports no inbound frame errors;
+  - CPU-only Docker remains usable and configured GPU acceleration still works.
+- Measure sync from the encoded output by matching recorded programme audio to
+  the source track; do not rely only on FFmpeg's reported FPS or packet presence.
+- Before Docker implementation work, create a clearly named snapshot commit or
+  branch from the then-current main branch. If the Docker port fails the tests
+  above or regresses Desktop, roll back only the Docker implementation to that
+  snapshot. Do not remove the known-good Desktop fixes.
+- Do not push intermediate Docker experiments as completed fixes. Commit and
+  push only after the Docker image passes the end-to-end checks above.
