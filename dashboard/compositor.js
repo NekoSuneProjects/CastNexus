@@ -8,6 +8,7 @@ const { EventEmitter } = require("node:events");
 const puppeteer = require("puppeteer-core");
 const { CPU_PROFILE, detectEncoder, globalEncoderArgs, encoderFilterSuffix, videoEncoderArgs } = require("./gpu-encoder");
 const { cpuX264Preset, liveMuxArgs } = require("./rtmp-pipeline");
+const { PcmAudioRelay } = require("./audio-relay");
 const FFMPEG_BIN = process.env.FFMPEG_BIN || "ffmpeg";
 
 function audioTransportFor(accountId, runtimeDir, platform = process.platform) {
@@ -18,9 +19,9 @@ function audioTransportFor(accountId, runtimeDir, platform = process.platform) {
   };
   let hash=2166136261;
   for(const char of String(accountId||"castnexus")){hash^=char.charCodeAt(0);hash=Math.imul(hash,16777619);}
-  const base=30000+((hash>>>0)%14000)*2;
-  const endpoint=port=>({input:`udp://127.0.0.1:${port}?fifo_size=262144&overrun_nonfatal=1`,output:`udp://127.0.0.1:${port}?pkt_size=3840`});
-  return { live:endpoint(base), music:endpoint(base+1), fifo:false };
+  const base=30000+((hash>>>0)%8000)*4;
+  const endpoint=(inputPort,outputPort)=>({input:`tcp://127.0.0.1:${outputPort}`,output:`tcp://127.0.0.1:${inputPort}`,inputPort,outputPort});
+  return { live:endpoint(base,base+1), music:endpoint(base+2,base+3), fifo:false, paced:true };
 }
 
 function buildChromiumGpuArgs(gpuEnabled, platform = process.platform) {
@@ -104,6 +105,7 @@ class Compositor extends EventEmitter {
     this.video={...defaultVideoConfig(),...(video||{})};
     this.runtimeDir=runtimeDir||path.join(os.tmpdir(),"restreamnode-compositor",accountId);
     this.audioTransport=audioTransportFor(accountId,this.runtimeDir);
+    this.audioRelays=[];
     if(!this.audioTransport.fifo){
       for(const name of ["live-audio.fifo","music-audio.fifo"]){try{fs.rmSync(path.join(this.runtimeDir,name),{force:true});}catch{}}
     }
@@ -183,6 +185,7 @@ class Compositor extends EventEmitter {
 
   async _runOnce(){
     fs.mkdirSync(this.runtimeDir,{recursive:true});
+    this._startAudioRelays();
     if(this.includeLiveAudio)this._startLiveAudioTap();
     await this._startMusicAudioTap();
     await this._launchBrowser();
@@ -254,15 +257,13 @@ class Compositor extends EventEmitter {
       const onPaint=(_event,_dirty,image)=>{
         // Record renderer activity before checking FFmpeg backpressure. A
         // dropped frame means the live pipe is busy, not that Electron's
-        // renderer has stalled; treating it as a stalled paint loop caused a
-        // false reconnect every ~15 seconds on 1080p streams.
+        // renderer has stalled.
         this.lastPaintAt=Date.now();
         const ffmpeg=this.ffmpeg;
         const stdin=ffmpeg?.stdin;
         if(!stdin?.writable)return;
-        // Prefer a fresh live frame over building latency during a brief
-        // encoder or network stall. 1080p JPEG frames need more headroom
-        // than the Docker CDP frame pump's single-frame buffer.
+        // Match the proven NekoStreamAPP desktop backend: allow a few hundred
+        // milliseconds of encoded-frame headroom, then prefer fresh paints.
         if(stdin.writableLength>12*1024*1024){this.framesDropped++;return;}
         let frame;
         try{
@@ -285,10 +286,11 @@ class Compositor extends EventEmitter {
       };
       this.electronPaintHandler=onPaint;
       wc.on("paint",onPaint);
-      // Electron/Windows can coalesce canvas damage in an invisible window
-      // even while the iframe draws at 30 fps. Present the offscreen surface
-      // at capture cadence so paint events contain the newest canvas frame.
-      const invalidateMs=Math.max(16,Math.round(1000/Math.max(1,Number(this.video.fps||30))));
+      // Animated scenes already paint at the frame rate selected above. A
+      // slow keepalive is only needed so a completely static page remains
+      // observable by the watchdog; forcing invalidation at 30 Hz overloads
+      // Electron's main process with redundant 1080p JPEG conversions.
+      const invalidateMs=1000;
       this.paintKeepaliveTimer=setInterval(()=>{
         try{if(this.offscreenWindow&&!this.offscreenWindow.isDestroyed())this.offscreenWindow.webContents.invalidate();}catch{}
       },invalidateMs);
@@ -360,6 +362,20 @@ class Compositor extends EventEmitter {
   }
 
   _fifoPath(name){return path.join(this.runtimeDir,`${name}.fifo`);}
+
+  _startAudioRelays(){
+    if(!this.audioTransport.paced||this.audioRelays.length)return;
+    for(const endpoint of [this.audioTransport.live,this.audioTransport.music]){
+      const relay=new PcmAudioRelay({inputPort:endpoint.inputPort,outputPort:endpoint.outputPort,logger:this.logger});
+      relay.start();
+      this.audioRelays.push(relay);
+    }
+  }
+
+  _stopAudioRelays(){
+    for(const relay of this.audioRelays){try{relay.stop();}catch{}}
+    this.audioRelays=[];
+  }
 
   _ensureFifo(fifoPath){
     try{
@@ -589,6 +605,7 @@ class Compositor extends EventEmitter {
       this.browser=null;
       this._cleanupBrowserProfile();
     }
+    this._stopAudioRelays();
   }
 
   _cleanupBrowserProfile(){

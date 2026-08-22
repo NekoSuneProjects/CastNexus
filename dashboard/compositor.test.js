@@ -54,12 +54,14 @@ test("Windows GPU compositor uses ANGLE with Direct3D 11", () => {
   assert.equal(args.includes("--use-gl=egl"), false);
 });
 
-test("Windows audio uses loopback UDP instead of Unix FIFO files", () => {
+test("Windows audio uses independently paced loopback TCP carriers", () => {
   const transport = audioTransportFor("account-profile", "C:\\temp\\castnexus", "win32");
   assert.equal(transport.fifo, false);
-  assert.match(transport.live.input, /^udp:\/\/127\.0\.0\.1:/);
-  assert.match(transport.music.output, /pkt_size=3840/);
+  assert.equal(transport.paced, true);
+  assert.match(transport.live.input, /^tcp:\/\/127\.0\.0\.1:/);
+  assert.match(transport.music.output, /^tcp:\/\/127\.0\.0\.1:/);
   assert.notEqual(transport.live.input, transport.music.input);
+  assert.notEqual(transport.music.inputPort, transport.music.outputPort);
 });
 
 test("Linux and Docker audio retain named pipes", () => {
