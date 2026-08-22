@@ -33,6 +33,12 @@
       "../tools",
       "package.json"
     ],
+    "extraFiles": [
+      {
+        "from": "download-manager.js",
+        "to": "../download-manager.js"
+      }
+    ],
     "win": {
       "target": [
         "nsis",
