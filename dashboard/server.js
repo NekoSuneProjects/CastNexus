@@ -362,6 +362,7 @@ const setupRoutes = require("./setup-routes");
 app.use("/setup", setupRoutes);
 
 app.use("/hls", createProxyMiddleware({ target:"http://127.0.0.1:8888", changeOrigin:true, pathRewrite:{ "^/hls":"" }, ws:true, onProxyRes:fixRedirectPrefix("/hls") }));
+app.use("/vrchat-hls", createProxyMiddleware({ target:"http://127.0.0.1:8898", changeOrigin:true, pathRewrite:{ "^/vrchat-hls":"" }, ws:true, onProxyRes:fixRedirectPrefix("/vrchat-hls") }));
 app.use("/webrtc", createProxyMiddleware({ target:"http://127.0.0.1:8889", changeOrigin:true, pathRewrite:{ "^/webrtc":"" }, ws:true, onProxyRes:fixRedirectPrefix("/webrtc") }));
 app.use("/overlay", createOverlayRouter({
   getAccountByLogin, musicDir:MUSIC_DIR,
@@ -392,8 +393,6 @@ function requireOnboarded(req,res,next){if(!req.account.sourceMode)return res.st
 
 function loginTwitchUser(req, twitchUser) {
   let account=state.accounts[twitchUser.id];const isNewAccount=!account;
-  // Closed-instance gate. Twitch has already authenticated them; DISABLE_REGISTRATION
-  // / ALLOWED_TWITCH_LOGINS decide whether we are willing to make them an account.
   const decision=registration.loginDecision({accountExists:!isNewAccount,login:twitchUser.login});
   if(!decision.allowed){console.warn(`[dashboard] sign-in refused (${decision.reason}): ${twitchUser.login}`);const refused=new Error(registration.refusalMessage(decision.reason));refused.refusalReason=decision.reason;refused.status=403;throw refused;}
   if(!account){account={twitchUserId:twitchUser.id,streamKey:null,pcKey:generatePcKey(),sourceMode:null,destinations:state.pendingLegacyDestinations||[],overlayConfig:defaultOverlayConfig(),overlays:[],musicTracks:[],musicSettings:defaultMusicSettings(),musicProfiles:{},vodProfiles:{},currentScene:null,compositorEnabled:false,recordingEnabled:false,youtubeUploadHistory:[],createdAt:new Date().toISOString()};state.accounts[twitchUser.id]=account;if(state.pendingLegacyDestinations){state.pendingLegacyDestinations=null;}}
@@ -491,8 +490,6 @@ app.post("/api/public-base-url",requireAuth,(req,res)=>{
 });
 app.post("/api/compositor",requireAuth,(req,res)=>{req.account.compositorEnabled=Boolean(req.body?.enabled);saveState(state);const activePath=activeFeedPath.get(req.account.twitchUserId);if(activePath){stopOutputsFor(req.account.twitchUserId);startOutputsFor(req.account,activePath);}res.json({ok:true,enabled:req.account.compositorEnabled});});
 
-// PUBLIC_BASE_URL wins (Docker behind a second, invisible proxy), then the
-// dashboard's own persisted setting, then whatever this request arrived as.
 function configuredPublicBaseUrl(){return PUBLIC_BASE_URL_ENV||normalisePublicBase(state.publicBaseUrl)||"";}
 function publicPlaybackBase(req){return publicBaseUrl(req,{explicitBase:configuredPublicBaseUrl()});}
 function playbackUrlsFor(req,account){if(!activeSourceFor(account.twitchUserId))return null;return playbackTargets({base:publicPlaybackBase(req),safePath:safePathFor(account),mediaHost:PUBLIC_MEDIA_HOST});}
