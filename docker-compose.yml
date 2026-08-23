@@ -27,6 +27,19 @@ services:
       - ./config/mediamtx.yml:/mediamtx.yml:ro
       - ./dashboard/data/recordings:/recordings
 
+  # VRChat / AVPro compatibility output. This instance does not encode;
+  # it pulls public/* from the primary MediaMTX over localhost RTSP and remuxes
+  # the same H.264/AAC stream into classic MPEG-TS HLS on :8898.
+  mediamtx-vrchat:
+    image: bluenviron/mediamtx:1.19.2
+    container_name: castnexus-mediamtx-vrchat
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    volumes:
+      - ./config/mediamtx-vrchat.yml:/mediamtx.yml:ro
+
   dashboard:
     image: ghcr.io/nekosuneprojects/castnexus-dashboard:${CASTNEXUS_IMAGE_TAG:-latest}
     container_name: castnexus-dashboard
@@ -34,6 +47,7 @@ services:
     restart: unless-stopped
     depends_on:
       - mediamtx
+      - mediamtx-vrchat
     volumes:
       - ./dashboard/data:/app/data
     environment:
