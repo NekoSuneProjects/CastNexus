@@ -44,16 +44,15 @@ services:
   # so this sidecar selects video + the first (AAC) track and republishes it to
   # the VRChat MediaMTX local RTSP listener. Streams are copied, not re-encoded.
   vrchat-relay:
-    image: ghcr.io/nekosuneprojects/castnexus-dashboard:${CASTNEXUS_IMAGE_TAG:-latest}
+    image: ghcr.io/nekosuneprojects/castnexus-vrchat-relay:${CASTNEXUS_IMAGE_TAG:-latest}
+    build:
+      context: ./vrchat-relay
     container_name: castnexus-vrchat-relay
     network_mode: host
     restart: unless-stopped
     depends_on:
       - mediamtx
       - mediamtx-vrchat
-    command: ["node", "vrchat-relay.js"]
-    volumes:
-      - ./dashboard/vrchat-relay.js:/app/vrchat-relay.js:ro
     environment:
       MEDIAMTX_API: http://127.0.0.1:9997
       VRCHAT_SOURCE_RTSP: rtsp://127.0.0.1:8554
