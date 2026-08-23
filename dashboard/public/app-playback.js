@@ -1,9 +1,11 @@
 // Public playback endpoints, rendered from the labelled link list the server
-// now returns. The VRChat-friendly HLS URL is deliberately first and visually
-// separated: it is the one URL most people actually need.
+// returns. CastNexus exposes two HLS flavours: the dedicated VRChat MPEG-TS
+// endpoint is first, while the normal Low-Latency HLS endpoint remains visible
+// immediately below it for browsers and other modern players.
 
 const PLAYBACK_FALLBACK_LABELS = {
-  hls:{ label:"VRChat / media player URL", protocol:"HLS" },
+  vrchatHls:{ label:"VRChat HLS URL", protocol:"HLS · MPEG-TS" },
+  hls:{ label:"Low-latency HLS URL", protocol:"LL-HLS" },
   webPlayer:{ label:"Browser player", protocol:"WebRTC" },
   whep:{ label:"WHEP endpoint", protocol:"WebRTC" },
   rtsp:{ label:"RTSP stream", protocol:"RTSP" },
@@ -17,7 +19,7 @@ function playbackLinks() {
   // Older server builds only returned the flat url map.
   return Object.keys(PLAYBACK_FALLBACK_LABELS)
     .filter(key => playback[key])
-    .map(key => ({ key, url:playback[key], ...PLAYBACK_FALLBACK_LABELS[key], primary:key === "hls", openable:key === "webPlayer" }));
+    .map(key => ({ key, url:playback[key], ...PLAYBACK_FALLBACK_LABELS[key], primary:key === "vrchatHls", openable:key === "webPlayer" }));
 }
 
 function playbackLinkRow(link) {
@@ -52,7 +54,7 @@ function renderPublicPlaybackPanel({ title = "Public playback", showBase = true 
   return `
     <div class="card-panel">
       <div class="card-title-row"><h3>${esc(title)}</h3><span class="badge green">LIVE</span></div>
-      <p>Share these to let people watch this feed. The first one is what VRChat video players and most media players expect.</p>
+      <p>Use the first URL for VRChat / AVPro. The normal Low-Latency HLS URL stays available under Other clients for browsers and modern HLS players.</p>
       ${playbackPrimaryCard(primary)}
       <div class="section-title">Other clients</div>
       ${rest.map(playbackLinkRow).join("")}
