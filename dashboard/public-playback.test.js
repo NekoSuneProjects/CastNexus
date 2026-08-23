@@ -50,26 +50,34 @@ test("explicit base urls are normalised and bad values rejected", () => {
   assert.equal(normalisePublicBase("https://"), null);
 });
 
-test("playback targets keep MediaMTX's own paths untouched", () => {
+test("playback targets expose both LL-HLS and VRChat-compatible HLS", () => {
   const targets = playbackTargets({ base:"https://castnexus.example.com", safePath:"public/nekosunevr" });
   assert.equal(targets.hls, "https://castnexus.example.com/hls/public/nekosunevr/index.m3u8");
+  assert.equal(targets.vrchatHls, "https://castnexus.example.com/vrchat-hls/public/nekosunevr/index.m3u8");
   assert.equal(targets.webPlayer, "https://castnexus.example.com/webrtc/public/nekosunevr");
   assert.equal(targets.whep, "https://castnexus.example.com/webrtc/public/nekosunevr/whep");
   assert.equal(targets.rtsp, "rtsp://castnexus.example.com:8554/public/nekosunevr");
   assert.equal(targets.srt, "srt://castnexus.example.com:8890?streamid=read:public/nekosunevr");
 });
 
-test("the VRChat-facing HLS url is presented first with a friendly label", () => {
+test("the VRChat MPEG-TS HLS url is presented first and normal HLS remains available", () => {
   const { links } = playbackTargets({ base:"http://192.168.1.10:8090", safePath:"public/nekosunevr" });
-  assert.equal(links[0].key, "hls");
+  assert.equal(links[0].key, "vrchatHls");
   assert.equal(links[0].primary, true);
   assert.match(links[0].label, /VRChat/);
-  assert.equal(links[0].url, "http://192.168.1.10:8090/hls/public/nekosunevr/index.m3u8");
+  assert.match(links[0].protocol, /MPEG-TS/);
+  assert.equal(links[0].url, "http://192.168.1.10:8090/vrchat-hls/public/nekosunevr/index.m3u8");
+
+  const normal = links.find(link => link.key === "hls");
+  assert.ok(normal);
+  assert.equal(normal.url, "http://192.168.1.10:8090/hls/public/nekosunevr/index.m3u8");
+  assert.match(normal.protocol, /LL-HLS/);
+
   for (const link of links) {
     assert.ok(link.label && !/^[a-z]+[A-Z]/.test(link.label), `${link.key} should not expose a raw API property name`);
     assert.ok(link.hint, `${link.key} should explain what it is for`);
   }
-  assert.deepEqual(links.map(l => l.key), ["hls", "webPlayer", "whep", "rtsp", "srt"]);
+  assert.deepEqual(links.map(l => l.key), ["vrchatHls", "hls", "webPlayer", "whep", "rtsp", "srt"]);
 });
 
 test("RTSP/SRT can point at a separate media host when the dashboard is proxied", () => {
