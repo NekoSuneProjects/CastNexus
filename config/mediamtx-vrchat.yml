@@ -12,7 +12,10 @@ rtmp: no
 rtsp: no
 webrtc: no
 srt: no
+moq: no
 api: no
+metrics: no
+pprof: no
 playback: no
 
 hls: yes
