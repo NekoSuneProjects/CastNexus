@@ -11,8 +11,11 @@
 //                                                                    PUBLIC_BASE_URL
 //
 // MediaMTX's own paths are never rewritten here: this module only decides the
-// scheme/host prefix in front of the existing /hls, /webrtc, RTSP and SRT
-// paths that server.js already proxies.
+// scheme/host prefix in front of the existing playback proxy routes.
+//
+// CastNexus intentionally exposes two HLS flavours:
+//   /hls         -> primary MediaMTX Low-Latency HLS
+//   /vrchat-hls  -> dedicated MPEG-TS HLS remuxer for VRChat / AVPro
 
 const RTSP_PORT = Number(process.env.PUBLIC_RTSP_PORT || 8554);
 const SRT_PORT = Number(process.env.PUBLIC_SRT_PORT || 8890);
@@ -75,16 +78,20 @@ function encodePath(safePath) {
   return String(safePath || "").split("/").filter(Boolean).map(encodeURIComponent).join("/");
 }
 
-// Friendly, human-facing descriptions. The dashboard used to render the raw
-// API keys ("webPlayer", "whep"), which told a VRChat user nothing about which
-// of the five URLs they were supposed to paste.
 function playbackLinkMeta() {
   return {
-    hls:{
-      label:"VRChat / media player URL",
-      protocol:"HLS",
-      hint:"Paste this into a VRChat video player, VLC, or any browser. Most compatible option.",
+    vrchatHls:{
+      label:"VRChat HLS URL",
+      protocol:"HLS · MPEG-TS",
+      hint:"Compatibility HLS for VRChat / AVPro. Uses classic MPEG-TS segments while the main HLS endpoint stays low latency.",
       primary:true,
+      openable:false,
+    },
+    hls:{
+      label:"Low-latency HLS URL",
+      protocol:"LL-HLS",
+      hint:"Primary CastNexus HLS output for modern browsers and players that support Low-Latency HLS.",
+      primary:false,
       openable:false,
     },
     webPlayer:{
@@ -114,7 +121,7 @@ function playbackLinkMeta() {
   };
 }
 
-const PLAYBACK_LINK_ORDER = ["hls", "webPlayer", "whep", "rtsp", "srt"];
+const PLAYBACK_LINK_ORDER = ["vrchatHls", "hls", "webPlayer", "whep", "rtsp", "srt"];
 
 function playbackTargets({ base, safePath, mediaHost }) {
   const encoded = encodePath(safePath);
@@ -125,6 +132,7 @@ function playbackTargets({ base, safePath, mediaHost }) {
     webPlayer:`${prefix}/webrtc/${encoded}`,
     whep:`${prefix}/webrtc/${encoded}/whep`,
     hls:`${prefix}/hls/${encoded}/index.m3u8`,
+    vrchatHls:`${prefix}/vrchat-hls/${encoded}/index.m3u8`,
     rtsp:`rtsp://${streamHost}:${RTSP_PORT}/${safePath}`,
     srt:`srt://${streamHost}:${SRT_PORT}?streamid=read:${safePath}`,
   };

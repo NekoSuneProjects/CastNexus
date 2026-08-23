@@ -1,0 +1,35 @@
+logLevel: info
+
+# VRChat compatibility HLS instance.
+#
+# The primary MediaMTX instance stays on Low-Latency HLS (:8888). This second
+# instance pulls only CastNexus public/* paths from the primary over local RTSP
+# and remuxes them to classic MPEG-TS HLS for Unity / AVPro compatibility.
+# No video or audio re-encoding is performed here.
+
+# Disable listeners that would collide with the primary host-network instance.
+rtmp: no
+rtsp: no
+webrtc: no
+srt: no
+api: no
+playback: no
+
+hls: yes
+hlsAddress: :8898
+hlsVariant: mpegts
+# Keep the HLS muxer warm once a public source is active. This avoids the first
+# VRChat request racing HLS muxer creation and returning "muxer instance not available".
+hlsAlwaysRemux: yes
+hlsSegmentCount: 6
+hlsSegmentDuration: 2s
+hlsSegmentMaxSize: 50M
+hlsAllowOrigins:
+  - '*'
+
+paths:
+  "~^public/(.+)$":
+    source: rtsp://127.0.0.1:8554/public/$G1
+    sourceOnDemand: yes
+    sourceOnDemandStartTimeout: 10s
+    rtspTransport: tcp
