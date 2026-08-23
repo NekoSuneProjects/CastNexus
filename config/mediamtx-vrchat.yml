@@ -21,9 +21,11 @@ playback: no
 hls: yes
 hlsAddress: :8898
 hlsVariant: mpegts
-# Keep the HLS muxer warm once a public source is active. This avoids the first
-# VRChat request racing HLS muxer creation and returning "muxer instance not available".
-hlsAlwaysRemux: yes
+# Generate HLS when a client requests a path. This must remain off while the
+# upstream RTSP source is sourceOnDemand, otherwise MediaMTX expects an HLS
+# muxer before the on-demand source has been started and can return
+# "muxer instance not available".
+hlsAlwaysRemux: no
 hlsSegmentCount: 6
 hlsSegmentDuration: 2s
 hlsSegmentMaxSize: 50M
@@ -35,4 +37,5 @@ paths:
     source: rtsp://127.0.0.1:8554/public/$G1
     sourceOnDemand: yes
     sourceOnDemandStartTimeout: 10s
+    sourceOnDemandCloseAfter: 30s
     rtspTransport: tcp
