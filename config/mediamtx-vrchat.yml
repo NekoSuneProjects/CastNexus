@@ -18,7 +18,9 @@ playback: no
 hls: yes
 hlsAddress: :8898
 hlsVariant: mpegts
-hlsAlwaysRemux: no
+# Keep the HLS muxer warm once a public source is active. This avoids the first
+# VRChat request racing HLS muxer creation and returning "muxer instance not available".
+hlsAlwaysRemux: yes
 hlsSegmentCount: 6
 hlsSegmentDuration: 2s
 hlsSegmentMaxSize: 50M
