@@ -7,7 +7,7 @@ on:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, docker, buildx]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -184,7 +184,7 @@ jobs:
         run: node --test dashboard/youtube-upload.test.js
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, docker, buildx]
     strategy:
       fail-fast: false
       matrix:
@@ -206,7 +206,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=castnexus-ci-${{ matrix.service }}
 
   compose:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, docker, buildx]
     steps:
       - uses: actions/checkout@v7
       - name: Validate base, VPS and optional GPU compose files
