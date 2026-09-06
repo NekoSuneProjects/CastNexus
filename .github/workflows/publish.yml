@@ -1,0 +1,43 @@
+name: Publish Desktop Build
+
+on:
+  push:
+    branches: [desktopapp]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-electron:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+          - os: [self-hosted, Linux, docker, buildx]
+            target: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: dashboard
+          path: _dashboard-branch
+      - name: Place dashboard app for bundling
+        shell: bash
+        run: cp -r _dashboard-branch/dashboard dashboard
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm --prefix electron install
+      - name: Build Electron
+        working-directory: electron
+        run: npx electron-builder --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: electron-${{ matrix.target }}
+          path: |
+            electron/dist/*.exe
+            electron/dist/*.AppImage
+            electron/dist/*.deb

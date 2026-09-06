@@ -362,46 +362,11 @@
       <div class="setup-progress" id="progress">
         <div class="progress-step active"></div>
         <div class="progress-step"></div>
-        <div class="progress-step"></div>
       </div>
 
       <div class="form-content">
-        <!-- Form 1: Twitch OAuth -->
-        <form class="setup-form active" id="form-twitch">
-          <h2>Connect Twitch</h2>
-
-          <div id="twitch-error" class="error-message" style="display: none;"></div>
-
-          <div class="form-group">
-            <label for="twitch-client-id">Client ID</label>
-            <input type="text" id="twitch-client-id" placeholder="Your Twitch OAuth Client ID" required>
-            <div class="hint">
-              Get this from your <a href="https://dev.twitch.tv/console/apps" target="_blank">Twitch Developer Console</a>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label for="twitch-client-secret">Client Secret</label>
-            <input type="password" id="twitch-client-secret" placeholder="Your Twitch OAuth Client Secret" required>
-            <div class="help-text">Never share this secret with anyone</div>
-          </div>
-
-          <div class="form-group">
-            <label for="twitch-redirect-uri">Redirect URI</label>
-            <input type="text" id="twitch-redirect-uri" value="http://localhost:8091/auth/twitch/callback" disabled>
-            <div class="help-text">
-              Copy this exact URL into <strong>OAuth Redirect URLs</strong> in your Twitch app.
-              Sign-in opens in your normal browser, which hands the login back to CastNexus on this port.
-            </div>
-          </div>
-
-          <div class="form-actions">
-            <button type="button" class="btn-primary" onclick="handleTwitchNext()">Next</button>
-          </div>
-        </form>
-
-        <!-- Form 2: Basic Settings -->
-        <form class="setup-form" id="form-settings">
+        <!-- Form 1: Basic Settings -->
+        <form class="setup-form active" id="form-settings">
           <h2>Basic Settings</h2>
 
           <div id="settings-error" class="error-message" style="display: none;"></div>
@@ -418,13 +383,16 @@
             <div class="help-text">Where recordings and settings are stored</div>
           </div>
 
+          <div class="hint">
+            You'll sign in with Twitch (and optionally connect YouTube) through the CastNexus OAuth broker the first time you open Studio - no developer credentials needed here.
+          </div>
+
           <div class="form-actions">
-            <button type="button" class="btn-secondary" onclick="handleSettingsPrev()">Back</button>
             <button type="button" class="btn-primary" onclick="handleSettingsNext()">Next</button>
           </div>
         </form>
 
-        <!-- Form 3: Complete -->
+        <!-- Form 2: Complete -->
         <div class="setup-form" id="form-complete">
           <div class="complete-view">
             <span class="complete-icon">✓</span>
@@ -470,34 +438,8 @@
 
     function showForm(step) {
       document.querySelectorAll('.setup-form').forEach(f => f.classList.remove('active'));
-      document.getElementById(`form-${step === 1 ? 'twitch' : step === 2 ? 'settings' : 'complete'}`).classList.add('active');
+      document.getElementById(`form-${step === 1 ? 'settings' : 'complete'}`).classList.add('active');
       updateProgress();
-    }
-
-    async function handleTwitchNext() {
-      const clientId = document.getElementById('twitch-client-id').value.trim();
-      const clientSecret = document.getElementById('twitch-client-secret').value.trim();
-
-      if (!clientId || !clientSecret) {
-        showError('twitch-error', 'Please fill in both Client ID and Client Secret');
-        return;
-      }
-
-      try {
-        const ipc = getIpcRenderer();
-        await ipc.invoke('store:set', 'twitch_client_id', clientId);
-        await ipc.invoke('store:set', 'twitch_client_secret', clientSecret);
-
-        currentStep = 2;
-        showForm(currentStep);
-      } catch (err) {
-        showError('twitch-error', 'Failed to save settings: ' + err.message);
-      }
-    }
-
-    async function handleSettingsPrev() {
-      currentStep = 1;
-      showForm(currentStep);
     }
 
     async function handleSettingsNext() {
@@ -507,7 +449,7 @@
         const ipc = getIpcRenderer();
         await ipc.invoke('store:set', 'server_name', serverName);
 
-        currentStep = 3;
+        currentStep = 2;
         showForm(currentStep);
       } catch (err) {
         showError('settings-error', 'Failed to save settings: ' + err.message);
@@ -553,26 +495,17 @@
         const ipc = getIpcRenderer();
         const settings = await ipc.invoke('store:getAll');
 
-        if (settings.twitch_client_id) {
-          document.getElementById('twitch-client-id').value = settings.twitch_client_id;
-        }
-        if (settings.twitch_client_secret) {
-          document.getElementById('twitch-client-secret').value = settings.twitch_client_secret;
-        }
         if (settings.server_name) {
           document.getElementById('server-name').value = settings.server_name;
         }
-        // Show the real paths the main process resolved, rather than guesses.
+        // Show the real path the main process resolved, rather than a guess.
         const info = await ipc.invoke('app:getInfo');
         if (info?.dataDir) {
           document.getElementById('data-dir').value = info.dataDir;
         }
-        if (info?.redirectUri) {
-          document.getElementById('twitch-redirect-uri').value = info.redirectUri;
-        }
       } catch (err) {
         console.error('Failed to load settings:', err);
-        showError('twitch-error', 'Error loading settings: ' + err.message);
+        showError('settings-error', 'Error loading settings: ' + err.message);
       }
     });
   </script>

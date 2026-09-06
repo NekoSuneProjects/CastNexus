@@ -9,7 +9,6 @@ const http = require("node:http");
 const { spawn } = require("node:child_process");
 const downloadManager = require("./download-manager");
 const { selectFfmpeg } = require("./ffmpeg-selector");
-const oauthBridge = require("./oauth-bridge");
 const OFFICIAL_OAUTH_BROKER = "https://castnexus.nekosunevr.co.uk/oauth";
 const APP_ICON = path.join(__dirname, "assets", "icon.png");
 
@@ -106,25 +105,10 @@ function setupEnvironment() {
   process.env.PI_IP = lanIp;
   process.env.MEDIAMTX_API = "http://127.0.0.1:9997";
   process.env.MEDIAMTX_PLAYBACK = "http://127.0.0.1:9996";
-  if (process.env.CASTNEXUS_OAUTH_MODE === "local") process.env.CASTNEXUS_OAUTH_BROKER_URL = "";
-  else process.env.CASTNEXUS_OAUTH_BROKER_URL =
+  // The oauth-broker service is the only supported way to sign in - there is
+  // no local/BYO-credential mode.
+  process.env.CASTNEXUS_OAUTH_BROKER_URL =
     process.env.CASTNEXUS_OAUTH_BROKER_URL || store.get("oauth_broker_url") || OFFICIAL_OAUTH_BROKER;
-
-  // Twitch credentials collected by the setup wizard. Without these the
-  // dashboard answers "TWITCH_CLIENT_ID is not configured" on every OAuth hit.
-  const twitchId = store.get("twitch_client_id");
-  const twitchSecret = store.get("twitch_client_secret");
-  if (twitchId) process.env.TWITCH_CLIENT_ID = String(twitchId);
-  if (twitchSecret) process.env.TWITCH_CLIENT_SECRET = String(twitchSecret);
-
-  // Sign-in happens in the system browser, so the provider must redirect to a
-  // loopback port Electron owns rather than to the dashboard itself — see
-  // oauth-bridge.js for why. This URI is what has to be registered in the
-  // Twitch/Google developer console.
-  process.env.TWITCH_REDIRECT_URI =
-    store.get("twitch_redirect_uri") || oauthBridge.getRedirectUri("twitch", port);
-  process.env.YOUTUBE_REDIRECT_URI =
-    store.get("youtube_redirect_uri") || oauthBridge.getRedirectUri("youtube", port);
 
   // Prefer the bundled tool, unless its NVENC API is newer than the installed
   // NVIDIA driver and the system FFmpeg can encode successfully. This is
@@ -382,29 +366,6 @@ function createSetupWindow() {
   return setupWindow;
 }
 
-let loginInFlight = null;
-async function runExternalLogin(provider, port) {
-  if (loginInFlight) {
-    console.log("[oauth] a sign-in is already in progress");
-    return;
-  }
-  loginInFlight = provider;
-  try {
-    await oauthBridge.beginLogin(provider, {
-      dashboardPort: port,
-      session: mainWindow.webContents.session,
-    });
-    mainWindow?.loadURL(`http://localhost:${port}/dashboard`);
-    mainWindow?.focus();
-  } catch (err) {
-    console.error(`[oauth] ${provider} sign-in failed: ${err.message}`);
-    const msg = JSON.stringify(`${provider} sign-in failed: ${err.message}`);
-    mainWindow?.webContents.executeJavaScript(`window.alert(${msg});`).catch(() => {});
-  } finally {
-    loginInFlight = null;
-  }
-}
-
 async function openMainWindow() {
   const port = getPort();
   try {
@@ -435,14 +396,10 @@ async function openMainWindow() {
   mainWindow.loadURL(`http://localhost:${port}/dashboard`);
   mainWindow.once("ready-to-show", () => mainWindow?.show());
 
-  // Sign-in must happen in the user's real browser, and anything else pointing
-  // off-app opens there too rather than in a chrome-less Electron window.
+  // The dashboard's hosted-OAuth wait page opens the Twitch/Google consent
+  // screen with window.open(), and anything else pointing off-app should open
+  // in the user's real browser too rather than in a chrome-less Electron window.
   const handleExternal = (url) => {
-    const provider = process.env.CASTNEXUS_OAUTH_BROKER_URL ? null : oauthBridge.matchProvider(url, port);
-    if (provider) {
-      runExternalLogin(provider, port);
-      return true;
-    }
     if (!url.startsWith(`http://localhost:${port}`)) {
       shell.openExternal(url);
       return true;
@@ -510,10 +467,6 @@ async function startServices() {
   setupEnvironment();
   await startMediaMTX();
   startDashboard();
-  // Bind the sign-in loopback port now so a conflict shows up at startup
-  // rather than the first time someone clicks Login.
-  await oauthBridge.startCallbackServer(getPort())
-    .catch(err => console.error(`[oauth] ${err.message}`));
 }
 
 async function runFirstRunFlow() {
@@ -591,7 +544,6 @@ async function shutdown() {
   shuttingDown = true;
   console.log("[electron] shutting down");
 
-  try { oauthBridge.stopCallbackServer(); } catch {}
   try { await music24Service?.shutdown?.("shutdown", { exit: false }); } catch {}
   try { await dashboardService?.shutdown?.(); } catch {}
   if(mediaProcess){
@@ -620,7 +572,6 @@ ipcMain.handle("store:getAll", () => store.store);
 ipcMain.handle("app:getInfo", () => ({
   dataDir: getDataDir(),
   port: getPort(),
-  redirectUri: process.env.TWITCH_REDIRECT_URI,
   version: app.getVersion(),
 }));
 

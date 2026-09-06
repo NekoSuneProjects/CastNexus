@@ -30,7 +30,6 @@
       "main.js",
       "preload.js",
       "download-manager.js",
-      "oauth-bridge.js",
       "ffmpeg-selector.js",
       "setup.html",
       "assets/**/*",
@@ -40,10 +39,6 @@
       {
         "from": "../dashboard",
         "to": "dashboard"
-      },
-      {
-        "from": "../tools",
-        "to": "tools"
       }
     ],
     "win": {
