@@ -7,7 +7,7 @@ const os = require("node:os");
 const { spawn } = require("node:child_process");
 const Store = require("electron-store");
 
-const downloadManager = require("../tools/download-manager");
+const downloadManager = require("./download-manager");
 const OFFICIAL_OAUTH_BROKER = "https://castnexus.nekosunevr.co.uk/oauth";
 const isWin = process.platform === "win32";
 
@@ -73,11 +73,9 @@ function setupEnvironment() {
   process.env.PI_IP = lanIp;
   process.env.MEDIAMTX_API = process.env.MEDIAMTX_API || "http://127.0.0.1:9997";
   process.env.MEDIAMTX_PLAYBACK = process.env.MEDIAMTX_PLAYBACK || "http://127.0.0.1:9996";
-  if (process.env.CASTNEXUS_OAUTH_MODE === "local") process.env.CASTNEXUS_OAUTH_BROKER_URL = "";
-  else process.env.CASTNEXUS_OAUTH_BROKER_URL = process.env.CASTNEXUS_OAUTH_BROKER_URL || store.get("oauthBrokerUrl") || OFFICIAL_OAUTH_BROKER;
-  process.env.TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID || store.get("twitchClientId") || "";
-  process.env.TWITCH_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET || store.get("twitchClientSecret") || "";
-  process.env.TWITCH_REDIRECT_URI = process.env.TWITCH_REDIRECT_URI || store.get("twitchRedirectUri") || `http://${lanIp}:${process.env.DASHBOARD_PORT}/auth/twitch/callback`;
+  // The oauth-broker service is the only supported way to sign in - there is
+  // no local/BYO-credential mode. Sign in from a browser at the dashboard URL.
+  process.env.CASTNEXUS_OAUTH_BROKER_URL = process.env.CASTNEXUS_OAUTH_BROKER_URL || store.get("oauthBrokerUrl") || OFFICIAL_OAUTH_BROKER;
 
   const chromium = downloadManager.findChromium();
   if (chromium && !process.env.PUPPETEER_EXECUTABLE_PATH) {
@@ -197,9 +195,6 @@ if (args.includes("--setup")) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   const questions = [
-    { key: "twitchClientId", prompt: "Twitch Client ID: " },
-    { key: "twitchClientSecret", prompt: "Twitch Client Secret: " },
-    { key: "twitchRedirectUri", prompt: "Twitch Redirect URI (default: http://localhost:8090/auth/twitch/callback): ", default: "http://localhost:8090/auth/twitch/callback" },
     { key: "dashboardPort", prompt: "Dashboard Port (default: 8090): ", default: "8090" },
   ];
 
@@ -230,5 +225,5 @@ if (args.includes("--setup")) {
   process.on("SIGTERM", shutdown);
   process.on("SIGHUP", shutdown);
 
-  console.log(`[cli] ${store.get("twitchClientId") ? "✓ Configured" : "⚠ Not configured - run with --setup"}`);
+  console.log(`[cli] sign in with Twitch from a browser at http://localhost:${process.env.DASHBOARD_PORT}/login`);
 }

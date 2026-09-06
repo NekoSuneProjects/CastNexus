@@ -1,6 +1,4 @@
 .env
 node_modules/
-dashboard/data/
-electron/dist/
-electron/auto.crt
-electron/auto.key
+cli/dist/
+dashboard/

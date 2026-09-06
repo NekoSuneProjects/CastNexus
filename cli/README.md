@@ -15,12 +15,13 @@ npm install
 npm run setup
 ```
 
-This will prompt you for:
-- Twitch Client ID & Secret
-- Twitch OAuth Redirect URI
-- Dashboard port (default: 8090)
+This will prompt you for the dashboard port (default: 8090). Settings are
+stored in `~/.castnexus/castnexus-cli.json` (never needs manual editing).
 
-Settings are stored in `~/.castnexus/castnexus-cli.json` (never needs manual editing).
+Sign in with Twitch (and optionally connect YouTube) from a browser at
+`http://localhost:8090/login` once the dashboard is running - it goes through
+the CastNexus oauth-broker service, so there are no developer credentials to
+configure here.
 
 ## Running
 
@@ -55,7 +56,8 @@ Settings stored in `~/.castnexus/castnexus-cli.json`. Perfect for first-time use
 
 ### Option 2: .env file (traditional method)
 
-Create a `.env` file in the working directory:
+Create a `.env` file in the working directory (see `.env.example` at the repo
+root):
 
 ```env
 DASHBOARD_PORT=8090
@@ -63,9 +65,7 @@ STATE_FILE=/path/to/data/state.json
 MUSIC_DIR=/path/to/data/music
 VOD_DIR=/path/to/data/vod
 RECORDINGS_DIR=/path/to/data/recordings
-TWITCH_CLIENT_ID=your_id
-TWITCH_CLIENT_SECRET=your_secret
-TWITCH_REDIRECT_URI=http://localhost:8090/auth/twitch/callback
+CASTNEXUS_OAUTH_BROKER_URL=https://castnexus.nekosunevr.co.uk/oauth
 PI_IP=192.168.1.100
 PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ```

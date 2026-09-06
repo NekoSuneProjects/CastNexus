@@ -1,0 +1,41 @@
+name: Publish CLI Binaries
+
+on:
+  push:
+    branches: [cli]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-cli:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: win-x64
+          - os: [self-hosted, Linux, docker, buildx]
+            target: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: dashboard
+          path: _dashboard-branch
+      - name: Place dashboard app for bundling
+        shell: bash
+        run: cp -r _dashboard-branch/dashboard dashboard
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm --prefix cli install
+      - name: Build CLI binary
+        working-directory: cli
+        run: npm run pkg:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: |
+            cli/dist/castnexus-cli*
