@@ -1,4 +1,4 @@
-name: Test
+name: Dashboard Test
 
 on:
   pull_request:
