@@ -157,35 +157,13 @@ Recommended default:
 CASTNEXUS_OAUTH_BROKER_URL=https://castnexus.nekosunevr.co.uk/oauth
 ```
 
-This uses the CastNexus hosted OAuth broker so the normal user does not need provider client secrets on the installation.
-
-To deliberately use your own provider application, set the broker URL empty:
-
-```dotenv
-CASTNEXUS_OAUTH_BROKER_URL=
-```
-
-Then configure the provider credentials below.
+This uses the CastNexus oauth-broker service so the normal user does not need provider client secrets on the installation. `CASTNEXUS_OAUTH_BROKER_URL` is required and must be an `https://` URL - there is no local/BYO-credential mode.
 
 ---
 
-# 5. Custom Twitch OAuth
+# 5. Self-hosting your own oauth-broker
 
-Only required when hosted OAuth is disabled or when you deliberately need your own Twitch application.
-
-```dotenv
-TWITCH_CLIENT_ID=
-TWITCH_CLIENT_SECRET=
-TWITCH_REDIRECT_URI=http://192.168.1.50:8090/auth/twitch/callback
-```
-
-The redirect URI configured in Twitch must exactly match the CastNexus value.
-
-For a reverse proxy:
-
-```dotenv
-TWITCH_REDIRECT_URI=https://castnexus.example.com/auth/twitch/callback
-```
+To deliberately use your own Twitch/Google developer applications instead of the official public broker, self-host your own oauth-broker instance (`docker-compose.oauth-broker.yml`) and point `CASTNEXUS_OAUTH_BROKER_URL` at it. See the "Self-hosting your own oauth-broker" section of [INSTALL.md](../INSTALL.md) and [docs/HOSTED-OAUTH.md](HOSTED-OAUTH.md) for the full setup.
 
 Do not commit `.env` containing secrets to Git.
 
@@ -748,15 +726,7 @@ COVER_ITUNES_COUNTRY=GB
 
 # 24. YouTube upload integration
 
-With hosted OAuth, normal sign-in can use the broker-supported flow where available.
-
-For your own Google OAuth application:
-
-```dotenv
-YOUTUBE_CLIENT_ID=
-YOUTUBE_CLIENT_SECRET=
-YOUTUBE_REDIRECT_URI=http://192.168.1.50:8090/auth/youtube/callback
-```
+YouTube sign-in goes through the oauth-broker service, the same as Twitch - there are no local Google client credentials to configure on the dashboard. See section 5 to self-host your own broker with your own Google OAuth application instead.
 
 Optional account allowlist:
 

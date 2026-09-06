@@ -4,12 +4,15 @@ services:
   # VPS/public: use docker-compose.vps.yml with --profile vps-console.
   dns:
     image: ghcr.io/nekosuneprojects/castnexus-dns:${CASTNEXUS_IMAGE_TAG:-latest}
+    build:
+      context: ./dns
     container_name: castnexus-dns
     restart: unless-stopped
     network_mode: host
     profiles: ["console", "vps-console"]
     environment:
       PI_IP: ${PI_IP}
+      DNS_MODE: ${DNS_MODE:-lan}
       DNS_REDIRECT_IP: ${DNS_REDIRECT_IP:-}
       DNS_REDIRECT_IPV6: ${DNS_REDIRECT_IPV6:-}
       DNS_PUBLIC_MODE: ${DNS_PUBLIC_MODE:-false}
@@ -27,55 +30,20 @@ services:
       - ./config/mediamtx.yml:/mediamtx.yml:ro
       - ./dashboard/data/recordings:/recordings
 
-  # VRChat / AVPro compatibility output. It receives an AAC-only RTSP copy
-  # from vrchat-relay and remuxes the H.264/AAC tracks to MPEG-TS HLS on :8898.
-  mediamtx-vrchat:
-    image: bluenviron/mediamtx:1.19.2
-    container_name: castnexus-mediamtx-vrchat
-    network_mode: host
-    restart: unless-stopped
-    depends_on:
-      - mediamtx
-    volumes:
-      - ./config/mediamtx-vrchat.yml:/mediamtx.yml:ro
-
-  # The normal public MediaMTX path intentionally contains two audio tracks:
-  # AAC for HLS and Opus for WebRTC. MPEG-TS HLS accepts only one audio track,
-  # so this sidecar selects video + the first (AAC) track and republishes it to
-  # the VRChat MediaMTX local RTSP listener. Streams are copied, not re-encoded.
-  vrchat-relay:
-    image: ghcr.io/nekosuneprojects/castnexus-vrchat-relay:${CASTNEXUS_IMAGE_TAG:-latest}
-    build:
-      context: ./vrchat-relay
-    container_name: castnexus-vrchat-relay
-    network_mode: host
-    restart: unless-stopped
-    depends_on:
-      - mediamtx
-      - mediamtx-vrchat
-    environment:
-      MEDIAMTX_API: http://127.0.0.1:9997
-      VRCHAT_SOURCE_RTSP: rtsp://127.0.0.1:8554
-      VRCHAT_TARGET_RTSP: rtsp://127.0.0.1:8564
-      VRCHAT_RELAY_POLL_MS: ${VRCHAT_RELAY_POLL_MS:-1500}
-      VRCHAT_RELAY_DEBUG: ${VRCHAT_RELAY_DEBUG:-false}
-
   dashboard:
     image: ghcr.io/nekosuneprojects/castnexus-dashboard:${CASTNEXUS_IMAGE_TAG:-latest}
+    build:
+      context: ./dashboard
     container_name: castnexus-dashboard
     network_mode: host
     restart: unless-stopped
     depends_on:
       - mediamtx
-      - mediamtx-vrchat
     volumes:
       - ./dashboard/data:/app/data
     environment:
       DASHBOARD_PORT: ${DASHBOARD_PORT:-8090}
       PI_IP: ${PI_IP}
-      TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID:-}
-      TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET:-}
-      TWITCH_REDIRECT_URI: ${TWITCH_REDIRECT_URI:-}
       MEDIAMTX_API: http://127.0.0.1:9997
       MEDIAMTX_PLAYBACK: http://127.0.0.1:9996
       MEDIA_RTMP_ORIGIN: rtmp://127.0.0.1:1935
@@ -156,9 +124,6 @@ services:
       COVER_MUSICBRAINZ_USER_AGENT: ${COVER_MUSICBRAINZ_USER_AGENT:-CastNexus/1.0 (https://github.com/NekoSuneProjects/CastNexus)}
       COVER_ITUNES_COUNTRY: ${COVER_ITUNES_COUNTRY:-US}
 
-      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
-      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
-      YOUTUBE_REDIRECT_URI: ${YOUTUBE_REDIRECT_URI:-}
       YOUTUBE_UPLOAD_ALLOWLIST: ${YOUTUBE_UPLOAD_ALLOWLIST:-}
       YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT: ${YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT:-90}
 
@@ -167,12 +132,16 @@ services:
       DISABLE_REGISTRATION: ${DISABLE_REGISTRATION:-false}
       ALLOWED_TWITCH_LOGINS: ${ALLOWED_TWITCH_LOGINS:-}
       CASTNEXUS_CHANNEL: ${CASTNEXUS_CHANNEL:-stable}
-      # Official hosted OAuth keeps Twitch/Google client secrets out of user
-      # installations. Set this blank to use local BYO credentials instead.
-      CASTNEXUS_OAUTH_BROKER_URL: ${CASTNEXUS_OAUTH_BROKER_URL-https://castnexus.nekosunevr.co.uk/oauth}
+      # Required. The oauth-broker service is the only supported way to sign
+      # in with Twitch or connect YouTube - must be an https:// URL. Defaults
+      # to the official public broker; see docs/HOSTED-OAUTH.md to self-host
+      # your own instead (docker-compose.oauth-broker.yml).
+      CASTNEXUS_OAUTH_BROKER_URL: ${CASTNEXUS_OAUTH_BROKER_URL:-https://castnexus.nekosunevr.co.uk/oauth}
 
   intercept:
     image: ghcr.io/nekosuneprojects/castnexus-intercept:${CASTNEXUS_IMAGE_TAG:-latest}
+    build:
+      context: ./intercept
     container_name: castnexus-intercept
     network_mode: host
     restart: unless-stopped

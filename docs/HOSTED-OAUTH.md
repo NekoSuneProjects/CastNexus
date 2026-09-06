@@ -95,9 +95,10 @@ The current transaction store is intentionally in memory. Run one broker
 replica during beta. A multi-replica deployment must replace it with a shared
 TTL store such as Redis before scaling horizontally.
 
-## Local-credential fallback
-
-For Docker, set `CASTNEXUS_OAUTH_BROKER_URL` to an empty value. For Desktop or
-CLI, set `CASTNEXUS_OAUTH_MODE=local`. Then configure the existing
-Twitch/YouTube client ID, secret and callback variables to restore the local
-bring-your-own-credentials flow.
+`CASTNEXUS_OAUTH_BROKER_URL` is required everywhere (Docker, Desktop, CLI) and
+must be an `https://` URL - there is no local/BYO-credential fallback. If you
+want your own Twitch/Google developer applications instead of the official
+public broker, self-host your own oauth-broker instance instead (see
+`docker-compose.oauth-broker.yml` and INSTALL.md's "Self-hosting your own
+oauth-broker" section) and point every installation's
+`CASTNEXUS_OAUTH_BROKER_URL` at it.

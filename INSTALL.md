@@ -54,19 +54,18 @@ Read the full sizing explanation before buying/renting hardware:
 
 # What Docker starts
 
-Normal CastNexus Docker mode runs:
+The base stack (everything CastNexus actually needs) runs:
 
 - `castnexus-dashboard` — Studio/API, FFmpeg, Chromium compositor, Music 24/7, VOD and destination processing
 - `castnexus-mediamtx` — RTMP/RTSP/HLS/WebRTC/SRT ingest/playback router
-- `castnexus-mediamtx-vrchat` — separate VRChat/AVPro-compatible MPEG-TS HLS server
-- `castnexus-vrchat-relay` — compatible H.264/AAC relay into the VRChat MediaMTX instance
+- `castnexus-dns` and `castnexus-intercept` — console capture helpers, only started with the `console`/`vps-console` profile
 
-Optional `console` profile also starts:
+The normal OBS/PC/Music install does **not** need the DNS/interception containers running, but the images are part of the base stack for when you do need console capture - see section 2.
 
-- `castnexus-dns`
-- `castnexus-intercept`
+Two more services are entirely optional add-ons, each its own compose file:
 
-The normal OBS/PC/Music install does **not** need the DNS/interception containers.
+- **VRChat relay** (`docker-compose.vrchat-relay.yml`) — adds `castnexus-mediamtx-vrchat` and `castnexus-vrchat-relay` for VRChat/AVPro-compatible playback. See section 2.5.
+- **Self-hosted oauth-broker** (`docker-compose.oauth-broker.yml`) — only if you want to run your own Twitch/Google OAuth broker instead of the official public one. See section 4.5.
 
 Persistent data is bind-mounted under:
 
@@ -111,7 +110,7 @@ CASTNEXUS_VIDEO_ENCODER=auto
 CASTNEXUS_CPU_SAFE_MODE=auto
 ```
 
-The hosted OAuth broker is enabled by default, so most users can leave Twitch/Google client IDs and secrets empty.
+Signing in with Twitch (and optionally connecting YouTube) goes through the official CastNexus oauth-broker service by default - `CASTNEXUS_OAUTH_BROKER_URL` is required and there is no local/BYO-credential mode. Most users never need to touch this. See section 4.5 if you want to self-host your own broker instead.
 
 Start CastNexus:
 
@@ -155,6 +154,26 @@ chmod +x install.sh
 
 The helper starts normal mode when `TARGET_IPS` is blank, or console mode when console target addresses have been configured.
 
+## Building images from source instead of pulling them
+
+Each service lives in its own branch of this repository. To build local
+images instead of pulling the published ones from `ghcr.io`:
+
+```bash
+chmod +x fetch-sources.sh
+./fetch-sources.sh                 # fetches dashboard/, dns/, intercept/
+docker compose build
+docker compose up -d
+```
+
+Add `vrchat-relay` and/or `oauth-broker` as extra arguments to also fetch
+those optional add-ons' source before building them:
+
+```bash
+./fetch-sources.sh vrchat-relay oauth-broker
+docker compose -f docker-compose.yml -f docker-compose.vrchat-relay.yml -f docker-compose.oauth-broker.yml build
+```
+
 ---
 
 # 2. Docker console capture — optional
@@ -186,6 +205,21 @@ See the beginner guide for the full walkthrough and troubleshooting:
 For the public/VPS console gateway, see:
 
 **[docs/VPS-CONSOLE-GATEWAY.md](docs/VPS-CONSOLE-GATEWAY.md)**
+
+---
+
+# 2.5. Optional: VRChat relay add-on
+
+Not required for OBS, console, Music 24/7, VODs, overlays, or normal restreaming - only needed if you want your stream playable inside VRChat/AVPro.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.vrchat-relay.yml pull
+docker compose -f docker-compose.yml -f docker-compose.vrchat-relay.yml up -d
+```
+
+This starts two extra containers: `castnexus-mediamtx-vrchat` (a second MediaMTX tuned for VRChat's MPEG-TS HLS player) and `castnexus-vrchat-relay` (copies the H.264/AAC tracks into it). See:
+
+**[docs/HLS-VRCHAT.md](docs/HLS-VRCHAT.md)**
 
 ---
 
@@ -303,6 +337,29 @@ Full GPU setup/tuning/troubleshooting:
 
 ---
 
+# 4.5. Self-hosting your own oauth-broker — optional
+
+Not required. CastNexus defaults to the official public oauth-broker so nobody has to create Twitch/Google developer applications. Only do this if you deliberately want your own Twitch/Google apps instead.
+
+1. Create a Twitch app at [dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps) and a Google OAuth app with the YouTube Data API v3 enabled.
+2. Set their redirect URIs to your own broker's `/callback/twitch` and `/callback/youtube` (e.g. `https://your-domain.example/oauth/callback/twitch`).
+3. In `.env`, fill in the "Self-hosting your own oauth-broker" section: `OAUTH_BROKER_PUBLIC_URL`, `OAUTH_BROKER_SIGNING_SECRET` (a random 32+ byte value), and the Twitch/Google client id/secret pairs.
+4. Start it alongside the base stack:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.oauth-broker.yml pull
+   docker compose -f docker-compose.yml -f docker-compose.oauth-broker.yml up -d
+   ```
+
+5. Put it behind your own HTTPS reverse proxy at the `OAUTH_BROKER_PUBLIC_URL` you chose (it listens on `127.0.0.1:8091` only).
+6. Point every CastNexus install (this one and any others) at it: `CASTNEXUS_OAUTH_BROKER_URL=https://your-domain.example/oauth`.
+
+Full design and API surface:
+
+**[docs/HOSTED-OAUTH.md](docs/HOSTED-OAUTH.md)**
+
+---
+
 # 5. Advanced `.env` configuration
 
 Do not guess at environment variables from source code. The supported advanced reference is now:
@@ -346,14 +403,17 @@ docker compose exec dashboard printenv CASTNEXUS_VIDEO_ENCODER
 
 **Best for:** Windows/Linux users who want a native launcher and setup UI.
 
-Build from source:
+Each part of CastNexus lives in its own branch of this repository. Easiest path - download a prebuilt installer from the [GitHub Releases page](https://github.com/NekoSuneProjects/CastNexus/releases) (Windows `.exe`/portable, Linux `.AppImage`/`.deb`), built automatically from the `desktopapp` branch.
+
+To build it yourself from source:
 
 ```bash
-npm --prefix electron install
-npm --prefix electron run build
+git clone --branch desktopapp https://github.com/NekoSuneProjects/CastNexus.git castnexus-desktopapp
+cd castnexus-desktopapp
+npm run fetch:dashboard   # pulls dashboard/ from the dashboard branch
+npm run install:all
+npm run build
 ```
-
-Release builds may also be available from the repository's GitHub Releases page.
 
 Desktop does not provide the same full Linux DNS/ARP console interception environment as the Docker/Linux deployment.
 
@@ -364,12 +424,15 @@ Desktop does not provide the same full Linux DNS/ARP console interception enviro
 **Best for:** headless/server deployments where you deliberately want the Node.js CLI instead of the Docker stack.
 
 ```bash
-git clone https://github.com/NekoSuneProjects/CastNexus.git
-cd CastNexus
-npm --prefix cli install
-npm --prefix cli run setup
-npm --prefix cli start
+git clone --branch cli https://github.com/NekoSuneProjects/CastNexus.git castnexus-cli
+cd castnexus-cli
+npm run fetch:dashboard   # pulls dashboard/ from the dashboard branch
+npm run install:all
+npm run setup
+npm start
 ```
+
+Prebuilt standalone binaries (Windows/Linux) are also published from the `cli` branch's CI as workflow artifacts.
 
 The Docker deployment is still the recommended path for most self-hosted users because it includes the complete service stack.
 

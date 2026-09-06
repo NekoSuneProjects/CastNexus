@@ -244,13 +244,13 @@ TARGET_IPS=
 GATEWAY_IP=
 ```
 
-Keep the hosted OAuth broker enabled unless you deliberately want to use your own Twitch/Google developer credentials:
+Leave the oauth-broker URL as the default unless you deliberately want to self-host your own broker with your own Twitch/Google developer credentials (see INSTALL.md's "Self-hosting your own oauth-broker" section):
 
 ```dotenv
 CASTNEXUS_OAUTH_BROKER_URL=https://castnexus.nekosunevr.co.uk/oauth
 ```
 
-The Twitch/YouTube client ID and secret fields may remain empty when you are using the hosted OAuth broker.
+This is required - there is no local/BYO-credential mode.
 
 Save in Nano:
 

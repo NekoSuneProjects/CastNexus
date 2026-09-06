@@ -1,0 +1,39 @@
+# Optional VRChat/AVPro compatibility add-on. Merge this in alongside the
+# base stack:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.vrchat-relay.yml up -d
+#
+# See docs/HLS-VRCHAT.md for what this does and why it's a separate sidecar.
+services:
+  # VRChat / AVPro compatibility output. It receives an AAC-only RTSP copy
+  # from vrchat-relay and remuxes the H.264/AAC tracks to MPEG-TS HLS on :8898.
+  mediamtx-vrchat:
+    image: bluenviron/mediamtx:1.19.2
+    container_name: castnexus-mediamtx-vrchat
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    volumes:
+      - ./config/mediamtx-vrchat.yml:/mediamtx.yml:ro
+
+  # The normal public MediaMTX path intentionally contains two audio tracks:
+  # AAC for HLS and Opus for WebRTC. MPEG-TS HLS accepts only one audio track,
+  # so this sidecar selects video + the first (AAC) track and republishes it to
+  # the VRChat MediaMTX local RTSP listener. Streams are copied, not re-encoded.
+  vrchat-relay:
+    image: ghcr.io/nekosuneprojects/castnexus-vrchat-relay:${CASTNEXUS_IMAGE_TAG:-latest}
+    build:
+      context: ./vrchat-relay
+    container_name: castnexus-vrchat-relay
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+      - mediamtx-vrchat
+    environment:
+      MEDIAMTX_API: http://127.0.0.1:9997
+      VRCHAT_SOURCE_RTSP: rtsp://127.0.0.1:8554
+      VRCHAT_TARGET_RTSP: rtsp://127.0.0.1:8564
+      VRCHAT_RELAY_POLL_MS: ${VRCHAT_RELAY_POLL_MS:-1500}
+      VRCHAT_RELAY_DEBUG: ${VRCHAT_RELAY_DEBUG:-false}

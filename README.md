@@ -232,7 +232,7 @@ Studio:   http://<CASTNEXUS_HOST>:8090/dashboard
 
 # Docker install
 
-Copy the environment template:
+See [`INSTALL.md`](INSTALL.md) for the full walkthrough. The short version:
 
 ```bash
 cp .env.example .env
@@ -243,10 +243,11 @@ Configure at minimum:
 
 ```dotenv
 PI_IP=192.168.1.50
-TWITCH_CLIENT_ID=
-TWITCH_CLIENT_SECRET=
-TWITCH_REDIRECT_URI=http://192.168.1.50:8090/auth/twitch/callback
 ```
+
+Signing in with Twitch (and optionally connecting YouTube) goes through the
+official CastNexus oauth-broker service by default - there are no developer
+credentials to configure. See [`docs/HOSTED-OAUTH.md`](docs/HOSTED-OAUTH.md).
 
 For console capture also configure:
 
@@ -315,7 +316,10 @@ Beta versions use prerelease tags such as `v1.3.0-beta.1`. GitHub marks them as 
 
 # Creating a release
 
-Release builder:
+Each service lives in its own branch and already publishes its own Docker
+image (or, for `desktopapp`/`cli`, build artifacts) automatically on every
+push to that branch. This `main` branch's release workflow ties a version
+number to all of them at once:
 
 ```text
 .github/workflows/release.yml
@@ -340,15 +344,12 @@ If there is no prerelease suffix the workflow creates one similar to:
 
 The workflow then:
 
-1. builds `linux/amd64` + `linux/arm64` Docker images
-2. publishes exact-version Docker tags
-3. updates the `:beta` Docker tags
-4. builds CastNexus Desktop for Windows x64
-5. builds CastNexus Desktop for Linux x64
-6. bundles MediaMTX + yt-dlp nightly + Deno into desktop packages
-7. creates a GitHub **Pre-release**
-8. attaches the Windows/Linux downloads
-9. generates release notes
+1. checks out the `dashboard`, `dns`, `intercept`, `oauth-broker` and `vrchat-relay` branches and builds/publishes `linux/amd64` + `linux/arm64` Docker images for each, tagged with the version and the channel (`:latest` or `:beta`)
+2. checks out the `desktopapp` branch (fetching `dashboard/` from the `dashboard` branch) and builds the Windows and Linux desktop installers
+3. checks out the `cli` branch (fetching `dashboard/` the same way) and builds the Windows/Linux CLI binaries
+4. creates a GitHub **Pre-release** (or a normal Release for a stable dispatch)
+5. attaches the Windows/Linux desktop and CLI downloads
+6. generates release notes
 
 ## Promote a stable release
 
@@ -385,16 +386,14 @@ CastNexus embeds its version/channel into each release build. Studio checks GitH
 
 # Desktop — Windows and Linux
 
-Release assets:
+Prebuilt installers are attached to each [GitHub Release](https://github.com/NekoSuneProjects/CastNexus/releases), and beta artifacts are available from every run of the `desktopapp` branch's own CI:
 
 ```text
-CastNexus-Windows-x64.zip
-CastNexus-Linux-x64.tar.gz
+CastNexus Studio-<version>.exe / portable (Windows)
+CastNexus Studio-<version>.AppImage / .deb (Linux)
 ```
 
-Each release bundle includes the CastNexus launcher, MediaMTX, yt-dlp nightly and Deno. **FFmpeg is still a desktop host prerequisite** for restream/VOD processing.
-
-See [`desktop/README.md`](desktop/README.md) for full desktop information.
+The desktop app lives entirely in the [`desktopapp` branch](https://github.com/NekoSuneProjects/CastNexus/tree/desktopapp) - see that branch's README for building it from source.
 
 Desktop application data is stored in:
 
@@ -497,38 +496,49 @@ The public playback path uses the Twitch login instead of exposing the raw strea
 
 # CI vs Release builds
 
-`.github/workflows/build.yml` is **CI only**. It validates JavaScript, profile isolation/VOD resolver logic, performs non-publishing Docker builds and smoke-packages the Linux desktop app.
+Each branch's own `.github/workflows/test.yml` is **CI only** - it validates that branch's code/tests and does a non-publishing Docker/build smoke test on every push and pull request.
 
-It does **not** publish `latest`.
+Each branch's own `.github/workflows/publish.yml` publishes a `:latest` Docker image (or build artifact) automatically on every push to that branch - this is continuous, not versioned.
 
-Only `.github/workflows/release.yml` promotes Docker images or creates GitHub Releases.
+Only this `main` branch's `.github/workflows/release.yml` ties a version number to all of them at once and creates a GitHub Release - see "Creating a release" above.
 
 ---
 
 ## Project layout
 
+Each service lives in its own branch of this repository - `main` only holds
+orchestration, docs and the versioned release workflow:
+
+| Branch | What it holds |
+|---|---|
+| [`dashboard`](https://github.com/NekoSuneProjects/CastNexus/tree/dashboard) | The Studio/API app - profiles, music, VOD, overlays, destinations, oauth-broker client |
+| [`oauth-broker`](https://github.com/NekoSuneProjects/CastNexus/tree/oauth-broker) | The standalone Twitch/YouTube OAuth2 broker service |
+| [`dns`](https://github.com/NekoSuneProjects/CastNexus/tree/dns) | Console DNS-capture helper |
+| [`intercept`](https://github.com/NekoSuneProjects/CastNexus/tree/intercept) | Console LAN/VPS ARP+DNAT capture helper |
+| [`vrchat-relay`](https://github.com/NekoSuneProjects/CastNexus/tree/vrchat-relay) | Optional VRChat/AVPro HLS-compatibility relay |
+| [`desktopapp`](https://github.com/NekoSuneProjects/CastNexus/tree/desktopapp) | The Electron desktop wrapper (Windows/Linux) |
+| [`cli`](https://github.com/NekoSuneProjects/CastNexus/tree/cli) | The headless install/launch CLI |
+
+This branch (`main`) holds:
+
 ```text
 CastNexus/
-├── dashboard/
-│   ├── public/               # CastNexus Studio frontend
-│   ├── profile-music.js      # profile-isolated music service
-│   ├── profile-vod.js        # Twitch HLS + VOD/upload rerun service
-│   ├── destination-output.js # source / 16:9 / 9:16 destination encoder
-│   ├── music24.js            # always-on Docker music worker
-│   ├── music-scene.js        # landscape/vertical spectrum scene
-│   ├── scenes.js             # Starting Soon / BRB / Ending / Offline
-│   └── overlays.js           # browser, HTML, text and master overlays
-├── desktop/                  # Windows/Linux launcher build
-├── dns/                      # console DNS capture helper
-├── intercept/                # console ARP/DNAT capture helper
-├── config/                   # MediaMTX configuration
-├── docs/
-│   ├── PROFILE-MUSIC-DUAL-FORMAT.md
-│   └── VOD-RERUNS.md
-├── docker-compose.yml
+├── assets/brand/              # logo
+├── Screenshots/                # product screenshots (this README)
+├── config/                    # MediaMTX configuration for the base + optional add-ons
+├── docs/                      # full documentation set
+├── docker-compose.yml          # required: dashboard, dns, intercept, mediamtx
+├── docker-compose.vrchat-relay.yml   # optional add-on
+├── docker-compose.oauth-broker.yml   # optional: self-hosting your own broker
+├── docker-compose.gpu-nvidia.yml    # optional GPU overlay
+├── docker-compose.gpu-vaapi.yml     # optional GPU overlay
+├── docker-compose.vps.yml          # optional VPS console-gateway overlay
+├── fetch-sources.sh            # pulls service source from their branches, for local builds
+├── install.sh                  # Docker install helper
+├── INSTALL.md
+├── TODO.md
 └── .github/workflows/
-    ├── build.yml             # validation / CI
-    └── release.yml           # beta + stable releases
+    └── release.yml            # versioned, cross-branch release builds
 ```
 
 ---

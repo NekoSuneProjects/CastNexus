@@ -1,4 +1,4 @@
-name: Build
+name: CastNexus Release
 
 on:
   workflow_dispatch:
@@ -17,10 +17,8 @@ on:
         type: string
 
 permissions:
-  contents: read
-
-env:
-  MEDIAMTX_VERSION: v1.19.2
+  contents: write
+  packages: write
 
 jobs:
   meta:
@@ -89,20 +87,32 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: desktopapp
+      - uses: actions/checkout@v4
+        with:
+          ref: dashboard
+          path: _dashboard-branch
+      - name: Place dashboard app for bundling
+        shell: bash
+        run: cp -r _dashboard-branch/dashboard dashboard
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - run: npm run install:all
+      - name: Install Linux packaging tools
+        if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends binutils fakeroot
+      - run: npm --prefix electron install
       - name: Build Electron
-        run: npm --prefix electron run build
+        working-directory: electron
+        run: npx electron-builder --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: electron-${{ matrix.target }}
           path: |
             electron/dist/*.exe
             electron/dist/*.AppImage
-            electron/dist/*.dmg
-            electron/dist/*.zip
+            electron/dist/*.deb
 
   build-cli:
     strategy:
@@ -115,12 +125,22 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: cli
+      - uses: actions/checkout@v4
+        with:
+          ref: dashboard
+          path: _dashboard-branch
+      - name: Place dashboard app for bundling
+        shell: bash
+        run: cp -r _dashboard-branch/dashboard dashboard
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
       - run: npm --prefix cli install
       - name: Build CLI binary
-        run: npm --prefix cli run pkg:build
+        working-directory: cli
+        run: npm run pkg:build
       - uses: actions/upload-artifact@v4
         with:
           name: cli-${{ matrix.target }}
@@ -132,13 +152,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [dashboard, dns, intercept, oauth-broker]
+        service: [dashboard, dns, intercept, oauth-broker, vrchat-relay]
     runs-on: [self-hosted, Linux, docker, buildx]
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.service }}
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -167,7 +189,7 @@ jobs:
             CASTNEXUS_REVISION=${{ github.sha }}
           tags: |
             ghcr.io/${{ steps.tags.outputs.repo }}-${{ matrix.service }}:${{ steps.tags.outputs.version }}
-            ghcr.io/${{ steps.tags.outputs.repo }}-${{ matrix.service }}:latest
+            ghcr.io/${{ steps.tags.outputs.repo }}-${{ matrix.service }}:${{ steps.tags.outputs.channel == 'stable' && 'latest' || 'beta' }}
           labels: |
             org.opencontainers.image.title=CastNexus ${{ matrix.service }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -183,7 +205,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Download Electron artifacts
+      - name: Download Electron Windows artifacts
         uses: actions/download-artifact@v4
         with:
           name: electron-win
@@ -222,17 +244,18 @@ jobs:
 
           #### Desktop App (Electron)
           - **Windows**: CastNexus desktop installer
-          - **Linux**: CastNexus AppImage
+          - **Linux**: CastNexus AppImage / .deb
 
           #### CLI (Headless / Server)
           - **Windows**: `castnexus-cli-win-x64.exe` - Command-line launcher
           - **Linux**: `castnexus-cli-linux-x64` - Command-line launcher
 
           #### Docker
-          All services including dashboard, DNS gateway, and RTMP intercept:
+          Each service publishes its own image:
           ```bash
           docker pull ghcr.io/${{ github.repository }}-dashboard:${{ needs.meta.outputs.version }}
-          docker-compose -f compose.yaml up -d
+          docker compose pull
+          docker compose up -d
           ```
 
           ### Updating
@@ -248,8 +271,7 @@ jobs:
           ### Documentation
 
           - [README](https://github.com/${{ github.repository }}/blob/main/README.md) — Project overview
-          - [INSTALL.md](https://github.com/${{ github.repository }}/blob/main/INSTALL.md) — Desktop, CLI, and Docker setup
-          - [Contributing](https://github.com/${{ github.repository }}/blob/main/CONTRIBUTING.md) — How to contribute
+          - [INSTALL.md](https://github.com/${{ github.repository }}/blob/main/INSTALL.md) — Docker, Desktop, and CLI setup
 
           GitHub's automatically generated notes below list the code changes included since the previous release.
           EOF
@@ -265,6 +287,7 @@ jobs:
           files: |
             electron-*/*.exe
             electron-*/*.AppImage
+            electron-*/*.deb
             cli-*/*
             checksums/checksums.txt
         env:
