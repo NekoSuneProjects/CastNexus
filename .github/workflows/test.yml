@@ -43,6 +43,18 @@ jobs:
       - name: Validate compose file
         run: docker compose config >/dev/null
 
+      - name: Ensure MediaMTX config path is a file, not a stray directory
+        shell: bash
+        run: |
+          # A previous run's Docker bind-mount to a missing path can leave a
+          # root-owned directory here, which then shadows the tracked file on
+          # this self-hosted runner's reused workspace.
+          if [ -d config/mediamtx.yml ]; then
+            echo "Removing stray directory at config/mediamtx.yml"
+            rm -rf config/mediamtx.yml 2>/dev/null || sudo rm -rf config/mediamtx.yml
+            git checkout -- config/mediamtx.yml
+          fi
+
       - name: Boot-test pinned MediaMTX configs
         shell: bash
         run: |
