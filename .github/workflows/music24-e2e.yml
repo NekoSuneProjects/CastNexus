@@ -62,6 +62,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # A previous run's Docker bind-mount to a missing path can leave a
+          # root-owned directory here, which then shadows the tracked file on
+          # this self-hosted runner's reused workspace.
+          if [ -d config/mediamtx.yml ]; then
+            echo "Removing stray directory at config/mediamtx.yml"
+            rm -rf config/mediamtx.yml 2>/dev/null || sudo rm -rf config/mediamtx.yml
+            git checkout -- config/mediamtx.yml
+          fi
           docker run -d --name castnexus-music24-mediamtx \
             --network host \
             -v "$PWD/config/mediamtx.yml:/mediamtx.yml:ro" \
