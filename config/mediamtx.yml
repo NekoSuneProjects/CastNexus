@@ -19,8 +19,17 @@ hlsAllowOrigins:
 
 webrtc: yes
 webrtcAddress: :8889
+# Replace with the address(es) viewers actually use to reach this server -
+# your public domain and/or IP, not a LAN placeholder. WebRTC needs this to
+# match reality or ICE negotiation fails even though HLS/RTSP still work.
 webrtcAdditionalHosts:
-  - 192.168.1.107
+  - ps4stream.nekosunevr.co.uk
+# A STUN server plus a single fixed UDP port (instead of a random ephemeral
+# one per connection) makes this firewall/NAT-forwarding friendly - open
+# only this one UDP port rather than a whole range.
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+webrtcICEUDPMuxAddress: :8189
 
 srt: yes
 srtAddress: :8890
