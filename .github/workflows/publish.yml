@@ -9,6 +9,32 @@ permissions:
   contents: read
 
 jobs:
+  meta:
+    runs-on: [self-hosted, Linux, docker, buildx]
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      tag: v${{ steps.version.outputs.value }}
+      release_exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - name: Read version from main
+        id: version
+        run: echo "value=$(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+      - name: Check if a release already exists for this version
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/v${{ steps.version.outputs.value }}")
+          if [ "$status" = "200" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release v${{ steps.version.outputs.value }} already exists - will skip publishing, only building."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-electron:
     strategy:
       matrix:
@@ -44,3 +70,32 @@ jobs:
             electron/dist/*.exe
             electron/dist/*.AppImage
             electron/dist/*.deb
+
+  publish-release:
+    needs: [meta, build-electron]
+    if: needs.meta.outputs.release_exists == 'false'
+    runs-on: [self-hosted, Linux, docker, buildx]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: electron-win
+          path: electron-win
+      - uses: actions/download-artifact@v4
+        with:
+          name: electron-linux
+          path: electron-linux
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: CastNexus Desktop ${{ needs.meta.outputs.version }}
+          prerelease: ${{ contains(needs.meta.outputs.version, '-') }}
+          generate_release_notes: true
+          files: |
+            electron-win/*.exe
+            electron-linux/*.AppImage
+            electron-linux/*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
