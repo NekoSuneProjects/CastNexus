@@ -30,6 +30,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      - name: Install Linux packaging tools
+        if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends binutils fakeroot
       - run: npm --prefix electron install
       - name: Build Electron
         working-directory: electron
