@@ -3,7 +3,7 @@ name: VRChat Relay Image
 on:
   push:
     branches:
-      - main
+      - vrchat-relay
     paths:
       - "vrchat-relay/**"
       - ".github/workflows/vrchat-relay-image.yml"
@@ -36,12 +36,11 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: |
-            CASTNEXUS_VERSION=main
+            CASTNEXUS_VERSION=vrchat-relay
             CASTNEXUS_CHANNEL=dev
             CASTNEXUS_REVISION=${{ github.sha }}
           tags: |
             ghcr.io/nekosuneprojects/castnexus-vrchat-relay:latest
-            ghcr.io/nekosuneprojects/castnexus-vrchat-relay:main
           labels: |
             org.opencontainers.image.title=CastNexus VRChat Relay
             org.opencontainers.image.source=https://github.com/${{ github.repository }}

@@ -55,9 +55,9 @@ If an external proxy overrides `/hls/` with a custom location, leave that route 
 ## Components
 
 - `config/mediamtx.yml` — primary MediaMTX, `hlsVariant: lowLatency`
-- `dashboard/vrchat-relay.js` — watches live `public/*` paths and copies only H.264 + AAC to the VRChat instance
+- `vrchat-relay/vrchat-relay.js` — watches live `public/*` paths and copies only H.264 + AAC to the VRChat instance
 - `config/mediamtx-vrchat.yml` — local RTSP ingest on `127.0.0.1:8564`, `hlsVariant: mpegts`
-- `castnexus-vrchat-relay` — Compose sidecar using the dashboard image because it already includes FFmpeg
+- `castnexus-vrchat-relay` — its own Compose service/image, built from this repo's `vrchat-relay/` Dockerfile
 
 ## Restart after updating
 
