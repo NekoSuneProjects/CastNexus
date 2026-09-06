@@ -21,39 +21,7 @@ Desktop and CLI installations. See [`docs/HOSTED-OAUTH.md`](docs/HOSTED-OAUTH.md
 
 ## Screenshots
 
-Click any tile to open the full-size image.
-
-<table>
-  <tr>
-    <td width="33%" align="center"><a href="Screenshots/chrome_VWIe4CaoUu.png"><img src="Screenshots/chrome_VWIe4CaoUu.png" alt="Overview"></a><br><sub><b>Overview</b> — live program status, at-a-glance tiles and the program preview</sub></td>
-    <td width="33%" align="center"><a href="Screenshots/chrome_arviMF4h91.png"><img src="Screenshots/chrome_arviMF4h91.png" alt="Watch this feed"></a><br><sub><b>Watch this feed</b> — the VRChat-ready HLS url plus browser player, WHEP, RTSP and SRT</sub></td>
-    <td width="33%" align="center"><a href="Screenshots/chrome_fzikzGNOn6.png"><img src="Screenshots/chrome_fzikzGNOn6.png" alt="Settings"></a><br><sub><b>Settings</b> — account, public playback links and the public base URL override</sub></td>
-  </tr>
-  <tr>
-    <td width="33%" align="center"><a href="Screenshots/chrome_7yYMql2Jbh.png"><img src="Screenshots/chrome_7yYMql2Jbh.png" alt="Other clients"></a><br><sub><b>Other clients</b> — WHEP for OBS 30+, RTSP for VLC/ffmpeg, SRT contribution, security notes</sub></td>
-    <td width="33%" align="center"><a href="Screenshots/firefox_U88NyzeNKM.png"><img src="Screenshots/firefox_U88NyzeNKM.png" alt="Sources · PC"></a><br><sub><b>Sources · PC</b> — per-profile RTMP ingest and profile isolation, so a second OBS can idle</sub></td>
-    <td width="33%" align="center"><a href="Screenshots/firefox_grBQoVotf0.png"><img src="Screenshots/firefox_grBQoVotf0.png" alt="Sources · Console"></a><br><sub><b>Sources · Console</b> — DNS capture host, masked Twitch key and the overlay compositor toggle</sub></td>
-  </tr>
-  <tr>
-    <td width="33%" align="center"><a href="Screenshots/chrome_2HjFfVV5by.png"><img src="Screenshots/chrome_2HjFfVV5by.png" alt="Sources · 24/7 Music"></a><br><sub><b>Sources · 24/7 Music</b> — the Docker music publisher on air with its own path and readiness</sub></td>
-    <td width="33%" align="center"><a href="Screenshots/chrome_OOq1NtXrmf.png"><img src="Screenshots/chrome_OOq1NtXrmf.png" alt="Destinations"></a><br><sub><b>Destinations</b> — multi-destination fan-out with per-output layout</sub></td>
-    <td width="33%" align="center"><a href="Screenshots/chrome_8IfvSPlesW.png"><img src="Screenshots/chrome_8IfvSPlesW.png" alt="Add destination"></a><br><sub><b>Add destination</b> — 20 platforms, with verified ingest servers auto-filled</sub></td>
-  </tr>
-  <tr>
-    <td width="33%" align="center"><a href="Screenshots/chrome_tsETaLRkSz.png"><img src="Screenshots/chrome_tsETaLRkSz.png" alt="Output route"></a><br><sub><b>Output route</b> — auto-filled RTMPS server and source / 16:9 / 9:16 output layout</sub></td>
-    <td width="33%" align="center"><a href="Screenshots/chrome_9XMn2cb8ee.png"><img src="Screenshots/chrome_9XMn2cb8ee.png" alt="Overlay Studio"></a><br><sub><b>Overlay Studio</b> — one master OBS url, live scene switching and sandboxed browser overlays</sub></td>
-    <td width="33%" align="center"><a href="Screenshots/chrome_NSx2MEblTW.png"><img src="Screenshots/chrome_NSx2MEblTW.png" alt="Music 24/7"></a><br><sub><b>Music 24/7</b> — program monitor, now playing, spectrum and profile scene design</sub></td>
-  </tr>
-  <tr>
-    <td width="33%" align="center"><a href="Screenshots/chrome_bBJfkc6sGA.png"><img src="Screenshots/chrome_bBJfkc6sGA.png" alt="Music library"></a><br><sub><b>Music library</b> — per-profile tracks in MP3, FLAC, OGG, WAV or M4A</sub></td>
-    <td width="33%" align="center"><a href="Screenshots/chrome_cc10ELafXA.png"><img src="Screenshots/chrome_cc10ELafXA.png" alt="Reruns · engine"></a><br><sub><b>Reruns · engine</b> — Twitch live status, safe live routing and the detected video encoder</sub></td>
-    <td width="33%" align="center"><a href="Screenshots/chrome_7tJCP6ixXv.png"><img src="Screenshots/chrome_7tJCP6ixXv.png" alt="Reruns · library"></a><br><sub><b>Reruns · library</b> — MediaMTX recordings, rerun sources and YouTube upload jobs</sub></td>
-  </tr>
-  <tr>
-    <td width="33%" align="center"><a href="Screenshots/chrome_3D16JcrFlp.png"><img src="Screenshots/chrome_3D16JcrFlp.png" alt="Profiles"></a><br><sub><b>Profiles</b> — separate workspaces for PC, console and music, switched live</sub></td>
-    <td width="33%" align="center"><a href="Screenshots/chrome_uqS9Tgolmq.png"><img src="Screenshots/chrome_uqS9Tgolmq.png" alt="New profile"></a><br><sub><b>New profile</b> — mode, colour and 16:9 / 9:16 default canvas</sub></td>
-  </tr>
-</table>
+See the [`main` branch README](https://github.com/NekoSuneProjects/CastNexus/tree/main#screenshots) for a full screenshot gallery of the product.
 
 ---
 
