@@ -99,9 +99,10 @@ function musicWorkerSignature(account, profile) {
     canvasMode:profile?.canvasMode || "landscape",
     video:profileVideo(profile),
     visual:profile?.musicVisual || {},
-    // Direct rendering requires a quick worker reload when the operator enters
-    // or leaves a Program Scene. Normal music playback remains uninterrupted.
-    currentScene:activeProgramScene(account),
+    // currentScene is intentionally excluded: entering/leaving a Program
+    // Scene is handled by navigating the running compositor to the new page
+    // (see Music24Worker.update) rather than restarting the whole worker,
+    // so switching scenes does not interrupt the live output.
   });
 }
 
@@ -221,6 +222,7 @@ class Music24Worker {
   update(account, profile) {
     this.account = account;
     this.profile = profile;
+    if (this.compositor) this.compositor.navigate(programSceneUrl(account, profile)).catch(() => {});
   }
 
   getNow() {

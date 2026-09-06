@@ -47,15 +47,18 @@ test("Program scenes switch the compositor to the direct master scene", () => {
   assert.equal(ending, starting);
 });
 
-test("Music worker signature changes when entering or leaving Program Scene mode", () => {
+test("Music worker signature is unaffected by entering or leaving Program Scene mode", () => {
+  // Scene changes are applied by navigating the running compositor to the
+  // new page (Music24Worker.update), not by restarting the worker, so the
+  // live output is never interrupted just for switching scenes.
   const live = musicWorkerSignature(account(null), profile);
   const starting = musicWorkerSignature(account({ kind: "builtin", name: "startingSoon" }), profile);
   const brb = musicWorkerSignature(account({ kind: "builtin", name: "brb" }), profile);
   const ending = musicWorkerSignature(account({ kind: "builtin", name: "ending" }), profile);
 
-  assert.notEqual(starting, live);
-  assert.notEqual(brb, live);
-  assert.notEqual(ending, live);
+  assert.equal(starting, live);
+  assert.equal(brb, live);
+  assert.equal(ending, live);
 });
 
 test("Music 24/7 defaults to an efficient 3500 Kbps video bitrate", () => {

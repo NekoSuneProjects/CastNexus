@@ -229,6 +229,25 @@ class Compositor extends EventEmitter {
     this._setState("idle");
   }
 
+  // Swaps the loaded page in place, leaving ffmpeg/audio/RTMP publish
+  // running untouched. Used for Program Scene changes so switching scenes
+  // does not interrupt the live output.
+  async navigate(pageUrl){
+    if(this.pageUrl===pageUrl)return;
+    this.pageUrl=pageUrl;
+    if(this.state!=="running")return;
+    try{
+      if(this.electronOffscreen){
+        if(this.offscreenWindow)await this.offscreenWindow.webContents.loadURL(pageUrl);
+      }else if(this.page){
+        await this.page.goto(pageUrl,{waitUntil:"domcontentloaded",timeout:30000});
+      }
+      if(this.debug)this.logger.log(`[compositor:${this.accountId}] navigated to ${pageUrl}`);
+    }catch(err){
+      this.logger.warn(`[compositor:${this.accountId}] navigate failed: ${err.message}`);
+    }
+  }
+
   _setState(s){if(this.state===s)return;this.state=s;this.emit("status",this.status());}
 
   async _runOnce(){
