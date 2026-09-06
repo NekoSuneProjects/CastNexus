@@ -37,12 +37,13 @@ function decryptSecret(blob, secret) {
   return Buffer.concat([decipher.update(Buffer.from(blob.data, "base64")), decipher.final()]).toString("utf8");
 }
 
-function createYoutubeUploadService({ clientId, clientSecret, redirectUri, state, saveState, recordings, hostedOauth = null, fetchImpl = global.fetch } = {}) {
+function createYoutubeUploadService({ state, saveState, recordings, hostedOauth, fetchImpl = global.fetch } = {}) {
+  if (!hostedOauth) throw new Error("createYoutubeUploadService requires a hostedOauth client");
   const tokenCache = new Map();
   const softLimit = Math.max(1, Number(process.env.YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT || 90));
   const allowlist = parseAllowlist();
 
-  function configured() { return !!(hostedOauth?.enabled?.() || (clientId && clientSecret && redirectUri)); }
+  function configured() { return true; }
 
   function quotaStatus(account) {
     const today = dailyKey();
@@ -85,35 +86,13 @@ function createYoutubeUploadService({ clientId, clientSecret, redirectUri, state
     saveState(state);
   }
 
-  async function exchangeCode(code) {
-    if (hostedOauth?.enabled?.()) {
-      const data = await hostedOauth.youtubeRefresh(refresh);
-      if (!data.access_token) throw new Error("OAuth broker did not return a YouTube access token");
-      tokenCache.set(account.twitchUserId, { token:data.access_token, expiresAt:Date.now() + Number(data.expires_in || 3600) * 1000 });
-      return data.access_token;
-    }
-    const res = await fetchImpl("https://oauth2.googleapis.com/token", {
-      method:"POST",
-      headers:{ "Content-Type":"application/x-www-form-urlencoded" },
-      body:new URLSearchParams({ client_id:clientId, client_secret:clientSecret, code, grant_type:"authorization_code", redirect_uri:redirectUri }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.access_token) throw new Error(data.error_description || data.error || `Google token exchange failed (${res.status})`);
-    return data;
-  }
-
   async function accessToken(account) {
     const cached = tokenCache.get(account.twitchUserId);
     if (cached && Date.now() < cached.expiresAt - 60_000) return cached.token;
     const refresh = decryptSecret(account.youtubeAuth?.refreshToken, state.sessionSecret);
     if (!refresh) throw Object.assign(new Error("Connect YouTube before uploading recordings."), { code:"YOUTUBE_NOT_CONNECTED" });
-    const res = await fetchImpl("https://oauth2.googleapis.com/token", {
-      method:"POST",
-      headers:{ "Content-Type":"application/x-www-form-urlencoded" },
-      body:new URLSearchParams({ client_id:clientId, client_secret:clientSecret, refresh_token:refresh, grant_type:"refresh_token" }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.access_token) throw new Error(data.error_description || data.error || `Google token refresh failed (${res.status})`);
+    const data = await hostedOauth.youtubeRefresh(refresh);
+    if (!data.access_token) throw new Error("OAuth broker did not return a YouTube access token");
     tokenCache.set(account.twitchUserId, { token:data.access_token, expiresAt:Date.now() + Number(data.expires_in || 3600) * 1000 });
     return data.access_token;
   }
@@ -188,11 +167,10 @@ function createYoutubeUploadService({ clientId, clientSecret, redirectUri, state
       connected:!!account.youtubeAuth?.refreshToken,
       connectedAt:account.youtubeAuth?.connectedAt || null,
       quota:quotaStatus(account),
-      redirectUri,
     };
   }
 
-  return { configured, quotaStatus, assertQuota, storeTokens, disconnect, exchangeCode, accessToken, uploadFile, uploadRecording, status };
+  return { configured, quotaStatus, assertQuota, storeTokens, disconnect, accessToken, uploadFile, uploadRecording, status };
 }
 
 module.exports = { createYoutubeUploadService, parseAllowlist, quotaAllowed, encryptSecret, decryptSecret, dailyKey };

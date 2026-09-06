@@ -11,7 +11,8 @@ test("hosted OAuth creates a valid S256 PKCE pair", () => {
   assert.equal(pair.challenge, base64url(crypto.createHash("sha256").update(pair.verifier).digest()));
 });
 
-test("hosted OAuth refuses non-HTTPS brokers", () => {
-  assert.equal(createHostedOauth({ brokerUrl:"http://example.test/oauth" }).enabled(), false);
-  assert.equal(createHostedOauth({ brokerUrl:"https://restreamer.example/oauth" }).enabled(), true);
+test("hosted OAuth refuses non-HTTPS or missing brokers", () => {
+  assert.throws(() => createHostedOauth({ brokerUrl:"http://example.test/oauth" }));
+  assert.throws(() => createHostedOauth({ brokerUrl:"" }));
+  assert.doesNotThrow(() => createHostedOauth({ brokerUrl:"https://restreamer.example/oauth" }));
 });

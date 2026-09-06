@@ -45,8 +45,6 @@ services:
   # the VRChat MediaMTX local RTSP listener. Streams are copied, not re-encoded.
   vrchat-relay:
     image: ghcr.io/nekosuneprojects/castnexus-vrchat-relay:${CASTNEXUS_IMAGE_TAG:-latest}
-    build:
-      context: ./vrchat-relay
     container_name: castnexus-vrchat-relay
     network_mode: host
     restart: unless-stopped
@@ -73,9 +71,6 @@ services:
     environment:
       DASHBOARD_PORT: ${DASHBOARD_PORT:-8090}
       PI_IP: ${PI_IP}
-      TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID:-}
-      TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET:-}
-      TWITCH_REDIRECT_URI: ${TWITCH_REDIRECT_URI:-}
       MEDIAMTX_API: http://127.0.0.1:9997
       MEDIAMTX_PLAYBACK: http://127.0.0.1:9996
       MEDIA_RTMP_ORIGIN: rtmp://127.0.0.1:1935
@@ -156,9 +151,6 @@ services:
       COVER_MUSICBRAINZ_USER_AGENT: ${COVER_MUSICBRAINZ_USER_AGENT:-CastNexus/1.0 (https://github.com/NekoSuneProjects/CastNexus)}
       COVER_ITUNES_COUNTRY: ${COVER_ITUNES_COUNTRY:-US}
 
-      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
-      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
-      YOUTUBE_REDIRECT_URI: ${YOUTUBE_REDIRECT_URI:-}
       YOUTUBE_UPLOAD_ALLOWLIST: ${YOUTUBE_UPLOAD_ALLOWLIST:-}
       YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT: ${YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT:-90}
 
@@ -167,9 +159,9 @@ services:
       DISABLE_REGISTRATION: ${DISABLE_REGISTRATION:-false}
       ALLOWED_TWITCH_LOGINS: ${ALLOWED_TWITCH_LOGINS:-}
       CASTNEXUS_CHANNEL: ${CASTNEXUS_CHANNEL:-stable}
-      # Official hosted OAuth keeps Twitch/Google client secrets out of user
-      # installations. Set this blank to use local BYO credentials instead.
-      CASTNEXUS_OAUTH_BROKER_URL: ${CASTNEXUS_OAUTH_BROKER_URL-https://castnexus.nekosunevr.co.uk/oauth}
+      # Required. The oauth-broker service is the only supported way to sign
+      # in with Twitch or connect YouTube - must be an https:// URL.
+      CASTNEXUS_OAUTH_BROKER_URL: ${CASTNEXUS_OAUTH_BROKER_URL:-https://castnexus.nekosunevr.co.uk/oauth}
 
   intercept:
     image: ghcr.io/nekosuneprojects/castnexus-intercept:${CASTNEXUS_IMAGE_TAG:-latest}

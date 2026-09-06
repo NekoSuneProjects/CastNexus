@@ -16,7 +16,7 @@ const { createTwitchApi } = require("./twitch-api");
 const { createMediaMtxRecordings } = require("./mediamtx-recordings");
 const { createYoutubeUploadService } = require("./youtube-upload");
 const { createHostedOauth } = require("./hosted-oauth");
-const { homePage, loginPage, loginRefusedPage, privacyPage, termsPage } = require("./site-pages");
+const { homePage, loginPage, privacyPage, termsPage } = require("./site-pages");
 const profileRtmp = require("./profile-rtmp");
 const gpuEncoder = require("./gpu-encoder");
 const { OUTPUT_LAYOUTS, normaliseLayout, destinationFfmpegArgs } = require("./destination-output");
@@ -44,12 +44,6 @@ const RECONNECT_GRACE_MS = Number(process.env.RECONNECT_GRACE_MS || 60 * 60 * 10
 const DASHBOARD_ORIGIN = `http://127.0.0.1:${PORT}`;
 const RTMP_ORIGIN = process.env.MEDIA_RTMP_ORIGIN || "rtmp://127.0.0.1:1935";
 
-const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID || "";
-const TWITCH_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET || "";
-const TWITCH_REDIRECT_URI = process.env.TWITCH_REDIRECT_URI || `http://${MEDIA_HOST}:${PORT}/auth/twitch/callback`;
-const YOUTUBE_CLIENT_ID = process.env.YOUTUBE_CLIENT_ID || "";
-const YOUTUBE_CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET || "";
-const YOUTUBE_REDIRECT_URI = process.env.YOUTUBE_REDIRECT_URI || `http://${MEDIA_HOST}:${PORT}/auth/youtube/callback`;
 const OAUTH_BROKER_URL = process.env.CASTNEXUS_OAUTH_BROKER_URL || "";
 const hostedOauth = createHostedOauth({ brokerUrl:OAUTH_BROKER_URL });
 
@@ -114,9 +108,9 @@ function getAccountByLogin(login) {
   return account ? getAccount(account.twitchUserId) : null;
 }
 
-const twitchApi = createTwitchApi({ clientId:TWITCH_CLIENT_ID, clientSecret:TWITCH_CLIENT_SECRET, hostedOauth });
+const twitchApi = createTwitchApi({ hostedOauth });
 const recordings = createMediaMtxRecordings({ apiBase:MEDIAMTX_API, playbackBase:MEDIAMTX_PLAYBACK, recordingsDir:RECORDINGS_DIR, state, saveState });
-const youtubeUploads = createYoutubeUploadService({ clientId:YOUTUBE_CLIENT_ID, clientSecret:YOUTUBE_CLIENT_SECRET, redirectUri:YOUTUBE_REDIRECT_URI, state, saveState, recordings, hostedOauth });
+const youtubeUploads = createYoutubeUploadService({ state, saveState, recordings, hostedOauth });
 const profileMusic = createProfileMusicService({ state, saveState, musicDir:MUSIC_DIR, maxBytes:MUSIC_MAX_BYTES, musicEngine, events });
 const profileVod = createProfileVodService({ state, saveState, vodDir:VOD_DIR, maxBytes:VOD_MAX_BYTES, probeDurationSeconds:musicEngine.probeDurationSeconds, rtmpOrigin:RTMP_ORIGIN, twitchApi });
 
@@ -358,9 +352,7 @@ const app = express();
 app.set("trust proxy", 1);
 function fixRedirectPrefix(prefix) { return proxyRes => { const location = proxyRes.headers.location; if (location && location.startsWith("/")) proxyRes.headers.location = prefix + location; }; }
 
-const setupRoutes = require("./setup-routes");
-app.use("/setup", setupRoutes);
-
+app.use("/setup", require("./setup-routes"));
 app.use("/hls", createProxyMiddleware({ target:"http://127.0.0.1:8888", changeOrigin:true, pathRewrite:{ "^/hls":"" }, ws:true, onProxyRes:fixRedirectPrefix("/hls") }));
 app.use("/vrchat-hls", createProxyMiddleware({ target:"http://127.0.0.1:8898", changeOrigin:true, pathRewrite:{ "^/vrchat-hls":"" }, ws:true, onProxyRes:fixRedirectPrefix("/vrchat-hls") }));
 app.use("/webrtc", createProxyMiddleware({ target:"http://127.0.0.1:8889", changeOrigin:true, pathRewrite:{ "^/webrtc":"" }, ws:true, onProxyRes:fixRedirectPrefix("/webrtc") }));
@@ -420,29 +412,8 @@ app.get("/auth/hosted/:provider/status",async(req,res)=>{
   }catch(err){delete req.session.hostedOauth;res.status(err.status||400).json({error:err.message});}
 });
 
-app.get("/auth/twitch",(req,res)=>{
-  if(hostedOauth.enabled())return beginHostedOauth(req,res,"twitch");
-  if(!TWITCH_CLIENT_ID)return res.status(500).send("TWITCH_CLIENT_ID is not configured");
-  const oauthState=crypto.randomBytes(16).toString("hex");req.session.oauthState=oauthState;
-  const url=new URL("https://id.twitch.tv/oauth2/authorize");
-  url.searchParams.set("client_id",TWITCH_CLIENT_ID);url.searchParams.set("redirect_uri",TWITCH_REDIRECT_URI);url.searchParams.set("response_type","code");url.searchParams.set("scope","");url.searchParams.set("state",oauthState);res.redirect(url.toString());
-});
-app.get("/auth/twitch/callback",async(req,res)=>{
-  const{code,state:returnedState,error,error_description}=req.query;
-  if(error)return res.status(400).send(`Twitch login failed: ${error_description||error}`);
-  if(!code||!returnedState||returnedState!==req.session.oauthState)return res.status(400).send("Invalid OAuth state - please try logging in again");
-  delete req.session.oauthState;
-  try{
-    const tokenRes=await fetch("https://id.twitch.tv/oauth2/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:TWITCH_CLIENT_ID,client_secret:TWITCH_CLIENT_SECRET,code,grant_type:"authorization_code",redirect_uri:TWITCH_REDIRECT_URI})});
-    const tokenData=await tokenRes.json();if(!tokenRes.ok)throw new Error(tokenData.message||"token exchange failed");
-    const userRes=await fetch("https://api.twitch.tv/helix/users",{headers:{Authorization:`Bearer ${tokenData.access_token}`,"Client-Id":TWITCH_CLIENT_ID}});const userData=await userRes.json();if(!userRes.ok||!userData.data?.[0])throw new Error("failed to fetch Twitch user info");
-    loginTwitchUser(req,userData.data[0]);res.redirect("/dashboard");
-  }catch(err){
-    if(err.refusalReason){siteHeaders(res);res.setHeader("Cache-Control","no-store");return res.status(403).type("html").send(loginRefusedPage(err.message));}
-    console.error("[dashboard] Twitch OAuth error:",err.message);res.status(500).send("Twitch login failed - please try again");}
-});
-app.get("/auth/youtube",requireAuth,(req,res)=>{if(hostedOauth.enabled())return beginHostedOauth(req,res,"youtube");if(!youtubeUploads.configured())return res.status(500).send("YouTube OAuth is not configured");const oauthState=crypto.randomBytes(24).toString("hex");req.session.youtubeOauthState=oauthState;const url=new URL("https://accounts.google.com/o/oauth2/v2/auth");url.searchParams.set("client_id",YOUTUBE_CLIENT_ID);url.searchParams.set("redirect_uri",YOUTUBE_REDIRECT_URI);url.searchParams.set("response_type","code");url.searchParams.set("scope","https://www.googleapis.com/auth/youtube.upload");url.searchParams.set("access_type","offline");url.searchParams.set("prompt","consent");url.searchParams.set("include_granted_scopes","true");url.searchParams.set("state",oauthState);res.redirect(url.toString());});
-app.get("/auth/youtube/callback",async(req,res)=>{const account=getAccount(req.session.accountId);if(!account)return res.status(401).send("Sign in to CastNexus with Twitch first");const{code,state:returnedState,error,error_description}=req.query;if(error)return res.status(400).send(`YouTube authorization failed: ${error_description||error}`);if(!code||!returnedState||returnedState!==req.session.youtubeOauthState)return res.status(400).send("Invalid YouTube OAuth state");delete req.session.youtubeOauthState;try{youtubeUploads.storeTokens(account,await youtubeUploads.exchangeCode(String(code)));res.redirect("/dashboard?youtube=connected");}catch(err){res.status(500).send(`YouTube authorization failed: ${err.message}`);}});
+app.get("/auth/twitch",(req,res)=>beginHostedOauth(req,res,"twitch"));
+app.get("/auth/youtube",requireAuth,(req,res)=>beginHostedOauth(req,res,"youtube"));
 
 app.post("/api/logout",(req,res)=>req.session.destroy(()=>res.json({ok:true})));
 app.post("/api/streamkey",requireAuth,(req,res)=>{const{streamKey}=req.body||{};if(!streamKey||!String(streamKey).trim())return res.status(400).json({error:"stream key is required"});req.account.streamKey=String(streamKey).trim();saveState(state);res.json({ok:true});});
@@ -501,7 +472,7 @@ app.delete("/api/destinations/:id",requireAuth,requireOnboarded,(req,res)=>{cons
 app.post("/api/destinations/:id/toggle",requireAuth,requireOnboarded,(req,res)=>{const dest=findDestination(req.account,req.params.id);if(!dest)return res.status(404).json({error:"unknown destination"});dest.enabled=Boolean(req.body?.enabled);saveState(state);const source=destinationSourcePathFor(req.account);if(source){if(dest.enabled)startDestination(req.account,dest,source);else stopDestination(req.account.twitchUserId,dest.id);}res.json({ok:true});});
 
 app.use(express.static(path.join(__dirname,"public"),{index:false}));
-const httpServer=app.listen(PORT,()=>{const encoder=gpuEncoder.status().selected;console.log(`[dashboard] listening on :${PORT}`);console.log(`[dashboard] video encoder: ${encoder.label}${encoder.hardware?" (hardware)":" (software fallback)"}`);if(hostedOauth.enabled())console.log(`[dashboard] hosted OAuth broker: ${hostedOauth.baseUrl}`);if(!hostedOauth.enabled()&&(!TWITCH_CLIENT_ID||!TWITCH_CLIENT_SECRET))console.warn("[dashboard] Twitch OAuth is not configured");if(!hostedOauth.enabled()&&(!YOUTUBE_CLIENT_ID||!YOUTUBE_CLIENT_SECRET))console.warn("[dashboard] YouTube OAuth is not configured");const allowList=registration.allowedLogins();if(allowList.length)console.log(`[dashboard] sign-in restricted to: ${allowList.join(", ")}`);else if(registration.registrationDisabled())console.log(`[dashboard] registration disabled - only the ${Object.keys(state.accounts).length} existing account(s) can sign in`);if(registration.locksOutEveryone({accountCount:Object.keys(state.accounts).length}))console.warn("[dashboard] DISABLE_REGISTRATION is set but no account exists yet - nobody can sign in. Set ALLOWED_TWITCH_LOGINS to your Twitch login, or unset DISABLE_REGISTRATION for one sign-in.");});
+const httpServer=app.listen(PORT,()=>{const encoder=gpuEncoder.status().selected;console.log(`[dashboard] listening on :${PORT}`);console.log(`[dashboard] video encoder: ${encoder.label}${encoder.hardware?" (hardware)":" (software fallback)"}`);console.log(`[dashboard] oauth-broker: ${hostedOauth.baseUrl}`);const allowList=registration.allowedLogins();if(allowList.length)console.log(`[dashboard] sign-in restricted to: ${allowList.join(", ")}`);else if(registration.registrationDisabled())console.log(`[dashboard] registration disabled - only the ${Object.keys(state.accounts).length} existing account(s) can sign in`);if(registration.locksOutEveryone({accountCount:Object.keys(state.accounts).length}))console.warn("[dashboard] DISABLE_REGISTRATION is set but no account exists yet - nobody can sign in. Set ALLOWED_TWITCH_LOGINS to your Twitch login, or unset DISABLE_REGISTRATION for one sign-in.");});
 
 let dashboardShuttingDown=false;
 async function shutdown(){

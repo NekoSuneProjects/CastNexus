@@ -10,7 +10,7 @@ function createPkce() {
 }
 function createHostedOauth({ brokerUrl, fetchImpl = global.fetch } = {}) {
   const base = String(brokerUrl || "").replace(/\/$/, "");
-  function enabled() { return /^https:\/\//i.test(base); }
+  if (!/^https:\/\//i.test(base)) throw new Error("CASTNEXUS_OAUTH_BROKER_URL must be set to an https:// oauth-broker URL");
   async function request(path, options = {}) {
     const response = await fetchImpl(`${base}${path}`, { ...options, headers:{ "Content-Type":"application/json", ...(options.headers || {}) } });
     const data = await response.json().catch(() => ({}));
@@ -18,7 +18,6 @@ function createHostedOauth({ brokerUrl, fetchImpl = global.fetch } = {}) {
     return { status:response.status, data };
   }
   async function start(provider) {
-    if (!enabled()) throw new Error("Hosted OAuth is not configured");
     const pkce = createPkce();
     const { data } = await request("/v1/transactions", { method:"POST", body:JSON.stringify({ provider, codeChallenge:pkce.challenge }) });
     return { provider, id:data.id, authorizationUrl:data.authorizationUrl, expiresAt:Date.now() + Number(data.expiresIn || 600) * 1000, verifier:pkce.verifier };
@@ -40,7 +39,7 @@ function createHostedOauth({ brokerUrl, fetchImpl = global.fetch } = {}) {
     const { data } = await request("/v1/youtube/refresh", { method:"POST", body:JSON.stringify({ refreshToken }) });
     return data;
   }
-  return { enabled, start, exchange, twitchHelix, youtubeRefresh, baseUrl:base };
+  return { start, exchange, twitchHelix, youtubeRefresh, baseUrl:base };
 }
 
 module.exports = { createHostedOauth, createPkce, base64url };

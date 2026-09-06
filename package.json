@@ -5,13 +5,11 @@
   "license": "MIT",
   "repository": "NekoSuneProjects/CastNexus",
   "scripts": {
-    "install:all": "npm install && npm --prefix dashboard install && npm --prefix electron install && npm --prefix cli install && npm --prefix dns install && npm --prefix oauth-broker install",
+    "install:all": "npm install && npm --prefix dashboard install && npm --prefix cli install",
     "test": "npm --prefix dashboard test",
     "test:watch": "node --test --watch dashboard/**/*.test.js",
     "dev:dashboard": "npm --prefix dashboard start",
-    "dev:electron": "npm --prefix electron start",
     "dev:cli": "npm --prefix cli start",
-    "build:electron": "npm --prefix electron run build",
     "build:cli": "npm --prefix cli run pkg:build",
     "docker:build": "docker build -f dashboard/Dockerfile -t castnexus:latest .",
     "docker:compose": "docker-compose -f compose.yaml up -d",
@@ -19,10 +17,7 @@
   },
   "workspaces": [
     "dashboard",
-    "electron",
-    "cli",
-    "dns",
-    "oauth-broker"
+    "cli"
   ],
   "engines": {
     "node": ">=18.0.0"

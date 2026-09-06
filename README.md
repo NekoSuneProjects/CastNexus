@@ -243,9 +243,7 @@ Configure at minimum:
 
 ```dotenv
 PI_IP=192.168.1.50
-TWITCH_CLIENT_ID=
-TWITCH_CLIENT_SECRET=
-TWITCH_REDIRECT_URI=http://192.168.1.50:8090/auth/twitch/callback
+CASTNEXUS_OAUTH_BROKER_URL=https://castnexus.nekosunevr.co.uk/oauth
 ```
 
 For console capture also configure:
@@ -518,17 +516,14 @@ CastNexus/
 │   ├── music-scene.js        # landscape/vertical spectrum scene
 │   ├── scenes.js             # Starting Soon / BRB / Ending / Offline
 │   └── overlays.js           # browser, HTML, text and master overlays
-├── desktop/                  # Windows/Linux launcher build
-├── dns/                      # console DNS capture helper
-├── intercept/                # console ARP/DNAT capture helper
+├── cli/                       # headless install/launch CLI
 ├── config/                   # MediaMTX configuration
 ├── docs/
 │   ├── PROFILE-MUSIC-DUAL-FORMAT.md
 │   └── VOD-RERUNS.md
 ├── docker-compose.yml
 └── .github/workflows/
-    ├── build.yml             # validation / CI
-    └── release.yml           # beta + stable releases
+    └── test.yml               # validation / CI
 ```
 
 ---

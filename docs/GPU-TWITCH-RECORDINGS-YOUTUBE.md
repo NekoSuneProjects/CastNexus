@@ -194,29 +194,9 @@ MediaMTX's playback/control services listen on loopback only; they are not inten
 
 ## 5. Upload a MediaMTX recording to YouTube
 
-CastNexus can upload a recorded program directly to YouTube using YouTube Data API v3.
+CastNexus can upload a recorded program directly to YouTube using YouTube Data API v3, authorised through the oauth-broker service - there is no separate Google Cloud setup to do on the dashboard side.
 
-### Google Cloud setup
-
-1. Create/select a Google Cloud project.
-2. Enable **YouTube Data API v3**.
-3. Configure the OAuth consent screen.
-4. Create an **OAuth 2.0 Web application** client.
-5. Add the exact redirect URL, for example:
-
-```text
-http://192.168.1.50:8090/auth/youtube/callback
-```
-
-6. Configure CastNexus:
-
-```dotenv
-YOUTUBE_CLIENT_ID=
-YOUTUBE_CLIENT_SECRET=
-YOUTUBE_REDIRECT_URI=http://192.168.1.50:8090/auth/youtube/callback
-```
-
-The Studio then exposes **Connect YouTube**. CastNexus requests only:
+The Studio exposes **Connect YouTube**, which starts the oauth-broker's PKCE flow. CastNexus requests only:
 
 ```text
 https://www.googleapis.com/auth/youtube.upload
