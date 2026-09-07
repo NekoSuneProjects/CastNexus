@@ -129,8 +129,16 @@ function videoEncoderArgs(profile = detectEncoder(), options = {}) {
       return ["-c:v", "h264_videotoolbox", "-realtime", "1", ...commonRate, "-profile:v", "high", "-pix_fmt", "yuv420p"];
     case "v4l2m2m":
       return ["-c:v", "h264_v4l2m2m", ...commonRate, "-pix_fmt", "yuv420p"];
-    default:
-      return ["-c:v", "libx264", "-preset", process.env.X264_PRESET || options.x264Preset || "veryfast", "-tune", "zerolatency", ...commonRate, "-profile:v", "high", "-level:v", "4.2", "-pix_fmt", "yuv420p"];
+    default: {
+      // libx264 defaults to one thread per detected CPU core. On a weak or
+      // shared host, several concurrent ffmpeg encodes (compositor, per-
+      // destination transcodes) each grabbing every core causes exactly the
+      // oversubscription/context-switch thrashing that starves everything.
+      // A small fixed count keeps one encode's footprint bounded; override
+      // with X264_THREADS on hosts that actually have cores to spare.
+      const threads = Math.max(1, Number(process.env.X264_THREADS) || 2);
+      return ["-c:v", "libx264", "-preset", process.env.X264_PRESET || options.x264Preset || "veryfast", "-tune", "zerolatency", "-threads", String(threads), ...commonRate, "-profile:v", "high", "-level:v", "4.2", "-pix_fmt", "yuv420p"];
+    }
   }
 }
 
