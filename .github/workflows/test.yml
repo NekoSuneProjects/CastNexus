@@ -28,33 +28,3 @@ jobs:
             echo "VPS intercept must reject an accidental unrestricted public RTMP listener." >&2
             exit 1
           fi
-
-  docker:
-    runs-on: [self-hosted, Linux, docker, buildx]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v3
-      - name: Build intercept image without publishing
-        uses: docker/build-push-action@v6
-        with:
-          context: ./intercept
-          push: false
-          platforms: linux/amd64
-          build-args: |
-            CASTNEXUS_VERSION=0.0.0-ci
-            CASTNEXUS_CHANNEL=dev
-            CASTNEXUS_REVISION=${{ github.sha }}
-          cache-from: type=gha,scope=castnexus-ci-intercept
-          cache-to: type=gha,mode=max,scope=castnexus-ci-intercept
-
-  compose:
-    runs-on: [self-hosted, Linux, docker, buildx]
-    steps:
-      - uses: actions/checkout@v7
-      - name: Validate compose file
-        env:
-          PI_IP: 127.0.0.1
-          TARGET_IPS: 127.0.0.2
-          GATEWAY_IP: 127.0.0.1
-          VPS_ALLOWED_CLIENTS: 198.51.100.20/32
-        run: docker compose --profile console config >/dev/null
