@@ -102,6 +102,10 @@ jobs:
       - name: Install Linux packaging tools
         if: matrix.target == 'linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends binutils fakeroot
+      # dashboard's node_modules is gitignored, so the fetched copy has none -
+      # without this the packaged app fails at startup with "Cannot find
+      # module 'express'".
+      - run: npm --prefix dashboard install --omit=dev
       - run: npm --prefix electron install
       - name: Build Electron
         working-directory: electron
@@ -137,6 +141,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      # dashboard's node_modules is gitignored, so the fetched copy has none -
+      # without this pkg fails to bundle it ("Cannot find module 'express'").
+      - run: npm --prefix dashboard install --omit=dev
       - run: npm --prefix cli install
       - name: Build CLI binary
         working-directory: cli
