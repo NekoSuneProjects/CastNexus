@@ -8,6 +8,7 @@ const { spawn } = require("node:child_process");
 const Store = require("electron-store");
 
 const downloadManager = require("./download-manager");
+const { version: CLI_VERSION } = require("./package.json");
 const OFFICIAL_OAUTH_BROKER = "https://castnexus.nekosunevr.co.uk/oauth";
 const isWin = process.platform === "win32";
 
@@ -65,6 +66,8 @@ function setupEnvironment() {
   const lanIp = process.env.PI_IP || store.get("lanIp") || detectLanIp();
 
   process.env.CASTNEXUS_INSTALL_TYPE = process.env.CASTNEXUS_INSTALL_TYPE || "cli";
+  process.env.CASTNEXUS_VERSION = process.env.CASTNEXUS_VERSION || CLI_VERSION;
+  process.env.CASTNEXUS_CHANNEL = process.env.CASTNEXUS_CHANNEL || (CLI_VERSION.includes("-") ? "beta" : "stable");
   process.env.DASHBOARD_PORT = process.env.DASHBOARD_PORT || store.get("dashboardPort") || "8090";
   process.env.STATE_FILE = process.env.STATE_FILE || path.join(dataDir, "state.json");
   process.env.MUSIC_DIR = process.env.MUSIC_DIR || path.join(dataDir, "music");

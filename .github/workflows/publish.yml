@@ -6,10 +6,37 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  meta:
+    runs-on: [self-hosted, Linux, docker, buildx]
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version from main
+        id: version
+        run: echo "value=$(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Sync package.json/package-lock.json to this version
+        run: npm version "${{ steps.version.outputs.value }}" --workspaces --include-workspace-root --no-git-tag-version --allow-same-version
+      - name: Commit version bump if it changed anything
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "chore: sync version to ${{ steps.version.outputs.value }} [skip ci]"
+            git push origin HEAD:${{ github.ref_name }}
+          else
+            echo "Version already up to date."
+          fi
+
   build-cli:
+    needs: meta
     strategy:
       matrix:
         include:
