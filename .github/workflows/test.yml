@@ -23,32 +23,3 @@ jobs:
         run: |
           node --check cli/launcher.js
           node --check cli/download-manager.js
-
-  build:
-    strategy:
-      matrix:
-        include:
-          - os: windows-latest
-            target: win-x64
-          - os: [self-hosted, Linux, docker, buildx]
-            target: linux-x64
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          ref: dashboard
-          path: _dashboard-branch
-      - name: Place dashboard app for bundling
-        shell: bash
-        run: cp -r _dashboard-branch/dashboard dashboard
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-      # dashboard's node_modules is gitignored, so the fetched copy has none -
-      # without this pkg fails to bundle it ("Cannot find module 'express'").
-      - run: npm --prefix dashboard install --omit=dev
-      - run: npm --prefix cli install
-      - name: Build CLI binary
-        working-directory: cli
-        run: npm run pkg:build
