@@ -1,6 +1,6 @@
 {
   "name": "castnexus-cli-repo",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "CastNexus CLI - headless install/launch for the CastNexus dashboard",
   "license": "MIT",
   "repository": "NekoSuneProjects/CastNexus",

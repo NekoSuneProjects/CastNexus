@@ -1,6 +1,6 @@
 {
   "name": "castnexus-cli",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "CastNexus CLI - Headless broadcast streaming",
   "bin": "launcher.js",
   "main": "launcher.js",
