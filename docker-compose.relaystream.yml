@@ -1,0 +1,46 @@
+# Optional: self-host relaystream, a public relay that lets a NAT'd/
+# no-open-port CastNexus install (this one or a remote Desktop/CLI install)
+# push its live feed out over RTMP or WHIP instead of accepting inbound
+# viewer connections. Merge this in alongside the base stack:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.relaystream.yml up -d
+#
+# Then set RELAYSTREAM_URL on every install that should be able to push to
+# it (this one included) to its public https:// URL, and enable the
+# "push to relaystream" toggle in Settings. See docs/RELAYSTREAM.md
+# (fetch the relaystream branch's own docs, or ./fetch-sources.sh
+# relaystream) for the full design, API surface and Nginx Proxy Manager
+# routing notes - RTMP push in particular needs an NPM Stream (TCP forward),
+# not a normal HTTP proxy host.
+services:
+  relaystream-mediamtx:
+    image: bluenviron/mediamtx:1.19.2
+    container_name: castnexus-relaystream-mediamtx
+    restart: unless-stopped
+    depends_on:
+      - relaystream-api
+    ports:
+      - "127.0.0.1:1936:1936"
+      - "127.0.0.1:8189:8189/udp"
+      - "127.0.0.1:8189:8189/tcp"
+      - "127.0.0.1:8888:8888"
+    volumes:
+      - ./relaystream/mediamtx.yml:/mediamtx.yml:ro
+
+  relaystream-api:
+    image: ghcr.io/nekosuneprojects/castnexus-relaystream:${CASTNEXUS_IMAGE_TAG:-latest}
+    build:
+      context: ./relaystream
+    container_name: castnexus-relaystream-api
+    restart: unless-stopped
+    ports:
+      # Keep the API private to the host; publish it through your own HTTPS
+      # reverse proxy instead of exposing this port publicly.
+      - "127.0.0.1:8092:8092"
+    environment:
+      RELAYSTREAM_PORT: 8092
+      RELAYSTREAM_PUBLIC_URL: ${RELAYSTREAM_PUBLIC_URL:?Your own public https:// URL for this relay, e.g. https://your-domain.example}
+      RELAYSTREAM_SIGNING_SECRET: ${RELAYSTREAM_SIGNING_SECRET:?Generate a random 32+ byte signing secret}
+      RELAYSTREAM_ADMIN_TOKEN: ${RELAYSTREAM_ADMIN_TOKEN:?Generate a random admin token to manage/ban nodes}
+      RELAYSTREAM_TRUST_PROXY: "true"
+      MEDIAMTX_API: http://relaystream-mediamtx:9997

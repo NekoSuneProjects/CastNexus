@@ -8,6 +8,7 @@
 #   ./fetch-sources.sh                # required services: dashboard dns intercept
 #   ./fetch-sources.sh vrchat-relay    # + the optional VRChat relay add-on
 #   ./fetch-sources.sh oauth-broker    # + a self-hosted oauth-broker
+#   ./fetch-sources.sh relaystream     # + a self-hosted public relay
 set -euo pipefail
 
 REPO_URL="${CASTNEXUS_REPO_URL:-https://github.com/NekoSuneProjects/CastNexus}"

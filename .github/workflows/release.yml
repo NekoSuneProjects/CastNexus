@@ -159,7 +159,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [dashboard, dns, intercept, oauth-broker, vrchat-relay]
+        service: [dashboard, dns, intercept, oauth-broker, vrchat-relay, relaystream]
     runs-on: [self-hosted, Linux, docker, buildx]
     permissions:
       contents: read

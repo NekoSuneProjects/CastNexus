@@ -62,10 +62,11 @@ The base stack (everything CastNexus actually needs) runs:
 
 The normal OBS/PC/Music install does **not** need the DNS/interception containers running, but the images are part of the base stack for when you do need console capture - see section 2.
 
-Two more services are entirely optional add-ons, each its own compose file:
+Three more services are entirely optional add-ons, each its own compose file:
 
 - **VRChat relay** (`docker-compose.vrchat-relay.yml`) — adds `castnexus-mediamtx-vrchat` and `castnexus-vrchat-relay` for VRChat/AVPro-compatible playback. See section 2.5.
 - **Self-hosted oauth-broker** (`docker-compose.oauth-broker.yml`) — only if you want to run your own Twitch/Google OAuth broker instead of the official public one. See section 4.5.
+- **Public relay** (`docker-compose.relaystream.yml`) — adds `castnexus-relaystream-mediamtx` and `castnexus-relaystream-api`, letting a NAT'd/no-open-port CastNexus install push its feed out publicly instead of accepting inbound connections. See section 4.6.
 
 Persistent data is bind-mounted under:
 
@@ -357,6 +358,49 @@ Not required. CastNexus defaults to the official public oauth-broker so nobody h
 Full design and API surface:
 
 **[docs/HOSTED-OAUTH.md](docs/HOSTED-OAUTH.md)**
+
+---
+
+# 4.6. Public relay (relaystream) — optional
+
+Not required. Every install works fine viewer-side without it. Only set this
+up if a CastNexus install (this one, or a remote Desktop/CLI install behind
+NAT with no open ports) should be watchable publicly by pushing its feed
+*out* to a relay instead of accepting inbound connections.
+
+1. Fetch its source so `docker compose build` can build it locally (or skip
+   this and let compose pull the prebuilt `ghcr.io/nekosuneprojects/castnexus-relaystream` image instead):
+
+   ```bash
+   ./fetch-sources.sh relaystream
+   ```
+
+2. In `.env`, fill in the "Optional: public relay (relaystream) add-on"
+   section: `RELAYSTREAM_PUBLIC_URL` (your own https:// URL for it),
+   `RELAYSTREAM_SIGNING_SECRET` and `RELAYSTREAM_ADMIN_TOKEN` (both random
+   32+ byte values).
+3. Start it alongside the base stack:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.relaystream.yml pull
+   docker compose -f docker-compose.yml -f docker-compose.relaystream.yml up -d
+   ```
+
+4. Put it behind your own HTTPS reverse proxy at the `RELAYSTREAM_PUBLIC_URL`
+   you chose. It listens on `127.0.0.1` only (API on `:8092`, RTMP push on
+   `:1936`, WHIP/HLS on `:8189`/`:8888`) - RTMP is raw TCP and needs a TCP
+   forward (e.g. an Nginx Proxy Manager **Stream**, not a normal HTTP proxy
+   host) rather than an HTTPS virtual host.
+5. Set `RELAYSTREAM_URL=https://your-domain.example` on every install that
+   should be able to use the "push to relaystream" toggle in Settings
+   (`dashboard` `.env`/compose environment, or the Desktop/CLI equivalent).
+
+Each pushing install gets its own persistent node ID (generated once, stays
+static until that install's local state is fully reset) and a short-lived
+signed push token; relaystream's admin API can list connected nodes and ban
+one by ID. Full design, API surface and reverse-proxy routing notes live in
+that branch's own docs (`./fetch-sources.sh relaystream` then see
+`relaystream/docs/RELAYSTREAM.md`).
 
 ---
 
