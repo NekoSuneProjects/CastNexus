@@ -1,6 +1,6 @@
 {
   "name": "castnexus-oauth-broker-repo",
-  "version": "0.1.0",
+  "version": "1.3.2",
   "description": "CastNexus oauth-broker - standalone Twitch/YouTube OAuth2 broker",
   "license": "MIT",
   "repository": "NekoSuneProjects/CastNexus",
