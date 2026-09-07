@@ -23,6 +23,9 @@ function wirePage() {
 
   const comp=$("#compositor-toggle",root); if(comp)comp.onchange=async()=>{ try{await api("/api/compositor",{method:"POST",body:{enabled:comp.checked}});S.compositor.enabled=comp.checked;const p=activeProfile();if(p){p.compositorEnabled=comp.checked;await saveProfileStore();}toast(`Compositor ${comp.checked?"enabled":"disabled"}`,"success");}catch(e){comp.checked=!comp.checked;toast(e.message,"error");} };
 
+  const relayToggle=$("#relay-push-toggle",root); if(relayToggle)relayToggle.onchange=async()=>{ try{ await api("/api/relay-push",{method:"POST",body:{enabled:relayToggle.checked}}); await fetchCore(); renderPage(); toast(`Public relay ${relayToggle.checked?"enabled":"disabled"}`,"success"); }catch(e){relayToggle.checked=!relayToggle.checked;toast(e.message,"error");} };
+  const relayMode=$("#relay-push-mode",root); if(relayMode)relayMode.onchange=async()=>{ try{ await api("/api/relay-push",{method:"POST",body:{mode:relayMode.value}}); await fetchCore(); renderPage(); toast(`Push transport set to ${relayMode.value.toUpperCase()}`,"success"); }catch(e){toast(e.message,"error");} };
+
   const file=$("#music-file-input",root); if(file)file.onchange=()=>uploadMusic(file.files);
   const shuffle=$("#music-shuffle",root), loop=$("#music-loop",root), vol=$("#music-volume",root);
   if(shuffle)shuffle.onchange=saveMusicSettings;

@@ -20,6 +20,7 @@ const { homePage, loginPage, privacyPage, termsPage } = require("./site-pages");
 const profileRtmp = require("./profile-rtmp");
 const gpuEncoder = require("./gpu-encoder");
 const { OUTPUT_LAYOUTS, normaliseLayout, destinationFfmpegArgs } = require("./destination-output");
+const relayPush = require("./relay-push");
 const { EncryptedFileSessionStore, accountSessionIsValid } = require("./persistent-session-store");
 const { publicBaseUrl, normalisePublicBase, playbackTargets } = require("./public-playback");
 const registration = require("./registration");
@@ -95,6 +96,9 @@ function getAccount(id) {
   if (account.compositorEnabled === undefined) { account.compositorEnabled = false; dirty = true; }
   if (account.recordingEnabled === undefined) { account.recordingEnabled = false; dirty = true; }
   if (!Array.isArray(account.youtubeUploadHistory)) { account.youtubeUploadHistory = []; dirty = true; }
+  if (!account.relayNodeId) { account.relayNodeId = crypto.randomUUID(); dirty = true; }
+  if (account.relayPushEnabled === undefined) { account.relayPushEnabled = false; dirty = true; }
+  if (!["rtmp", "whip"].includes(account.relayPushMode)) { account.relayPushMode = "rtmp"; dirty = true; }
   for (const dest of account.destinations) {
     const layout = normaliseLayout(dest.layout);
     if (dest.layout !== layout) { dest.layout = layout; dirty = true; }
@@ -114,7 +118,10 @@ const youtubeUploads = createYoutubeUploadService({ state, saveState, recordings
 const profileMusic = createProfileMusicService({ state, saveState, musicDir:MUSIC_DIR, maxBytes:MUSIC_MAX_BYTES, musicEngine, events });
 const profileVod = createProfileVodService({ state, saveState, vodDir:VOD_DIR, maxBytes:VOD_MAX_BYTES, probeDurationSeconds:musicEngine.probeDurationSeconds, rtmpOrigin:RTMP_ORIGIN, twitchApi });
 
-function findDestination(account, id) { return account.destinations.find(d => d.id === id); }
+function findDestination(account, id) {
+  if (id === relayPush.RELAY_DESTINATION_ID) return relayPush.cachedRelayDestination(account);
+  return account.destinations.find(d => d.id === id);
+}
 function normaliseDestinationPlatform(value) { const platform=String(value||"custom-rtmp").toLowerCase();return /^[a-z0-9-]{1,40}$/.test(platform)?platform:"custom-rtmp"; }
 function maskSecret(value) { if (!value || value.length <= 8) return "••••••••"; return value.slice(0,4) + "••••" + value.slice(-4); }
 function maskUrl(url) { if (!url || url.length <= 12) return "••••••••"; return url.slice(0,18) + "••••" + url.slice(-4); }
@@ -248,6 +255,16 @@ function activeSessionFor(accountId) {
 }
 function activeSourceFor(accountId) { return activeSessionFor(accountId)?.source || null; }
 function stopOutputsFor(accountId) { activeFeedPath.delete(accountId); stopAllDestinationsFor(accountId); stopRepublish(accountId); stopCompositorFor(accountId); }
+async function startRelayPushFor(account, pathName) {
+  try {
+    const dest = await relayPush.relayDestinationFor(account);
+    if (!dest) return;
+    if (destinationSourcePathFor(account) !== pathName) return;
+    startDestination(account, dest, pathName);
+  } catch (error) {
+    console.warn(`[dashboard] ${account.twitchLogin} relaystream push registration failed: ${error.message}`);
+  }
+}
 function startOutputsFor(account, pathName) {
   const sourceSession = liveSessions.get(pathName);
   activeFeedPath.set(account.twitchUserId, pathName);
@@ -255,6 +272,7 @@ function startOutputsFor(account, pathName) {
   if (account.compositorEnabled) startCompositorFor(account);
   const source = destinationSourcePathFor(account);
   for (const dest of account.destinations) if (dest.enabled) startDestination(account, dest, source);
+  if (account.relayPushEnabled) startRelayPushFor(account, source);
   console.log(`[dashboard] ${account.twitchLogin} routed ${sourceSession?.source || "source"} for profile ${sourceSession?.profileId || "legacy"}`);
 }
 function clearGrace(accountId) { const grace = graceState.get(accountId); if (!grace) return; clearTimeout(grace.timer); graceState.delete(accountId); }
@@ -465,7 +483,8 @@ function configuredPublicBaseUrl(){return PUBLIC_BASE_URL_ENV||normalisePublicBa
 function publicPlaybackBase(req){return publicBaseUrl(req,{explicitBase:configuredPublicBaseUrl()});}
 function playbackUrlsFor(req,account){if(!activeSourceFor(account.twitchUserId))return null;return playbackTargets({base:publicPlaybackBase(req),safePath:safePathFor(account),mediaHost:PUBLIC_MEDIA_HOST});}
 function sourcesStatusFor(account){const selected=activeProfile(account);const sources={console:{enabled:selected?.mode==="console",live:false},pc:{enabled:selected?.mode==="pc",live:false},music:{enabled:selected?.mode==="music",live:false},rerun:{enabled:selected?.mode!=="console",live:false}};const connectedProfiles=[];for(const[pathName,live]of liveSessions.entries()){if(live.accountId!==account.twitchUserId)continue;connectedProfiles.push({profileId:live.profileId,source:live.source,path:pathName,active:activeFeedPath.get(account.twitchUserId)===pathName});if(live.profileId===selected?.id&&sources[live.source])sources[live.source].live=true;}return{sources,activeSource:activeSourceFor(account.twitchUserId),connectedProfiles};}
-app.get("/api/status",requireAuth,(req,res)=>{const account=req.account;ensureAccountProfileKeys(account);const selected=activeProfile(account),rtmp=profileRtmp.profileRtmpInfo(account,MEDIA_HOST,selected?.id);const{sources,activeSource,connectedProfiles}=sourcesStatusFor(account);res.json({twitchLogin:account.twitchLogin,displayName:account.displayName,profileImageUrl:account.profileImageUrl,needsSourceMode:!account.sourceMode,needsStreamKey:needsStreamKeyFor(account),streamKeyMasked:account.streamKey?maskSecret(account.streamKey):null,sourceMode:account.sourceMode||null,activeProfileId:selected?.id||null,profileRtmp:rtmp,live:!!activeSource,sources,activeSource,connectedProfiles,rerun:profileVod.publicStatus(account.twitchUserId),recordingEnabled:!!account.recordingEnabled,encoder:gpuEncoder.status(),graceUntil:graceState.get(account.twitchUserId)?.deadline??null,pcServer:rtmp?.server||`rtmp://${MEDIA_HOST}:1935/${PC_APP}`,pcKey:rtmp?.key||account.pcKey,mediaHost:MEDIA_HOST,publicBaseUrl:{value:state.publicBaseUrl||"",effective:publicPlaybackBase(req),lockedByEnv:!!PUBLIC_BASE_URL_ENV},playback:playbackUrlsFor(req,account),destinations:account.destinations.map(d=>({id:d.id,name:d.name,platform:normaliseDestinationPlatform(d.platform),urlMasked:maskUrl(d.url),layout:normaliseLayout(d.layout),enabled:d.enabled,active:activeDestinations.has(`${account.twitchUserId}:${d.id}`)}))});});
+app.get("/api/status",requireAuth,(req,res)=>{const account=req.account;ensureAccountProfileKeys(account);const selected=activeProfile(account),rtmp=profileRtmp.profileRtmpInfo(account,MEDIA_HOST,selected?.id);const{sources,activeSource,connectedProfiles}=sourcesStatusFor(account);res.json({twitchLogin:account.twitchLogin,displayName:account.displayName,profileImageUrl:account.profileImageUrl,needsSourceMode:!account.sourceMode,needsStreamKey:needsStreamKeyFor(account),streamKeyMasked:account.streamKey?maskSecret(account.streamKey):null,sourceMode:account.sourceMode||null,activeProfileId:selected?.id||null,profileRtmp:rtmp,live:!!activeSource,sources,activeSource,connectedProfiles,rerun:profileVod.publicStatus(account.twitchUserId),recordingEnabled:!!account.recordingEnabled,encoder:gpuEncoder.status(),graceUntil:graceState.get(account.twitchUserId)?.deadline??null,pcServer:rtmp?.server||`rtmp://${MEDIA_HOST}:1935/${PC_APP}`,pcKey:rtmp?.key||account.pcKey,mediaHost:MEDIA_HOST,publicBaseUrl:{value:state.publicBaseUrl||"",effective:publicPlaybackBase(req),lockedByEnv:!!PUBLIC_BASE_URL_ENV},playback:playbackUrlsFor(req,account),destinations:account.destinations.map(d=>({id:d.id,name:d.name,platform:normaliseDestinationPlatform(d.platform),urlMasked:maskUrl(d.url),layout:normaliseLayout(d.layout),enabled:d.enabled,active:activeDestinations.has(`${account.twitchUserId}:${d.id}`)})),relayPush:{available:!!relayPush.relaystreamBaseUrl(),enabled:!!account.relayPushEnabled,mode:account.relayPushMode,nodeId:account.relayNodeId,active:activeDestinations.has(`${account.twitchUserId}:${relayPush.RELAY_DESTINATION_ID}`),watchUrl:relayPush.cachedRelayDestination(account)?.watchUrl||null}});});
+app.post("/api/relay-push",requireAuth,requireOnboarded,(req,res)=>{const{enabled,mode}=req.body||{};if(enabled&&!relayPush.relaystreamBaseUrl())return res.status(503).json({error:"RELAYSTREAM_URL is not configured on this install"});if(mode!==undefined){if(!["rtmp","whip"].includes(mode))return res.status(400).json({error:"mode must be rtmp or whip"});req.account.relayPushMode=mode;}const wasEnabled=req.account.relayPushEnabled;if(enabled!==undefined)req.account.relayPushEnabled=Boolean(enabled);saveState(state);const source=destinationSourcePathFor(req.account);if(req.account.relayPushEnabled){if(source){if(wasEnabled)stopDestination(req.account.twitchUserId,relayPush.RELAY_DESTINATION_ID);startRelayPushFor(req.account,source);}}else{stopDestination(req.account.twitchUserId,relayPush.RELAY_DESTINATION_ID);}res.json({ok:true,enabled:req.account.relayPushEnabled,mode:req.account.relayPushMode});});
 app.post("/api/destinations",requireAuth,requireOnboarded,(req,res)=>{const{name,url,layout,platform}=req.body||{};if(!name||!String(name).trim())return res.status(400).json({error:"name is required"});if(!url||!DESTINATION_URL_RE.test(url))return res.status(400).json({error:DESTINATION_URL_HINT});if(layout!==undefined&&!OUTPUT_LAYOUTS.includes(layout))return res.status(400).json({error:`layout must be one of ${OUTPUT_LAYOUTS.join(", ")}`});const dest={id:crypto.randomUUID(),name:String(name).trim(),platform:normaliseDestinationPlatform(platform),url:String(url).trim(),layout:normaliseLayout(layout),enabled:false};req.account.destinations.push(dest);saveState(state);res.json({ok:true,id:dest.id});});
 app.put("/api/destinations/:id",requireAuth,requireOnboarded,(req,res)=>{const dest=findDestination(req.account,req.params.id);if(!dest)return res.status(404).json({error:"unknown destination"});const{name,url,layout}=req.body||{};let restart=false;if(name!==undefined){if(!String(name).trim())return res.status(400).json({error:"name cannot be empty"});dest.name=String(name).trim();}if(url!==undefined){if(!DESTINATION_URL_RE.test(url))return res.status(400).json({error:DESTINATION_URL_HINT});dest.url=String(url).trim();restart=true;}if(layout!==undefined){if(!OUTPUT_LAYOUTS.includes(layout))return res.status(400).json({error:`layout must be one of ${OUTPUT_LAYOUTS.join(", ")}`});if(dest.layout!==layout){dest.layout=layout;restart=true;}}saveState(state);const source=destinationSourcePathFor(req.account);if(restart&&source&&dest.enabled){stopDestination(req.account.twitchUserId,dest.id);startDestination(req.account,dest,source);}res.json({ok:true});});
 app.delete("/api/destinations/:id",requireAuth,requireOnboarded,(req,res)=>{const dest=findDestination(req.account,req.params.id);if(!dest)return res.status(404).json({error:"unknown destination"});stopDestination(req.account.twitchUserId,dest.id);req.account.destinations=req.account.destinations.filter(d=>d.id!==dest.id);saveState(state);res.json({ok:true});});

@@ -42,6 +42,7 @@ jobs:
           node --check dashboard/mediamtx-recordings.js
           node --check dashboard/youtube-upload.js
           node --check dashboard/destination-output.js
+          node --check dashboard/relay-push.js
           node --check dashboard/compositor.js
           node --check dashboard/hosted-oauth.js
           node --check dashboard/site-pages.js
@@ -104,6 +105,12 @@ jobs:
 
       - name: Destination platform preset tests
         run: node --test dashboard/destination-presets.test.js
+
+      - name: Destination push ffmpeg argv (RTMP/WHIP) smoke test
+        run: node --test dashboard/destination-output.test.js
+
+      - name: relaystream push registration + token cache smoke test
+        run: node --test dashboard/relay-push.test.js
 
       - name: Program Scene routing regression test
         run: node --test dashboard/program-scene-routing.test.js

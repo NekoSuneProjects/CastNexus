@@ -162,6 +162,9 @@ services:
       # Required. The oauth-broker service is the only supported way to sign
       # in with Twitch or connect YouTube - must be an https:// URL.
       CASTNEXUS_OAUTH_BROKER_URL: ${CASTNEXUS_OAUTH_BROKER_URL:-https://castnexus.nekosunevr.co.uk/oauth}
+      # Optional. Base URL of a relaystream deployment - enables the "push to
+      # relaystream" Settings toggle. Leave unset to hide/disable it.
+      RELAYSTREAM_URL: ${RELAYSTREAM_URL:-}
 
   intercept:
     image: ghcr.io/nekosuneprojects/castnexus-intercept:${CASTNEXUS_IMAGE_TAG:-latest}

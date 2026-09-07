@@ -1,7 +1,7 @@
 "use strict";
 
 const { detectEncoder, globalEncoderArgs, encoderFilterSuffix, videoEncoderArgs } = require("./gpu-encoder");
-const { cpuX264Preset, liveInputArgs, liveMuxArgs, piSafeMode, safeCanvas, stableAudioArgs } = require("./rtmp-pipeline");
+const { cpuX264Preset, liveInputArgs, liveMuxArgs, piSafeMode, safeCanvas, stableAudioArgs, whipAudioArgs } = require("./rtmp-pipeline");
 
 const OUTPUT_LAYOUTS = ["source", "landscape", "vertical"];
 
@@ -18,11 +18,16 @@ function isTwitchIngest(url){
 }
 
 function destinationFfmpegArgs(sourceUrl, destination, options = {}) {
-  const layout = normaliseLayout(destination.layout);
-  const twitchSource=layout === "source"&&isTwitchIngest(destination.url);
+  const whip = destination.transport === "whip";
+  // WHIP/WebRTC has no passthrough-copy fast path here (it requires Opus
+  // audio and a browser-compatible H264/VP8 profile the source rarely
+  // already matches), so a "source" layout push is treated as "landscape"
+  // once transcoding either way.
+  const layout = whip && destination.layout === "source" ? "landscape" : normaliseLayout(destination.layout);
+  const twitchSource=!whip&&layout === "source"&&isTwitchIngest(destination.url);
   const profile = options.forceCpu ? { id:"libx264", encoder:"libx264", hardware:false, label:"CPU · x264" } : detectEncoder();
   const input = ["-hide_banner", "-loglevel", "warning", ...liveInputArgs({lowLatency:twitchSource}), ...(layout === "source" ? [] : globalEncoderArgs(profile)), "-i", sourceUrl];
-  const mux = [...liveMuxArgs(destination.url, outputFormatFor(destination.url)), destination.url];
+  const mux = [...liveMuxArgs(destination.url, whip ? "whip" : outputFormatFor(destination.url)), destination.url];
 
   // Source/passthrough keeps video copy-light for Raspberry Pi and other small
   // hosts, but always normalises audio to a real AAC 128 kbps stereo stream.
@@ -83,7 +88,7 @@ function destinationFfmpegArgs(sourceUrl, destination, options = {}) {
       bufsize,
       x264Preset:process.env.DESTINATION_X264_PRESET || cpuX264Preset({ hardwareEncoder:profile.hardware }),
     }),
-    ...stableAudioArgs(),
+    ...(whip ? whipAudioArgs() : stableAudioArgs()),
     ...mux,
   ];
 }

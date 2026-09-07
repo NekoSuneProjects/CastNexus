@@ -96,8 +96,21 @@ function stableAudioArgs({ bitrate = process.env.DESTINATION_AUDIO_BITRATE || "1
   ];
 }
 
+function whipAudioArgs({ bitrate = process.env.DESTINATION_AUDIO_BITRATE || "128k", sampleRate = process.env.DESTINATION_AUDIO_RATE || "48000" } = {}) {
+  // WebRTC/WHIP mandates Opus audio - AAC (used for every other destination)
+  // is not a valid WHIP payload type.
+  return [
+    "-af", "aresample=async=1:first_pts=0",
+    "-c:a", "libopus",
+    "-b:a", String(bitrate),
+    "-ar", String(sampleRate),
+    "-ac", "2",
+  ];
+}
+
 function liveMuxArgs(url, format = null) {
   const value = String(url || "");
+  if (format === "whip") return ["-max_muxing_queue_size", "2048", "-f", "whip"];
   if (value.startsWith("srt://")) return ["-f", format || "mpegts"];
   return [
     "-max_muxing_queue_size", "2048",
@@ -117,6 +130,7 @@ module.exports = {
   piSafeRenderConfig,
   safeCanvas,
   liveInputArgs,
+  whipAudioArgs,
   stableAudioArgs,
   liveMuxArgs,
 };

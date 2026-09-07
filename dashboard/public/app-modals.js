@@ -8,6 +8,7 @@ function renderSettings() {
       ${renderPublicPlaybackPanel()}
       ${renderPublicAddressPanel()}
       ${renderAboutPanel()}
+      ${renderRelayPushPanel()}
       <div class="card-panel"><h3>Security notes</h3><p>Use Browser / iframe overlays for third-party widget URLs. They are sandboxed. Raw HTML/CSS overlays are intentionally trusted code and should only contain code you control.</p><div class="callout warn">The real Twitch stream key is only required for Console profiles and is masked after saving. PC and Music profiles use the separate CastNexus-generated PC ingest key.</div></div>
     </section>`;
 }
@@ -15,6 +16,21 @@ function renderSettings() {
 function renderAboutPanel() {
   const build = window.CASTNEXUS_BUILD || { version:"0.0.0-dev", channel:"dev", installType:"source" };
   return `<div class="card-panel"><h3>About</h3><p>CastNexus <strong>${esc(build.version)}</strong> · ${esc(build.channel)} · ${esc(build.installType)}</p><button class="btn btn-ghost btn-sm" data-action="check-updates">Check for updates</button></div>`;
+}
+
+function renderRelayPushPanel() {
+  const relay = S.status?.relayPush;
+  if (!relay || !relay.available) return "";
+  const mode = relay.mode === "whip" ? "whip" : "rtmp";
+  return `<div class="card-panel">
+    <div class="card-title-row"><h3>Public Relay</h3><label class="toggle"><input id="relay-push-toggle" type="checkbox" ${relay.enabled ? "checked" : ""}><span class="toggle-track"></span></label></div>
+    <p>Push this feed to relaystream so it's publicly watchable without opening any ports on this install.</p>
+    <div class="form-grid"><div><label>Push transport</label><select id="relay-push-mode" ${relay.enabled ? "" : "disabled"}>
+      <option value="rtmp" ${mode === "rtmp" ? "selected" : ""}>RTMP</option>
+      <option value="whip" ${mode === "whip" ? "selected" : ""}>WHIP (WebRTC)</option>
+    </select></div></div>
+    ${relay.active && relay.watchUrl ? `<div class="callout" style="margin-top:12px">Public watch URL: <a href="${esc(relay.watchUrl)}" target="_blank" rel="noopener">${esc(relay.watchUrl)}</a></div>` : relay.enabled ? `<div class="callout" style="margin-top:12px">Connecting to relaystream…</div>` : ""}
+  </div>`;
 }
 
 function checkForUpdates() {
