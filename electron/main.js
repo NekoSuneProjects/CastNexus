@@ -10,6 +10,7 @@ const { spawn } = require("node:child_process");
 const downloadManager = require("./download-manager");
 const { selectFfmpeg } = require("./ffmpeg-selector");
 const OFFICIAL_OAUTH_BROKER = "https://castnexus.nekosunevr.co.uk/oauth";
+const OFFICIAL_RELAYSTREAM = "https://castnexus.nekosunevr.co.uk";
 const APP_ICON = path.join(__dirname, "assets", "icon.png");
 
 // The stream scene is rendered by Electron itself in an invisible offscreen
@@ -111,6 +112,11 @@ function setupEnvironment() {
   // no local/BYO-credential mode.
   process.env.CASTNEXUS_OAUTH_BROKER_URL =
     process.env.CASTNEXUS_OAUTH_BROKER_URL || store.get("oauth_broker_url") || OFFICIAL_OAUTH_BROKER;
+  // Optional. Enables the "push to relaystream" Settings toggle. Blank hides
+  // it entirely - set to your own relaystream deployment's URL to self-host,
+  // or the official one to use the public relay.
+  process.env.RELAYSTREAM_URL =
+    process.env.RELAYSTREAM_URL || store.get("relaystream_url") || OFFICIAL_RELAYSTREAM;
 
   // Prefer the bundled tool, unless its NVENC API is newer than the installed
   // NVIDIA driver and the system FFmpeg can encode successfully. This is
