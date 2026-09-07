@@ -61,19 +61,34 @@ node ID from registering or publishing; `.../unban` reverses it.
 ## Deployment
 
 relaystream is deployed the same way as `oauth-broker`: a Docker Compose
-stack with both services bound to `127.0.0.1` only, fronted by the existing
-reverse proxy in front of `castnexus.nekosunevr.co.uk`. See
+stack with both services bound to `127.0.0.1` only, fronted by a reverse
+proxy in front of `castnexus.nekosunevr.co.uk`. See
 [`docker-compose.yml`](../docker-compose.yml) and
 [`.env.example`](../.env.example).
 
-Suggested Nginx routing:
+`castnexus.nekosunevr.co.uk` is fronted by Nginx Proxy Manager on a separate
+front-end VPS, which forwards to the origin VPS actually running relaystream.
+Always reference relaystream by that stable hostname, never by either VPS's
+raw IP - NPM terminates TLS and routes by hostname/SNI, so an IP has no valid
+certificate and isn't guaranteed to route to the right backend, and the
+origin VPS can change without the public URL changing.
 
-```
-location /whip/         { proxy_pass http://127.0.0.1:8189; }
-location /relay/        { proxy_pass http://127.0.0.1:8888; } # HLS playback
-location /v1/nodes/register { proxy_pass http://127.0.0.1:8092; }
-```
+Nginx Proxy Manager is HTTP(S)-only by default. Its **Streams** feature (TCP/
+UDP forwarding, not a normal proxy host) is what's needed for RTMP push,
+since raw RTMP doesn't carry a Host header/SNI for NPM's usual virtual-host
+routing to key off:
 
-RTMP push (port 1936) does not go through Nginx - it is a raw TCP protocol,
-so it should be exposed directly (or via a TCP-mode proxy) rather than the
-HTTPS virtual host.
+- **HTTP(S) paths** (WHIP push, WHEP/HLS playback, the register/admin API) -
+  standard NPM proxy host entries pointing at the origin VPS's
+  `127.0.0.1`-bound container ports:
+  ```
+  location /whip/              { proxy_pass http://<origin-vps>:8189; }
+  location /relay/              { proxy_pass http://<origin-vps>:8888; } # HLS playback
+  location /v1/nodes/register   { proxy_pass http://<origin-vps>:8092; }
+  location /v1/admin/           { proxy_pass http://<origin-vps>:8092; }
+  ```
+- **RTMP push** (port 1936) - add an NPM **Stream** forwarding TCP 1936 on
+  the front-end VPS straight through to `<origin-vps>:1936`. It is not an
+  HTTP proxy_pass entry and does not go through the `castnexus.nekosunevr.co.uk`
+  virtual host at all; clients connect to `rtmp://castnexus.nekosunevr.co.uk:1936/push/<nodeId>`
+  and NPM forwards the raw TCP stream.
