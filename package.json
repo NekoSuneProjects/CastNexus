@@ -1,6 +1,6 @@
 {
   "name": "castnexus-relaystream-repo",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "CastNexus relaystream - public relay for NAT'd/no-open-port installs",
   "license": "MIT",
   "repository": "NekoSuneProjects/CastNexus",
