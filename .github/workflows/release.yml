@@ -101,7 +101,13 @@ jobs:
           node-version: "24"
       - name: Install Linux packaging tools
         if: matrix.target == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends binutils fakeroot
+        # xz-utils matters here beyond just .tar.xz support: without a real
+        # `xz` on PATH, fpm falls back to invoking the bundled app-builder
+        # binary as a tar compressor via `-I'<path>'`, but that quoting
+        # assumes shell execution - electron-builder spawns it without a
+        # shell, so the literal quote characters end up in argv and tar
+        # fails with "cannot execute". A real xz avoids that fallback.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends binutils fakeroot xz-utils
       # dashboard's node_modules is gitignored, so the fetched copy has none -
       # without this the packaged app fails at startup with "Cannot find
       # module 'express'".
