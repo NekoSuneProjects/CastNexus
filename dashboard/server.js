@@ -471,6 +471,16 @@ app.put("/api/destinations/:id",requireAuth,requireOnboarded,(req,res)=>{const d
 app.delete("/api/destinations/:id",requireAuth,requireOnboarded,(req,res)=>{const dest=findDestination(req.account,req.params.id);if(!dest)return res.status(404).json({error:"unknown destination"});stopDestination(req.account.twitchUserId,dest.id);req.account.destinations=req.account.destinations.filter(d=>d.id!==dest.id);saveState(state);res.json({ok:true});});
 app.post("/api/destinations/:id/toggle",requireAuth,requireOnboarded,(req,res)=>{const dest=findDestination(req.account,req.params.id);if(!dest)return res.status(404).json({error:"unknown destination"});dest.enabled=Boolean(req.body?.enabled);saveState(state);const source=destinationSourcePathFor(req.account);if(source){if(dest.enabled)startDestination(req.account,dest,source);else stopDestination(req.account.twitchUserId,dest.id);}res.json({ok:true});});
 
+app.get("/build-info.js",(_req,res)=>{
+  const info={
+    name:"CastNexus",
+    version:process.env.CASTNEXUS_VERSION||"0.0.0-dev",
+    channel:process.env.CASTNEXUS_CHANNEL||"dev",
+    installType:process.env.CASTNEXUS_INSTALL_TYPE||"source",
+    repository:"NekoSuneProjects/CastNexus",
+  };
+  res.type("application/javascript").send(`window.CASTNEXUS_BUILD = Object.freeze(${JSON.stringify(info)});\n`);
+});
 app.use(express.static(path.join(__dirname,"public"),{index:false}));
 const httpServer=app.listen(PORT,()=>{const encoder=gpuEncoder.status().selected;console.log(`[dashboard] listening on :${PORT}`);console.log(`[dashboard] video encoder: ${encoder.label}${encoder.hardware?" (hardware)":" (software fallback)"}`);console.log(`[dashboard] oauth-broker: ${hostedOauth.baseUrl}`);const allowList=registration.allowedLogins();if(allowList.length)console.log(`[dashboard] sign-in restricted to: ${allowList.join(", ")}`);else if(registration.registrationDisabled())console.log(`[dashboard] registration disabled - only the ${Object.keys(state.accounts).length} existing account(s) can sign in`);if(registration.locksOutEveryone({accountCount:Object.keys(state.accounts).length}))console.warn("[dashboard] DISABLE_REGISTRATION is set but no account exists yet - nobody can sign in. Set ALLOWED_TWITCH_LOGINS to your Twitch login, or unset DISABLE_REGISTRATION for one sign-in.");});
 

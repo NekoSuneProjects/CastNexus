@@ -45,6 +45,7 @@ function wirePage() {
     if(a==="change-stream-key")b.onclick=openStreamKeyModal;
     if(a==="save-music-visual")b.onclick=saveMusicVisual;
     if(a==="logout")b.onclick=logout;
+    if(a==="check-updates")b.onclick=checkForUpdates;
   });
 }
 

@@ -58,7 +58,6 @@ jobs:
           node --check dashboard/public/app-runtime.js
           node --check dashboard/public/app-updater.js
           node --check dashboard/public/app-vod.js
-          node --check dashboard/public/build-info.js 2>/dev/null || true
 
       - name: Hosted OAuth broker-client tests
         run: |

@@ -1,7 +1,7 @@
 "use strict";
 
 (function () {
-  const build = window.CASTNEXUS_BUILD || { name:"CastNexus", version:"0.0.0-dev", channel:"dev", installType:"source", repository:"NekoSuneProjects/RestreamNode" };
+  const build = window.CASTNEXUS_BUILD || { name:"CastNexus", version:"0.0.0-dev", channel:"dev", installType:"source", repository:"NekoSuneProjects/CastNexus" };
   let lastRelease = null;
   let notifiedTag = null;
 

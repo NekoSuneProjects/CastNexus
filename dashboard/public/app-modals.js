@@ -7,8 +7,21 @@ function renderSettings() {
       <div class="card-panel"><h3>Active workspace</h3><p>${esc(p?.name || "—")} · ${esc(MODE_LABELS[p?.mode] || "—")} · ${p?.canvasMode === "vertical" ? "9:16 Vertical" : "16:9 Landscape"}</p><button class="btn btn-ghost btn-sm" data-nav="profiles">Manage profiles</button></div>
       ${renderPublicPlaybackPanel()}
       ${renderPublicAddressPanel()}
+      ${renderAboutPanel()}
       <div class="card-panel"><h3>Security notes</h3><p>Use Browser / iframe overlays for third-party widget URLs. They are sandboxed. Raw HTML/CSS overlays are intentionally trusted code and should only contain code you control.</p><div class="callout warn">The real Twitch stream key is only required for Console profiles and is masked after saving. PC and Music profiles use the separate CastNexus-generated PC ingest key.</div></div>
     </section>`;
+}
+
+function renderAboutPanel() {
+  const build = window.CASTNEXUS_BUILD || { version:"0.0.0-dev", channel:"dev", installType:"source" };
+  return `<div class="card-panel"><h3>About</h3><p>CastNexus <strong>${esc(build.version)}</strong> · ${esc(build.channel)} · ${esc(build.installType)}</p><button class="btn btn-ghost btn-sm" data-action="check-updates">Check for updates</button></div>`;
+}
+
+function checkForUpdates() {
+  if (typeof CastNexusUpdater === "undefined") return;
+  CastNexusUpdater.check().then(() => {
+    if (!CastNexusUpdater.latest) toast("You're on the latest version", "success");
+  });
 }
 
 function renderPage() {
