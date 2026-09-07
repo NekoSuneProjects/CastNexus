@@ -1,0 +1,31 @@
+logLevel: info
+
+rtmp: yes
+rtmpAddress: :1936
+
+webrtc: yes
+webrtcAddress: :8189
+webrtcICEUDPMuxAddress: :8189
+
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsAllowOrigins:
+  - '*'
+
+api: yes
+# Bound to all interfaces here because relaystream-api reaches it over the
+# Docker Compose network by service name - the compose file still only
+# publishes the API's own port to 127.0.0.1 on the host, so nothing extra is
+# exposed publicly.
+apiAddress: :9997
+
+# Every publish/read attempt against relaystream is authorized by the
+# companion Node API's /mtx-auth webhook (see server.js) rather than any
+# built-in MediaMTX credential - nodes authenticate with a short-lived signed
+# push token issued by POST /v1/nodes/register, not a static username/password.
+authMethod: http
+authHTTPAddress: http://relaystream-api:8092/mtx-auth
+
+paths:
+  all_others:

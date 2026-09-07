@@ -1,0 +1,26 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main, beta]
+
+jobs:
+  ci:
+    runs-on: [self-hosted, Linux, docker, buildx]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install relaystream dependencies
+        working-directory: relaystream
+        run: npm install --prefer-offline --no-audit
+
+      - name: Syntax check
+        run: node --check relaystream/server.js
+
+      - name: relaystream tests
+        run: node --test relaystream/server.test.js

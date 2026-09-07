@@ -1,164 +1,35 @@
 services:
-  # --- Console capture helpers.
-  # LAN: docker compose --profile console up -d
-  # VPS/public: use docker-compose.vps.yml with --profile vps-console.
-  dns:
-    image: ghcr.io/nekosuneprojects/castnexus-dns:${CASTNEXUS_IMAGE_TAG:-latest}
-    build:
-      context: ./dns
-    container_name: castnexus-dns
-    restart: unless-stopped
-    network_mode: host
-    profiles: ["console", "vps-console"]
-    environment:
-      PI_IP: ${PI_IP}
-      DNS_MODE: ${DNS_MODE:-lan}
-      DNS_REDIRECT_IP: ${DNS_REDIRECT_IP:-}
-      DNS_REDIRECT_IPV6: ${DNS_REDIRECT_IPV6:-}
-      DNS_PUBLIC_MODE: ${DNS_PUBLIC_MODE:-false}
-      DNS_ALLOWED_CLIENTS: ${DNS_ALLOWED_CLIENTS:-}
-      DNS_ALLOW_ANY: ${DNS_ALLOW_ANY:-false}
-      DNS_UPSTREAM: ${DNS_UPSTREAM:-1.1.1.1}
-      DNS_LOG_ALL: ${DNS_LOG_ALL:-true}
-
-  mediamtx:
+  relaystream-mediamtx:
     image: bluenviron/mediamtx:1.19.2
-    container_name: castnexus-mediamtx
-    network_mode: host
-    restart: unless-stopped
-    volumes:
-      - ./config/mediamtx.yml:/mediamtx.yml:ro
-      - ./dashboard/data/recordings:/recordings
-
-  dashboard:
-    image: ghcr.io/nekosuneprojects/castnexus-dashboard:${CASTNEXUS_IMAGE_TAG:-latest}
-    build:
-      context: ./dashboard
-    container_name: castnexus-dashboard
-    network_mode: host
+    container_name: castnexus-relaystream-mediamtx
     restart: unless-stopped
     depends_on:
-      - mediamtx
+      - relaystream-api
+    ports:
+      # RTMP push ingest and WHIP/WHEP/HLS - front these with your reverse
+      # proxy (RTMP is usually exposed directly; WHIP/HLS are proxied at
+      # /relay and /whip on the public domain).
+      - "127.0.0.1:1936:1936"
+      - "127.0.0.1:8189:8189/udp"
+      - "127.0.0.1:8189:8189/tcp"
+      - "127.0.0.1:8888:8888"
     volumes:
-      - ./dashboard/data:/app/data
-    environment:
-      DASHBOARD_PORT: ${DASHBOARD_PORT:-8090}
-      PI_IP: ${PI_IP}
-      MEDIAMTX_API: http://127.0.0.1:9997
-      MEDIAMTX_PLAYBACK: http://127.0.0.1:9996
-      MEDIA_RTMP_ORIGIN: rtmp://127.0.0.1:1935
-      RECORDINGS_DIR: /app/data/recordings
-      STATE_FILE: /app/data/state.json
-      MUSIC_DIR: /app/data/music
-      RECONNECT_GRACE_MS: ${RECONNECT_GRACE_MS:-3600000}
+      - ./relaystream/mediamtx.yml:/mediamtx.yml:ro
 
-      # Encoder selection and advanced encoder preset controls.
-      CASTNEXUS_VIDEO_ENCODER: ${CASTNEXUS_VIDEO_ENCODER:-auto}
-      VAAPI_DEVICE: ${VAAPI_DEVICE:-/dev/dri/renderD128}
-      X264_PRESET: ${X264_PRESET:-}
-      NVENC_PRESET: ${NVENC_PRESET:-}
-      QSV_PRESET: ${QSV_PRESET:-}
-      AMF_QUALITY: ${AMF_QUALITY:-}
-
-      # VOD / rerun encoding.
-      VOD_MAX_GB: ${VOD_MAX_GB:-20}
-      VOD_X264_PRESET: ${VOD_X264_PRESET:-veryfast}
-      VOD_VIDEO_BITRATE: ${VOD_VIDEO_BITRATE:-6000k}
-      VOD_VIDEO_MAXRATE: ${VOD_VIDEO_MAXRATE:-6500k}
-      VOD_VIDEO_BUFSIZE: ${VOD_VIDEO_BUFSIZE:-12000k}
-      VOD_AUDIO_BITRATE: ${VOD_AUDIO_BITRATE:-160k}
-      VOD_FPS: ${VOD_FPS:-30}
-
-      # Music 24/7 worker and requested render profile.
-      MUSIC24_POLL_MS: ${MUSIC24_POLL_MS:-2000}
-      MUSIC24_NOW_POLL_MS: ${MUSIC24_NOW_POLL_MS:-750}
-      MUSIC24_START_TIMEOUT_MS: ${MUSIC24_START_TIMEOUT_MS:-60000}
-      MUSIC24_EMBED_START_DELAY_MS: ${MUSIC24_EMBED_START_DELAY_MS:-500}
-      MUSIC24_WIDTH: ${MUSIC24_WIDTH:-1920}
-      MUSIC24_HEIGHT: ${MUSIC24_HEIGHT:-1080}
-      MUSIC24_FPS: ${MUSIC24_FPS:-30}
-
-      # CPU/Pi safe rendering. CPU_* is the preferred naming and takes priority
-      # over the older PI_* compatibility aliases inside rtmp-pipeline.js.
-      CASTNEXUS_CPU_SAFE_MODE: ${CASTNEXUS_CPU_SAFE_MODE:-}
-      CASTNEXUS_CPU_SAFE_WIDTH: ${CASTNEXUS_CPU_SAFE_WIDTH:-}
-      CASTNEXUS_CPU_SAFE_HEIGHT: ${CASTNEXUS_CPU_SAFE_HEIGHT:-}
-      CASTNEXUS_CPU_SAFE_FPS: ${CASTNEXUS_CPU_SAFE_FPS:-}
-      CASTNEXUS_CPU_JPEG_QUALITY: ${CASTNEXUS_CPU_JPEG_QUALITY:-}
-      CASTNEXUS_PI_SAFE_MODE: ${CASTNEXUS_PI_SAFE_MODE:-auto}
-      CASTNEXUS_PI_SAFE_WIDTH: ${CASTNEXUS_PI_SAFE_WIDTH:-960}
-      CASTNEXUS_PI_SAFE_HEIGHT: ${CASTNEXUS_PI_SAFE_HEIGHT:-540}
-      CASTNEXUS_PI_SAFE_FPS: ${CASTNEXUS_PI_SAFE_FPS:-20}
-      CASTNEXUS_PI_JPEG_QUALITY: ${CASTNEXUS_PI_JPEG_QUALITY:-60}
-
-      # Live input and per-destination transcode controls.
-      RTMP_INPUT_QUEUE: ${RTMP_INPUT_QUEUE:-1024}
-      DESTINATION_FPS: ${DESTINATION_FPS:-30}
-      DESTINATION_AUDIO_BITRATE: ${DESTINATION_AUDIO_BITRATE:-128k}
-      DESTINATION_AUDIO_RATE: ${DESTINATION_AUDIO_RATE:-44100}
-      DESTINATION_VIDEO_BITRATE: ${DESTINATION_VIDEO_BITRATE:-}
-      DESTINATION_VIDEO_MAXRATE: ${DESTINATION_VIDEO_MAXRATE:-}
-      DESTINATION_VIDEO_BUFSIZE: ${DESTINATION_VIDEO_BUFSIZE:-}
-      DESTINATION_X264_PRESET: ${DESTINATION_X264_PRESET:-}
-
-      # Browser compositor. These are intentionally forwarded in the base stack
-      # so .env tuning works on home servers as well as the VPS overlay.
-      COMPOSITOR_GPU: ${COMPOSITOR_GPU:-auto}
-      COMPOSITOR_WIDTH: ${COMPOSITOR_WIDTH:-1280}
-      COMPOSITOR_HEIGHT: ${COMPOSITOR_HEIGHT:-720}
-      COMPOSITOR_FPS: ${COMPOSITOR_FPS:-30}
-      COMPOSITOR_JPEG_QUALITY: ${COMPOSITOR_JPEG_QUALITY:-70}
-      COMPOSITOR_AUDIO_BITRATE: ${COMPOSITOR_AUDIO_BITRATE:-128k}
-      COMPOSITOR_VIDEO_BITRATE: ${COMPOSITOR_VIDEO_BITRATE:-}
-      COMPOSITOR_VIDEO_MAXRATE: ${COMPOSITOR_VIDEO_MAXRATE:-}
-      COMPOSITOR_VIDEO_BUFSIZE: ${COMPOSITOR_VIDEO_BUFSIZE:-}
-      COMPOSITOR_X264_PRESET: ${COMPOSITOR_X264_PRESET:-}
-      COMPOSITOR_DEBUG: ${COMPOSITOR_DEBUG:-false}
-      COMPOSITOR_AUDIO_FIFO: ${COMPOSITOR_AUDIO_FIFO:-false}
-
-      # Music cover-art lookup.
-      COVER_LOOKUP_PROVIDERS: ${COVER_LOOKUP_PROVIDERS:-musicbrainz,itunes}
-      COVER_LOOKUP_TIMEOUT_MS: ${COVER_LOOKUP_TIMEOUT_MS:-5000}
-      COVER_LOOKUP_CACHE_HOURS: ${COVER_LOOKUP_CACHE_HOURS:-168}
-      COVER_REMOTE_MAX_MB: ${COVER_REMOTE_MAX_MB:-10}
-      COVER_MUSICBRAINZ_USER_AGENT: ${COVER_MUSICBRAINZ_USER_AGENT:-CastNexus/1.0 (https://github.com/NekoSuneProjects/CastNexus)}
-      COVER_ITUNES_COUNTRY: ${COVER_ITUNES_COUNTRY:-US}
-
-      YOUTUBE_UPLOAD_ALLOWLIST: ${YOUTUBE_UPLOAD_ALLOWLIST:-}
-      YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT: ${YOUTUBE_UPLOAD_DAILY_SOFT_LIMIT:-90}
-
-      # Closed instance: only accounts already in state.json may sign in, or
-      # only the Twitch logins named in ALLOWED_TWITCH_LOGINS.
-      DISABLE_REGISTRATION: ${DISABLE_REGISTRATION:-false}
-      ALLOWED_TWITCH_LOGINS: ${ALLOWED_TWITCH_LOGINS:-}
-      CASTNEXUS_CHANNEL: ${CASTNEXUS_CHANNEL:-stable}
-      # Required. The oauth-broker service is the only supported way to sign
-      # in with Twitch or connect YouTube - must be an https:// URL. Defaults
-      # to the official public broker; see docs/HOSTED-OAUTH.md to self-host
-      # your own instead (docker-compose.oauth-broker.yml).
-      CASTNEXUS_OAUTH_BROKER_URL: ${CASTNEXUS_OAUTH_BROKER_URL:-https://castnexus.nekosunevr.co.uk/oauth}
-
-  intercept:
-    image: ghcr.io/nekosuneprojects/castnexus-intercept:${CASTNEXUS_IMAGE_TAG:-latest}
+  relaystream-api:
     build:
-      context: ./intercept
-    container_name: castnexus-intercept
-    network_mode: host
+      context: ./relaystream
+    image: ghcr.io/nekosuneprojects/castnexus-relaystream:${CASTNEXUS_IMAGE_TAG:-beta}
+    container_name: castnexus-relaystream-api
     restart: unless-stopped
-    depends_on:
-      - mediamtx
-    profiles: ["console", "vps-console"]
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
+    ports:
+      # Keep the API private to the host; publish it through the existing
+      # HTTPS reverse proxy instead of exposing this port publicly.
+      - "127.0.0.1:8092:8092"
     environment:
-      INTERCEPT_MODE: ${INTERCEPT_MODE:-lan}
-      PI_IP: ${PI_IP}
-      TARGET_IPS: ${TARGET_IPS:-}
-      GATEWAY_IP: ${GATEWAY_IP:-}
-      VPS_ALLOWED_CLIENTS: ${VPS_ALLOWED_CLIENTS:-}
-      VPS_ALLOW_ANY: ${VPS_ALLOW_ANY:-false}
-      VPS_RTMP_PORT: ${VPS_RTMP_PORT:-1935}
-      VPS_RTMP_WAIT_SECONDS: ${VPS_RTMP_WAIT_SECONDS:-60}
-
-networks: {}
+      RELAYSTREAM_PORT: 8092
+      RELAYSTREAM_PUBLIC_URL: https://castnexus.nekosunevr.co.uk
+      RELAYSTREAM_SIGNING_SECRET: ${RELAYSTREAM_SIGNING_SECRET:?Generate a random 32+ byte signing secret}
+      RELAYSTREAM_ADMIN_TOKEN: ${RELAYSTREAM_ADMIN_TOKEN:?Generate a random admin token to manage/ban nodes}
+      RELAYSTREAM_TRUST_PROXY: "true"
+      MEDIAMTX_API: http://relaystream-mediamtx:9997
