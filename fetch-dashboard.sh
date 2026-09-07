@@ -13,3 +13,8 @@ cp -r "$TMP_DIR/dashboard" dashboard
 rm -rf "$TMP_DIR"
 
 echo "Fetched dashboard/ from the dashboard branch."
+
+# node_modules is gitignored, so the fetched copy has none. Without this the
+# packaged app fails at startup with "Cannot find module 'express'".
+echo "Installing dashboard/ dependencies..."
+npm --prefix dashboard install --omit=dev
