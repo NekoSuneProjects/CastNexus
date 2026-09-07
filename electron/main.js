@@ -97,6 +97,8 @@ function setupEnvironment() {
   const tools = downloadManager.getToolPaths();
 
   process.env.CASTNEXUS_INSTALL_TYPE = "electron";
+  process.env.CASTNEXUS_VERSION = app.getVersion();
+  process.env.CASTNEXUS_CHANNEL = app.getVersion().includes("-") ? "beta" : "stable";
   process.env.DASHBOARD_PORT = port;
   process.env.STATE_FILE = path.join(dataDir, "state.json");
   process.env.MUSIC_DIR = path.join(dataDir, "music");
