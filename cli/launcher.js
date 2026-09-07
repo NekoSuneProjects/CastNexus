@@ -10,6 +10,7 @@ const Store = require("electron-store");
 const downloadManager = require("./download-manager");
 const { version: CLI_VERSION } = require("./package.json");
 const OFFICIAL_OAUTH_BROKER = "https://castnexus.nekosunevr.co.uk/oauth";
+const OFFICIAL_RELAYSTREAM = "https://castnexus.nekosunevr.co.uk";
 const isWin = process.platform === "win32";
 
 const store = new Store({
@@ -79,6 +80,10 @@ function setupEnvironment() {
   // The oauth-broker service is the only supported way to sign in - there is
   // no local/BYO-credential mode. Sign in from a browser at the dashboard URL.
   process.env.CASTNEXUS_OAUTH_BROKER_URL = process.env.CASTNEXUS_OAUTH_BROKER_URL || store.get("oauthBrokerUrl") || OFFICIAL_OAUTH_BROKER;
+  // Optional. Enables the "push to relaystream" Settings toggle. Blank hides
+  // it entirely - set to your own relaystream deployment's URL to self-host,
+  // or the official one to use the public relay.
+  process.env.RELAYSTREAM_URL = process.env.RELAYSTREAM_URL || store.get("relaystreamUrl") || OFFICIAL_RELAYSTREAM;
 
   const chromium = downloadManager.findChromium();
   if (chromium && !process.env.PUPPETEER_EXECUTABLE_PATH) {
