@@ -72,19 +72,19 @@ test("mtx-auth allows publish only with a valid push token, and always allows re
 
     const badPublish = await fetch(`${base}/mtx-auth`, {
       method:"POST", headers:{ "Content-Type":"application/json" },
-      body:JSON.stringify({ path:"push/test-node-5678", action:"publish", query:"token=wrong" }),
+      body:JSON.stringify({ path:"relay/test-node-5678", action:"publish", query:"token=wrong" }),
     });
     assert.equal(badPublish.status, 401);
 
     const goodPublish = await fetch(`${base}/mtx-auth`, {
       method:"POST", headers:{ "Content-Type":"application/json" },
-      body:JSON.stringify({ path:"push/test-node-5678", action:"publish", query:`token=${token}` }),
+      body:JSON.stringify({ path:"relay/test-node-5678", action:"publish", query:`token=${token}` }),
     });
     assert.equal(goodPublish.status, 200);
 
     const read = await fetch(`${base}/mtx-auth`, {
       method:"POST", headers:{ "Content-Type":"application/json" },
-      body:JSON.stringify({ path:"push/test-node-5678", action:"read" }),
+      body:JSON.stringify({ path:"relay/test-node-5678", action:"read" }),
     });
     assert.equal(read.status, 200);
 
@@ -105,7 +105,7 @@ test("mtx-auth denies a banned node even with a valid token", async () => {
     const token = signPushToken("test-node-banned");
     const publish = await fetch(`${base}/mtx-auth`, {
       method:"POST", headers:{ "Content-Type":"application/json" },
-      body:JSON.stringify({ path:"push/test-node-banned", action:"publish", query:`token=${token}` }),
+      body:JSON.stringify({ path:"relay/test-node-banned", action:"publish", query:`token=${token}` }),
     });
     assert.equal(publish.status, 403);
   } finally {

@@ -83,12 +83,20 @@ async function mediamtxRequest(url, options = {}) {
   if (!res.ok) throw new Error(data?.error || `MediaMTX request failed (${res.status})`);
   return data;
 }
+// Both RTMP and WHIP publish to the same MediaMTX path name - MediaMTX has no
+// separate "whip/" path namespace, WHIP/WHEP are just /whip and /whep
+// suffixes on the ordinary media path (e.g. .../relay/<nodeId>/whip). Using
+// one path per node regardless of transport keeps playback (HLS/WHEP) at a
+// single stable URL no matter which transport that node happens to push
+// with.
+const NODE_PATH_RE = /^relay\/([A-Za-z0-9-]{8,64})$/;
+
 async function liveNodeIds() {
   try {
     const data = await mediamtxRequest(`${MEDIAMTX_API}/v3/paths/list`);
     const live = new Set();
     for (const item of data?.items || []) {
-      const match = String(item.name || "").match(/^(?:push|whip)\/([A-Za-z0-9-]{8,64})$/);
+      const match = String(item.name || "").match(NODE_PATH_RE);
       if (match && item.ready) live.add(match[1]);
     }
     return live;
@@ -113,13 +121,18 @@ function createApp() {
     const node = ensureNode(nodeId);
     if (node.banned) return res.status(403).json({ error:"this node has been banned from relaystream" });
     node.lastSeenAt = Date.now();
+    const publicBase = PUBLIC_URL || `https://${req.hostname}`;
     res.json({
       nodeId,
       pushToken:signPushToken(nodeId),
       expiresIn:Math.floor(PUSH_TOKEN_TTL_MS / 1000),
-      rtmpUrl:`rtmp://${req.hostname}:1936/push/${nodeId}`,
-      whipUrl:`${PUBLIC_URL || `https://${req.hostname}`}/whip/${nodeId}`,
-      watchUrl:`${PUBLIC_URL || `https://${req.hostname}`}/relay/${nodeId}`,
+      // Both transports publish to the SAME MediaMTX path
+      // ("relay/<nodeId>") - WHIP is just a /whip suffix on that path, not a
+      // separate path namespace, so playback stays at one stable URL no
+      // matter which transport a node happens to push with.
+      rtmpUrl:`rtmp://${req.hostname}:1936/relay/${nodeId}`,
+      whipUrl:`${publicBase}/relay/${nodeId}/whip`,
+      watchUrl:`${publicBase}/relay/${nodeId}`,
     });
   });
 
@@ -130,7 +143,7 @@ function createApp() {
     const body = req.body || {};
     const path = String(body.path || "");
     const action = String(body.action || "");
-    const match = path.match(/^(?:push|whip)\/([A-Za-z0-9-]{8,64})$/);
+    const match = path.match(NODE_PATH_RE);
     if (!match) return res.status(404).end();
     const nodeId = match[1];
     const node = nodes.get(nodeId);

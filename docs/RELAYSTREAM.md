@@ -8,10 +8,13 @@ relaystream, which re-serves it publicly.
 ## Components
 
 - **relaystream-mediamtx** - a stock `bluenviron/mediamtx:1.19.2` instance.
-  Accepts RTMP push at `push/<nodeId>` and WHIP push at `whip/<nodeId>`, and
-  serves playback of either as HLS/WHEP under the same path. WHIP support
-  also lets VRChat world video players consume the resulting stream via
-  WHEP/HLS like any other viewer.
+  Every node gets one MediaMTX path, `relay/<nodeId>`, used for **both**
+  transports: RTMP publishes straight to that path; WHIP has no separate path
+  namespace of its own in MediaMTX - it's just a `/whip` (publish) or `/whep`
+  (read) suffix appended to the same path's URL. Using one path per node
+  regardless of transport keeps playback (HLS/WHEP) at a single stable URL no
+  matter which transport that node happens to push with, and also lets
+  VRChat world video players consume it via WHEP/HLS like any other viewer.
 - **relaystream-api** - a small Express app (`server.js`) that:
   - issues short-lived signed push tokens to registered node IDs
     (`POST /v1/nodes/register`),
@@ -41,10 +44,11 @@ re-fetched periodically.
 
 1. The local install calls `POST /v1/nodes/register` with its node ID and
    receives a signed push token plus the RTMP/WHIP ingest URLs and the public
-   watch URL for that node.
-2. It starts an outbound push (RTMP or WHIP) to
-   `push/<nodeId>` / `whip/<nodeId>`, with the token attached as a query
-   parameter or bearer header.
+   watch URL for that node - all three point at the same `relay/<nodeId>`
+   MediaMTX path.
+2. It starts an outbound push (RTMP to `relay/<nodeId>`, or WHIP to
+   `relay/<nodeId>/whip`), with the token attached as a query parameter or
+   bearer header.
 3. MediaMTX calls `/mtx-auth` on the attempt; relaystream-api validates the
    token and node-ban status before allowing the publish.
 4. Viewers hit the public URL, which is reverse-proxied to relaystream's
@@ -76,19 +80,37 @@ origin VPS can change without the public URL changing.
 Nginx Proxy Manager is HTTP(S)-only by default. Its **Streams** feature (TCP/
 UDP forwarding, not a normal proxy host) is what's needed for RTMP push,
 since raw RTMP doesn't carry a Host header/SNI for NPM's usual virtual-host
-routing to key off:
+routing to key off.
 
-- **HTTP(S) paths** (WHIP push, WHEP/HLS playback, the register/admin API) -
-  standard NPM proxy host entries pointing at the origin VPS's
-  `127.0.0.1`-bound container ports:
+- **RTMP push** (port 1936) - add an NPM **Stream**: forwarding port `1936`,
+  forward host `<origin-vps>`, forward port `1936`, TCP. It is not an HTTP
+  proxy_pass entry and does not go through the `castnexus.nekosunevr.co.uk`
+  virtual host at all; clients connect to
+  `rtmp://castnexus.nekosunevr.co.uk:1936/relay/<nodeId>` and NPM forwards
+  the raw TCP stream.
+
+- **HTTP(S) paths** (WHIP push/WHEP read, HLS playback, the register/admin
+  API) - `/relay/<nodeId>` and `/relay/<nodeId>/whip` (or `/whep`) share one
+  path prefix but need to land on two different backend ports (MediaMTX's
+  HLS server on `:8888` vs its WebRTC/WHIP server on `:8189`), so a plain
+  NPM proxy host location isn't enough - use the proxy host's **Advanced**
+  tab (which accepts raw Nginx config merged into the server block) and
+  paste:
+  ```nginx
+  location ~ ^/relay/([^/]+)/(whip|whep)$ {
+    proxy_pass http://<origin-vps>:8189/relay/$1/$2;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+  }
+  location /relay/ {
+    proxy_pass http://<origin-vps>:8888;
+  }
+  location /v1/ {
+    proxy_pass http://<origin-vps>:8092;
+  }
   ```
-  location /whip/              { proxy_pass http://<origin-vps>:8189; }
-  location /relay/              { proxy_pass http://<origin-vps>:8888; } # HLS playback
-  location /v1/nodes/register   { proxy_pass http://<origin-vps>:8092; }
-  location /v1/admin/           { proxy_pass http://<origin-vps>:8092; }
-  ```
-- **RTMP push** (port 1936) - add an NPM **Stream** forwarding TCP 1936 on
-  the front-end VPS straight through to `<origin-vps>:1936`. It is not an
-  HTTP proxy_pass entry and does not go through the `castnexus.nekosunevr.co.uk`
-  virtual host at all; clients connect to `rtmp://castnexus.nekosunevr.co.uk:1936/push/<nodeId>`
-  and NPM forwards the raw TCP stream.
+  The regex `location` for `/whip`/`/whep` must be able to take priority
+  over the plain `/relay/` prefix location for this to route correctly -
+  pasting both into the same Advanced block (in this order) achieves that,
+  since Nginx always prefers a matching regex location over a prefix one
+  regardless of the order they're declared in.
