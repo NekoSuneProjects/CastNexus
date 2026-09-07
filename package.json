@@ -1,6 +1,6 @@
 {
   "name": "castnexus-dns-repo",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "CastNexus dns - console DNS-capture helper service",
   "license": "MIT",
   "repository": "NekoSuneProjects/CastNexus",
