@@ -1,6 +1,6 @@
 {
   "name": "castnexus-desktop-electron",
-  "version": "0.1.0",
+  "version": "1.3.2",
   "description": "CastNexus Desktop - Professional broadcast streaming for PS5, Switch, and PC",
   "main": "main.js",
   "homepage": "https://github.com/NekoSuneProjects/CastNexus",
