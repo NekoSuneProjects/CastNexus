@@ -1,6 +1,6 @@
 {
   "name": "castnexus-desktopapp-repo",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "CastNexus desktop app - Electron wrapper for the CastNexus dashboard",
   "license": "MIT",
   "repository": "NekoSuneProjects/CastNexus",
