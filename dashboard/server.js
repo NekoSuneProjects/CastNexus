@@ -240,17 +240,20 @@ function programEntry(account, orientation, sceneId) {
   const accountId = account.twitchUserId;
   const lib = sceneModel.library(account);
   const pathName = programPathFor(accountId, orientation, sceneId);
+  // Read the original ingest, not public/<login>: that copy goes through RTSP
+  // in MediaMTX and comes back with audio ~0.1 s off the video.
+  const sourceUrl = () => `rtmp://127.0.0.1:1935/${activeFeedPath.get(accountId) || safePathFor(account)}`;
   const compositor = new Compositor({
     accountId:orientation === "landscape" && !sceneId ? accountId : `${accountId}-${orientation}-${safeSeg(sceneId || "live")}`,
     pageUrl:programPageUrl(account, orientation, sceneId),
-    audioSourceUrl:`rtmp://127.0.0.1:1935/${safePathFor(account)}`,
+    audioSourceUrl:sourceUrl,
     outputUrl:`rtmp://127.0.0.1:1935/${pathName}`,
     getMusicNow:() => musicNowFor(accountId),
     musicFilePathFor:trackId => musicFileFor(accountId, trackId),
     video:programVideo(account, orientation),
     browserAudio:sceneModel.libraryNeedsBrowserAudio(account),
     mixer:lib.mixer,
-    hybrid:programHybrid() ? { sourceUrl:`rtmp://127.0.0.1:1935/${safePathFor(account)}`, getPlan:() => hybridPlanFor(accountId, orientation, sceneId, compositor.video) } : null,
+    hybrid:programHybrid() ? { sourceUrl, getPlan:() => hybridPlanFor(accountId, orientation, sceneId, compositor.video) } : null,
     diagnostics:{ group:"program", label:`${orientation === "vertical" ? "Vertical" : "Horizontal"} program${sceneId ? ` (${sceneModel.findScene(account, sceneId)?.name || sceneId})` : ""}` },
   });
   entry = { key, accountId, orientation, sceneId:sceneId || null, path:pathName, compositor, refs:new Set(), stopTimer:null, signature:JSON.stringify(programVideo(account, orientation)) };
