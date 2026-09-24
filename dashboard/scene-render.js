@@ -255,13 +255,17 @@ const PROGRAM_CSS = `
   .cn-guides{position:absolute;inset:0;pointer-events:none;z-index:100000}
 `;
 
+function hlsUrlFor(login) {
+  return "/" + ["hls", "public", login, "index.m3u8"].map(encodeURIComponent).join("/");
+}
+
 function whepUrlFor(login) {
   return "/" + ["webrtc", "public", login, "whep"].map(encodeURIComponent).join("/");
 }
 
 // Client runtime. Kept dependency-free and small: it runs inside the
 // server-side renderer on every program page.
-function programRuntime({ login, orientation, dataUrl, eventsUrl, whepUrl, preview, guides, hybrid = false }) {
+function programRuntime({ login, orientation, dataUrl, eventsUrl, whepUrl, hlsUrl = null, preview, guides, hybrid = false }) {
   return `<script>(function(){
   var MODEL=JSON.parse(document.getElementById("cn-model").textContent);
   var HYBRID=${hybrid ? "true" : "false"},ORIENT=${JSON.stringify(orientation)},DATA_URL=${JSON.stringify(dataUrl)},PREVIEW=${preview ? "true" : "false"},GUIDES=${JSON.stringify(guides || "")};
@@ -277,8 +281,17 @@ function programRuntime({ login, orientation, dataUrl, eventsUrl, whepUrl, previ
     Object.keys(keep).forEach(function(id){keep[id].remove()});var style=document.getElementById("cn-layer-css");style.textContent=css.join("\\n");
     if(HYBRID){var pp=model.programPlan;model.layers.forEach(function(layer){var el=stage.querySelector('[data-layer-id="'+layer.id+'"]');if(!el)return;var b=layer.box;if(pp&&b.z<pp.z){el.style.clipPath='path(evenodd,"M0 0H'+b.w+'V'+b.h+'H0Z M'+(pp.x-b.x)+' '+(pp.y-b.y)+'h'+pp.w+'v'+pp.h+'h'+(-pp.w)+'Z")'}else el.style.clipPath=""});whepWanted=false}
     if(whepWanted)connectWhep();tickClocks()}
-  function attachStream(el){var v=el.querySelector(".cn-program-video");if(!v)return;if(stream&&v.srcObject!==stream){v.srcObject=stream;v.play().catch(function(){})}v.onloadedmetadata=function(){el.querySelector(".cn-program").classList.add("cn-has-video");layoutProgram(el,el._cnProgram)}}
-  function connectWhep(){if(pc||!${JSON.stringify(whepUrl)})return;pc=new RTCPeerConnection();pc.addTransceiver("video",{direction:"recvonly"});pc.addTransceiver("audio",{direction:"recvonly"});pc.ontrack=function(ev){stream=ev.streams[0];stage.querySelectorAll(".cn-type-program").forEach(attachStream)};pc.oniceconnectionstatechange=function(){if(pc&&(pc.iceConnectionState==="failed"||pc.iceConnectionState==="disconnected")){try{pc.close()}catch(e){}pc=null;setTimeout(function(){if(whepWanted)connectWhep()},3000)}};pc.createOffer().then(function(o){return pc.setLocalDescription(o)}).then(function(){return new Promise(function(res){if(pc.iceGatheringState==="complete")return res();pc.addEventListener("icegatheringstatechange",function f(){if(pc.iceGatheringState==="complete"){pc.removeEventListener("icegatheringstatechange",f);res()}});setTimeout(res,2500)})}).then(function(){return fetch(${JSON.stringify(whepUrl)},{method:"POST",headers:{"Content-Type":"application/sdp"},body:pc.localDescription.sdp})}).then(function(r){if(!r.ok)throw new Error("whep "+r.status);return r.text()}).then(function(sdp){return pc.setRemoteDescription({type:"answer",sdp:sdp})}).catch(function(){try{pc&&pc.close()}catch(e){}pc=null;setTimeout(function(){if(whepWanted)connectWhep()},3000)})}
+  function attachStream(el){var v=el.querySelector(".cn-program-video");if(!v)return;if(useHls){attachHls(v);return}if(stream&&v.srcObject!==stream){v.srcObject=stream;v.play().catch(function(){})}v.onloadedmetadata=function(){el.querySelector(".cn-program").classList.add("cn-has-video");layoutProgram(el,el._cnProgram)}}
+  // WebRTC needs UDP to the media server. Behind Cloudflare or a proxy on
+  // another host it never connects, and the gameplay stayed black. After two
+  // failed attempts (or 10 s without a connection) play the same feed via
+  // LL-HLS over normal HTTPS instead.
+  var HLS_URL=${JSON.stringify(hlsUrl)},useHls=false,whepFails=0,hlsLib=null;
+  function whepFailed(){whepFails++;try{pc&&pc.close()}catch(e){}pc=null;if(whepFails>=2&&HLS_URL){startHls();return}setTimeout(function(){if(whepWanted)connectWhep()},3000)}
+  function loadHlsLib(cb){if(window.Hls)return cb();if(hlsLib){hlsLib.push(cb);return}hlsLib=[cb];var s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js";s.onload=function(){var l=hlsLib;hlsLib=null;l.forEach(function(f){f()})};document.head.appendChild(s)}
+  function attachHls(v){if(v._cnHls||v._cnHlsNative)return;if(!(window.MediaSource||window.ManagedMediaSource)&&v.canPlayType("application/vnd.apple.mpegurl")){v._cnHlsNative=true;v.src=HLS_URL;v.play().catch(function(){});return}v._cnHls="loading";loadHlsLib(function(){if(!window.Hls||!window.Hls.isSupported())return;var h=new window.Hls({lowLatencyMode:true,liveSyncDurationCount:2});h.loadSource(HLS_URL);h.attachMedia(v);h.on(window.Hls.Events.MANIFEST_PARSED,function(){v.play().catch(function(){})});v._cnHls=h})}
+  function startHls(){if(useHls)return;useHls=true;try{pc&&pc.close()}catch(e){}pc=null;stage.querySelectorAll(".cn-type-program").forEach(attachStream)}
+  function connectWhep(){if(useHls||pc||!${JSON.stringify(whepUrl)})return;pc=new RTCPeerConnection();pc.addTransceiver("video",{direction:"recvonly"});pc.addTransceiver("audio",{direction:"recvonly"});pc.ontrack=function(ev){stream=ev.streams[0];stage.querySelectorAll(".cn-type-program").forEach(attachStream)};var mine=pc;setTimeout(function(){if(pc===mine&&mine.iceConnectionState!=="connected"&&mine.iceConnectionState!=="completed")whepFailed()},10000);pc.oniceconnectionstatechange=function(){if(pc&&(pc.iceConnectionState==="failed"||pc.iceConnectionState==="disconnected"))whepFailed()};pc.createOffer().then(function(o){return pc.setLocalDescription(o)}).then(function(){return new Promise(function(res){if(pc.iceGatheringState==="complete")return res();pc.addEventListener("icegatheringstatechange",function f(){if(pc.iceGatheringState==="complete"){pc.removeEventListener("icegatheringstatechange",f);res()}});setTimeout(res,2500)})}).then(function(){return fetch(${JSON.stringify(whepUrl)},{method:"POST",headers:{"Content-Type":"application/sdp"},body:pc.localDescription.sdp})}).then(function(r){if(!r.ok)throw new Error("whep "+r.status);return r.text()}).then(function(sdp){return pc.setRemoteDescription({type:"answer",sdp:sdp})}).catch(function(){whepFailed()})}
   function pad(n){return String(n).padStart(2,"0")}
   function tickClocks(){var now=new Date();stage.querySelectorAll("[data-cn-clock]").forEach(function(el){var f=el.dataset.cnClock,tz=el.dataset.cnTz||undefined,opts={hour:"2-digit",minute:"2-digit",hour12:f.indexOf("12h")===0};if(f.indexOf("seconds")>0)opts.second="2-digit";try{if(tz)opts.timeZone=tz}catch(e){}var v=el.querySelector(".cn-clock-value");var label;try{label=now.toLocaleTimeString(f.indexOf("12h")===0?"en-US":"en-GB",opts)}catch(e){label=now.toLocaleTimeString()}if(v&&v.textContent!==label)v.textContent=label});
     stage.querySelectorAll("[data-cn-countdown]").forEach(function(el){var at=Date.parse(el.dataset.cnCountdown||""),v=el.querySelector(".cn-countdown-value");if(!v)return;var left=Math.max(0,Math.floor(((at||0)-Date.now())/1000));var label=!at?"--:--":left<=0&&el.dataset.cnDone?el.dataset.cnDone:(left>=3600?Math.floor(left/3600)+":"+pad(Math.floor(left%3600/60)):pad(Math.floor(left/60)))+":"+pad(left%60);if(v.textContent!==label)v.textContent=label})}
@@ -301,7 +314,7 @@ function programPage(login, model, { preview = false, guides = "", query = "" } 
   // WHEP is only dialled when a visible Gameplay/OBS layer exists, so scenes
   // without gameplay (BRB, Starting Soon) do not decode the source at all.
   const hybridCss = model.hybrid ? "html,body{background:transparent!important}.cn-hole{width:100%;height:100%;background:transparent}" : "";
-  const body = `<style>${PROGRAM_CSS}${scenePerfCss(model.effects)}${hybridCss}</style><style id="cn-layer-css"></style><div id="cn-stage"></div><script type="application/json" id="cn-model">${JSON.stringify(model).replace(/</g, "\\u003c")}</script>${programRuntime({ login, orientation, dataUrl, eventsUrl:`${loginPath(login)}/events`, whepUrl:whepUrlFor(login), preview, guides, hybrid:!!model.hybrid })}`;
+  const body = `<style>${PROGRAM_CSS}${scenePerfCss(model.effects)}${hybridCss}</style><style id="cn-layer-css"></style><div id="cn-stage"></div><script type="application/json" id="cn-model">${JSON.stringify(model).replace(/</g, "\\u003c")}</script>${programRuntime({ login, orientation, dataUrl, eventsUrl:`${loginPath(login)}/events`, whepUrl:whepUrlFor(login), hlsUrl:hlsUrlFor(login), preview, guides, hybrid:!!model.hybrid })}`;
   return page({ title:`Program ${orientation}`, body, transparent:!!model.hybrid });
 }
 
@@ -317,4 +330,5 @@ module.exports = {
   programPage,
   programDataUrl,
   whepUrlFor,
+  hlsUrlFor,
 };

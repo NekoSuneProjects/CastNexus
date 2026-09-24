@@ -147,8 +147,11 @@ function hybridEnabled(value = process.env.COMPOSITOR_HYBRID) {
   return String(value ?? "auto").toLowerCase() !== "false";
 }
 
+// Overlay capture rate in hybrid mode. Defaults to the output fps: frames are
+// only captured while something on the overlay changes, so a static overlay
+// costs nothing, and alert animations stay smooth. Lower it on weak hosts.
 function overlayFps(outputFps, value = process.env.COMPOSITOR_OVERLAY_FPS) {
-  const n = Math.round(Number(value) || 15);
+  const n = Math.round(Number(value) || Number(outputFps) || 30);
   return Math.max(1, Math.min(Number(outputFps) || 30, n));
 }
 
