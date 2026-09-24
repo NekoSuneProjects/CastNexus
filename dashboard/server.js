@@ -9,7 +9,7 @@ const { createProxyMiddleware } = require("http-proxy-middleware");
 const { createOverlayRouter, resolveSceneFragment, withWidgets } = require("./overlays");
 const events = require("./events");
 const musicEngine = require("./music-engine");
-const { Compositor } = require("./compositor");
+const { Compositor, hybridEnabled, useElectronOffscreen } = require("./compositor");
 const { createProfileMusicService } = require("./profile-music");
 const { createProfileVodService } = require("./profile-vod");
 const { createTwitchApi } = require("./twitch-api");
@@ -200,8 +200,30 @@ function programVideo(account, orientation) {
   const p = programSettings(account, orientation);
   return { width:p.width, height:p.height, fps:p.fps, ...(p.bitrateKbps ? { bitrate:`${p.bitrateKbps}k`, maxrate:`${p.bitrateKbps}k`, bufsize:`${p.bitrateKbps * 2}k` } : {}) };
 }
+// Hybrid program pipeline: FFmpeg decodes the gameplay itself and Chromium
+// only renders the transparent overlay layer (see compositor.js). Default on
+// for Docker/source installs; the Electron desktop renderer keeps the classic
+// path. COMPOSITOR_HYBRID=false restores the classic path everywhere.
+function programHybrid() { return hybridEnabled() && !useElectronOffscreen(); }
+
+// Where FFmpeg must place the source video, in output pixels (the page scales
+// the scene canvas into the program size with letterboxing).
+function hybridPlanFor(accountId, orientation, sceneId, video) {
+  const account = getAccount(accountId);
+  if (!account) return null;
+  const model = resolveProgram(account, orientation, { sceneId, hybrid:true, liveContent:false });
+  const pp = model.programPlan;
+  if (!pp) return null;
+  const W = video.width, H = video.height, cw = model.canvas.width, ch = model.canvas.height;
+  const s = Math.min(W / cw, H / ch), ox = (W - cw * s) / 2, oy = (H - ch * s) / 2;
+  return { box:{ x:pp.x * s + ox, y:pp.y * s + oy, w:pp.w * s, h:pp.h * s }, program:pp.program };
+}
+
 function programPageUrl(account, orientation, sceneId) {
-  const q = sceneId ? `?scene=${encodeURIComponent(sceneId)}` : "";
+  const params = new URLSearchParams();
+  if (sceneId) params.set("scene", sceneId);
+  if (programHybrid()) params.set("hybrid", "1");
+  const q = params.toString() ? `?${params}` : "";
   return `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/program/${orientation}${q}`;
 }
 function musicNowFor(accountId) { return profileMusic.getNow(getAccount(accountId), null, { respectScene:true }); }
@@ -228,6 +250,7 @@ function programEntry(account, orientation, sceneId) {
     video:programVideo(account, orientation),
     browserAudio:sceneModel.libraryNeedsBrowserAudio(account),
     mixer:lib.mixer,
+    hybrid:programHybrid() ? { sourceUrl:`rtmp://127.0.0.1:1935/${safePathFor(account)}`, getPlan:() => hybridPlanFor(accountId, orientation, sceneId, compositor.video) } : null,
     diagnostics:{ group:"program", label:`${orientation === "vertical" ? "Vertical" : "Horizontal"} program${sceneId ? ` (${sceneModel.findScene(account, sceneId)?.name || sceneId})` : ""}` },
   });
   entry = { key, accountId, orientation, sceneId:sceneId || null, path:pathName, compositor, refs:new Set(), stopTimer:null, signature:JSON.stringify(programVideo(account, orientation)) };
@@ -310,6 +333,7 @@ function refreshPrograms(account, { restartOnResize = true } = {}) {
     if (entry.accountId !== account.twitchUserId) continue;
     entry.compositor.setMixer(lib.mixer);
     entry.compositor.setBrowserAudio(needsAudio);
+    entry.compositor.updateHybridPlan?.();
     const signature = JSON.stringify(programVideo(account, entry.orientation));
     if (restartOnResize && signature !== entry.signature) {
       entry.signature = signature;
@@ -782,7 +806,7 @@ app.use("/api/music",requireAuth,profileMusic.createApiRouter());
 app.use("/api/vod",requireAuth,profileVod.createApiRouter());
 const SCENE_KINDS=["none","builtin","custom"],BUILTIN_SCENE_NAMES=["startingSoon","brb","ending","offline"];
 app.get("/api/scenes/current",requireAuth,(req,res)=>res.json({currentScene:req.account.currentScene}));
-app.post("/api/scenes/current",requireAuth,(req,res)=>{const{kind,name,overlayId}=req.body||{};if(!SCENE_KINDS.includes(kind))return res.status(400).json({error:`kind must be one of ${SCENE_KINDS.join(", ")}`});let scene=null;if(kind==="builtin"){if(!BUILTIN_SCENE_NAMES.includes(name))return res.status(400).json({error:`name must be one of ${BUILTIN_SCENE_NAMES.join(", ")}`});scene={kind,name,since:new Date().toISOString()};if(name==="startingSoon"){const minutes=Number(req.account.overlayConfig?.startingSoon?.countdownMinutes||0);if(Number.isFinite(minutes)&&minutes>0)scene.countdownAt=new Date(Date.now()+minutes*60000).toISOString();}}else if(kind==="custom"){const overlay=req.account.overlays.find(o=>o.id===overlayId&&(o.type==="text"||o.type==="html"||o.type==="music"));if(!overlay)return res.status(404).json({error:"unknown overlay"});scene={kind,overlayId};}req.account.currentScene=scene;saveState(state);const html=withWidgets(resolveSceneFragment(scene,req.account),req.account.overlayConfig,req.account.twitchLogin);events.publish(req.account.twitchUserId,{type:"scene",html});for(const orientation of sceneModel.ORIENTATIONS)events.publish(req.account.twitchUserId,{type:"program",orientation});res.json({ok:true,currentScene:scene});});
+app.post("/api/scenes/current",requireAuth,(req,res)=>{const{kind,name,overlayId}=req.body||{};if(!SCENE_KINDS.includes(kind))return res.status(400).json({error:`kind must be one of ${SCENE_KINDS.join(", ")}`});let scene=null;if(kind==="builtin"){if(!BUILTIN_SCENE_NAMES.includes(name))return res.status(400).json({error:`name must be one of ${BUILTIN_SCENE_NAMES.join(", ")}`});scene={kind,name,since:new Date().toISOString()};if(name==="startingSoon"){const minutes=Number(req.account.overlayConfig?.startingSoon?.countdownMinutes||0);if(Number.isFinite(minutes)&&minutes>0)scene.countdownAt=new Date(Date.now()+minutes*60000).toISOString();}}else if(kind==="custom"){const overlay=req.account.overlays.find(o=>o.id===overlayId&&(o.type==="text"||o.type==="html"||o.type==="music"));if(!overlay)return res.status(404).json({error:"unknown overlay"});scene={kind,overlayId};}req.account.currentScene=scene;saveState(state);const html=withWidgets(resolveSceneFragment(scene,req.account),req.account.overlayConfig,req.account.twitchLogin);events.publish(req.account.twitchUserId,{type:"scene",html});for(const orientation of sceneModel.ORIENTATIONS)events.publish(req.account.twitchUserId,{type:"program",orientation});for(const entry of programCompositors.values())if(entry.accountId===req.account.twitchUserId)entry.compositor.updateHybridPlan?.();res.json({ok:true,currentScene:scene});});
 app.get("/api/compositor",requireAuth,(req,res)=>res.json({enabled:!!req.account.compositorEnabled}));
 app.get("/api/public-base-url",requireAuth,(req,res)=>{res.json({value:state.publicBaseUrl||"",effective:publicPlaybackBase(req),lockedByEnv:!!PUBLIC_BASE_URL_ENV});});
 app.post("/api/public-base-url",requireAuth,(req,res)=>{
@@ -926,6 +950,12 @@ app.post("/api/system/hardware/probe", requireAuth, async (req, res) => {
   } catch (error) {
     res.status(500).json({ error:error.message });
   }
+});
+
+app.post("/api/music24/streaming", requireAuth, (req, res) => {
+  const enabled = music24Runtime.setStreaming(req.account.twitchUserId, req.body?.enabled === true);
+  console.log(`[music24] ${req.account.twitchLogin} turned Music 24/7 streaming ${enabled ? "on" : "off"}`);
+  res.json({ ok:true, enabled, music24:music24Status(req.account) });
 });
 
 app.get("/api/system/performance", requireAuth, (req, res) => {

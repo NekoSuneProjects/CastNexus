@@ -567,6 +567,23 @@ class Music24Worker {
   }
 }
 
+// Music 24/7 streaming switch. Kept in memory only, so it is OFF after every
+// dashboard/container restart until the user turns it on again (set
+// MUSIC24_AUTOSTART=true to keep the old always-on behaviour).
+const streamingSwitch = new Map();
+function autostartDefault() {
+  return String(process.env.MUSIC24_AUTOSTART || "").toLowerCase() === "true";
+}
+function streamingEnabled(accountId) {
+  const key = String(accountId);
+  return streamingSwitch.has(key) ? streamingSwitch.get(key) : autostartDefault();
+}
+function setStreaming(accountId, enabled) {
+  streamingSwitch.set(String(accountId), !!enabled);
+  if (serviceStarted && !shuttingDown) reconcile().catch(err => console.error("[music24] reconcile failed", err));
+  return streamingEnabled(accountId);
+}
+
 function musicHasConsumer(account, profile) {
   if (String(process.env.MUSIC24_ALWAYS_ON || "").toLowerCase() === "true") return true;
   if (account.relayPushEnabled || account.recordingEnabled) return true;
@@ -589,7 +606,16 @@ async function reconcile() {
       && validRtmpKey(profile?.rtmpKey)
       && account.twitchLogin;
 
-    if (!ready) continue;
+    if (!ready) {
+      // PC / console profiles: music is only background audio mixed into the
+      // program - no 24/7 renderer, visualiser or encoder runs.
+      if (account.twitchUserId && profile && profile.mode !== "music") lastStatus.set(String(account.twitchUserId), { state:"inactive", profileId:profile.id, outputPath:null, error:null, reason:"The active profile is not a Music profile - music plays only as background audio, Music 24/7 is not streaming." });
+      continue;
+    }
+    if (!streamingEnabled(account.twitchUserId)) {
+      lastStatus.set(String(account.twitchUserId), { state:"off", profileId:profile.id, outputPath:null, error:null, reason:"Music 24/7 streaming is switched off. Turn it on to go on air (it switches off again after a restart)." });
+      continue;
+    }
     // Do not render/encode 24/7 for nobody: run only while something consumes
     // the stream (an enabled destination, relay push or recording), unless
     // MUSIC24_ALWAYS_ON=true (e.g. only watched through public playback).
@@ -647,9 +673,13 @@ function statusFor(accountId) {
       error:worker.error || null,
       running:!!worker.running,
       runtime:worker.runtimeStatus(),
+      streaming:streamingEnabled(key),
     };
   }
-  return lastStatus.get(key) || {
+  const last = lastStatus.get(key);
+  if (last) return { ...last, streaming:streamingEnabled(key) };
+  return {
+    streaming:streamingEnabled(key),
     state:serviceStarted ? "idle" : "worker-offline",
     profileId:null,
     outputPath:null,
@@ -717,6 +747,8 @@ module.exports = {
   programSceneUrl,
   musicWorkerSignature,
   musicHasConsumer,
+  streamingEnabled,
+  setStreaming,
   musicPerformanceSettings,
   profileVideo,
   compositorExtras,

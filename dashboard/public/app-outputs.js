@@ -184,6 +184,7 @@
     const modes = [["auto", "Auto"], ["max", "Maximum Quality"], ["balanced", "Balanced"], ["low", "Low CPU"], ["ultra", "Ultra Low CPU"]];
     return `<section class="card-panel" style="margin-top:14px">
       <div class="card-title-row"><div><div class="eyebrow">MUSIC 24/7 RENDERER</div><h3>Performance & encoder</h3></div><span class="badge ${rt?.gpuEncoding ? "green" : "cyan"}">${rt ? (rt.gpuEncoding ? "GPU ENCODING" : "CPU ENCODING") : p.mode === "music" ? "NOT RUNNING" : "MUSIC PROFILES ONLY"}</span></div>
+      ${p.mode === "music" ? `<div class="callout" style="margin-bottom:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap"><strong>Music 24/7 streaming: ${S.status?.music24?.streaming ? "ON" : "OFF"}</strong><button class="btn btn-sm ${S.status?.music24?.streaming ? "" : "btn-primary"}" id="mp-toggle">${S.status?.music24?.streaming ? "Turn off" : "Turn on"}</button><small class="muted">Off by default and after every restart, so nothing renders or encodes until you turn it on.</small></div>` : `<div class="callout" style="margin-bottom:10px">This profile is ${esc(p.mode || "pc")} - music plays only as background audio. Music 24/7 streaming runs only when a Music profile is active.</div>`}
       <div class="props-grid" style="grid-template-columns:repeat(3,minmax(0,1fr))">
         <div><label>Performance mode</label><select id="mp-mode">${modes.map(([v, l]) => `<option value="${v}" ${(perf.mode || "auto") === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
         <div><label>Music render FPS</label><select id="mp-render"><option value="">Mode default</option>${[10, 15, 20, 24, 30, 60].map(v => `<option ${Number(perf.renderFps) === v ? "selected" : ""}>${v}</option>`).join("")}</select></div>
@@ -354,6 +355,16 @@
     baseWirePage();
     const save = $("#mp-save");
     if (save) save.onclick = saveMusicPerformance;
+    const toggle = $("#mp-toggle");
+    if (toggle) toggle.onclick = async () => {
+      toggle.disabled = true;
+      try {
+        const r = await api("/api/music24/streaming", { method:"POST", body:{ enabled:!S.status?.music24?.streaming } });
+        S.status.music24 = r.music24;
+        toast(r.enabled ? "Music 24/7 streaming on - starting in a few seconds" : "Music 24/7 streaming off", "success");
+        window.renderPage?.();
+      } catch (e) { toast(e.message, "error"); toggle.disabled = false; }
+    };
     if ($("#source-overlay-panel")) fillSourceOverlayPanel();
     if ($("#perf-panel")) startPerfPolling(); else stopPerfPolling();
   };

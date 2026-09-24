@@ -209,13 +209,14 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn, subscribeE
       effects:q.effects ? String(q.effects) : null,
       liveContent:String(q.live || "1") !== "0",
       ignoreSlot:String(q.ignoreSlot || "") === "1",
+      hybrid:String(q.hybrid || "") === "1",
       musicUrl:activeMusicUrl(account),
     };
   }
 
   function forwardedQuery(req) {
     const params = new URLSearchParams();
-    for (const key of ["scene", "preview", "effects", "live", "ignoreSlot"]) if (req.query?.[key] != null) params.set(key, String(req.query[key]));
+    for (const key of ["scene", "preview", "effects", "live", "ignoreSlot", "hybrid"]) if (req.query?.[key] != null) params.set(key, String(req.query[key]));
     return params.toString();
   }
 

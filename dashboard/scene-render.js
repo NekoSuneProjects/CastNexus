@@ -67,6 +67,7 @@ function layerContent(layer, ctx) {
   const liveContent = ctx.liveContent !== false;
   switch (layer.type) {
     case "program":
+      if (ctx.hybrid) return `<div class="cn-hole"></div>`;
       return `<div class="cn-program"><video class="cn-program-video" muted autoplay playsinline></video>${preview ? `<div class="cn-program-empty">GAMEPLAY / OBS PROGRAM</div>` : ""}</div>`;
     case "browser": case "streamelements": case "streamlabs": case "webpage": case "iframe": case "chat": case "alertbox": {
       if (!c.url) return preview ? `<div class="cn-placeholder">${attr(layer.name)}<small>No URL set</small></div>` : "";
@@ -151,7 +152,7 @@ function effectsFor(account, requested) {
 }
 
 // What is on air for one orientation right now.
-function resolveProgram(account, orientation = "landscape", { sceneId = null, preview = false, effects = null, musicUrl = null, liveContent = true, ignoreSlot = false } = {}) {
+function resolveProgram(account, orientation = "landscape", { sceneId = null, preview = false, effects = null, musicUrl = null, liveContent = true, ignoreSlot = false, hybrid = false } = {}) {
   const o = orientation === "vertical" ? "vertical" : "landscape";
   const lib = sceneModel.library(account);
   const login = account.twitchLogin || "";
@@ -214,7 +215,7 @@ function resolveProgram(account, orientation = "landscape", { sceneId = null, pr
     layers.push({ id:"legacy_nowplaying", type:"nowplaying", name:"Now Playing", x:corner.x ? canvas.width - w - m : m, y:corner.y ? canvas.height - h - m : m, width:w, height:h, rotation:0, opacity:1, visible:true, config:{}, audio:{ enabled:false } });
   }
 
-  const ctx = { login, preview, effects:fx, musicUrl, orientation:o, liveContent, onAirSince:slotName ? cs?.since : null };
+  const ctx = { login, preview, effects:fx, musicUrl, orientation:o, liveContent, onAirSince:slotName ? cs?.since : null, hybrid:!!hybrid };
   const rendered = layers.map((layer, index) => renderLayer(layer, index, ctx));
   return {
     orientation:o,
@@ -224,6 +225,9 @@ function resolveProgram(account, orientation = "landscape", { sceneId = null, pr
     canvas:{ width:canvas.width, height:canvas.height },
     effects:fx,
     hasProgramVideo:rendered.some(layer => layer.type === "program" && layer.box.visible),
+    // Hybrid: where FFmpeg must place the source video (canvas pixels).
+    hybrid:!!hybrid,
+    programPlan:(() => { const p = rendered.find(layer => layer.type === "program" && layer.box.visible); return p ? { x:p.box.x, y:p.box.y, w:p.box.w, h:p.box.h, z:p.box.z, program:p.program || {} } : null; })(),
     browserAudio:rendered.some(layer => layer.html.includes('data-cn-audio="1"') && layer.box.visible),
     layers:rendered,
   };
@@ -257,10 +261,10 @@ function whepUrlFor(login) {
 
 // Client runtime. Kept dependency-free and small: it runs inside the
 // server-side renderer on every program page.
-function programRuntime({ login, orientation, dataUrl, eventsUrl, whepUrl, preview, guides }) {
+function programRuntime({ login, orientation, dataUrl, eventsUrl, whepUrl, preview, guides, hybrid = false }) {
   return `<script>(function(){
   var MODEL=JSON.parse(document.getElementById("cn-model").textContent);
-  var ORIENT=${JSON.stringify(orientation)},DATA_URL=${JSON.stringify(dataUrl)},PREVIEW=${preview ? "true" : "false"},GUIDES=${JSON.stringify(guides || "")};
+  var HYBRID=${hybrid ? "true" : "false"},ORIENT=${JSON.stringify(orientation)},DATA_URL=${JSON.stringify(dataUrl)},PREVIEW=${preview ? "true" : "false"},GUIDES=${JSON.stringify(guides || "")};
   var stage=document.getElementById("cn-stage"),stream=null,pc=null,whepWanted=false,fetching=null;
   function fit(){var W=MODEL.canvas.width,H=MODEL.canvas.height,s=Math.min(innerWidth/W,innerHeight/H),ox=(innerWidth-W*s)/2,oy=(innerHeight-H*s)/2;stage.style.width=W+"px";stage.style.height=H+"px";stage.style.transform="translate("+ox+"px,"+oy+"px) scale("+s+")"}
   function layoutProgram(wrap,settings){var v=wrap.querySelector(".cn-program-video");if(!v)return;var W=wrap.clientWidth,H=wrap.clientHeight,vw=v.videoWidth||1920,vh=v.videoHeight||1080,p=settings||{},c=p.crop||{},l=+c.left||0,r=+c.right||0,t=+c.top||0,b=+c.bottom||0;var cw=vw*Math.max(.05,1-l-r),ch=vh*Math.max(.05,1-t-b),sx,sy;if(p.fit==="stretch"){sx=W/cw;sy=H/ch}else{var s=p.fit==="fit"?Math.min(W/cw,H/ch):Math.max(W/cw,H/ch);sx=sy=s}var k=+p.scale||1;sx*=k;sy*=k;var dw=cw*sx,dh=ch*sy,x0=(W-dw)/2+(+p.offsetX||0)*W,y0=(H-dh)/2+(+p.offsetY||0)*H;v.style.width=vw*sx+"px";v.style.height=vh*sy+"px";v.style.left=(x0-l*vw*sx)+"px";v.style.top=(y0-t*vh*sy)+"px";v.style.clipPath="inset("+(t*100)+"% "+(r*100)+"% "+(b*100)+"% "+(l*100)+"%)"}
@@ -271,6 +275,7 @@ function programRuntime({ login, orientation, dataUrl, eventsUrl, whepUrl, previ
       el.querySelectorAll("[data-cn-rw]").forEach(function(f){f.style.transform="scale("+(b.w/Number(f.dataset.cnRw))+","+(b.h/Number(f.dataset.cnRh))+")"});
       if(layer.type==="program"){whepWanted=whepWanted||b.visible;el._cnProgram=layer.program;attachStream(el);layoutProgram(el,layer.program)}});
     Object.keys(keep).forEach(function(id){keep[id].remove()});var style=document.getElementById("cn-layer-css");style.textContent=css.join("\\n");
+    if(HYBRID){var pp=model.programPlan;model.layers.forEach(function(layer){var el=stage.querySelector('[data-layer-id="'+layer.id+'"]');if(!el)return;var b=layer.box;if(pp&&b.z<pp.z){el.style.clipPath='path(evenodd,"M0 0H'+b.w+'V'+b.h+'H0Z M'+(pp.x-b.x)+' '+(pp.y-b.y)+'h'+pp.w+'v'+pp.h+'h'+(-pp.w)+'Z")'}else el.style.clipPath=""});whepWanted=false}
     if(whepWanted)connectWhep();tickClocks()}
   function attachStream(el){var v=el.querySelector(".cn-program-video");if(!v)return;if(stream&&v.srcObject!==stream){v.srcObject=stream;v.play().catch(function(){})}v.onloadedmetadata=function(){el.querySelector(".cn-program").classList.add("cn-has-video");layoutProgram(el,el._cnProgram)}}
   function connectWhep(){if(pc||!${JSON.stringify(whepUrl)})return;pc=new RTCPeerConnection();pc.addTransceiver("video",{direction:"recvonly"});pc.addTransceiver("audio",{direction:"recvonly"});pc.ontrack=function(ev){stream=ev.streams[0];stage.querySelectorAll(".cn-type-program").forEach(attachStream)};pc.oniceconnectionstatechange=function(){if(pc&&(pc.iceConnectionState==="failed"||pc.iceConnectionState==="disconnected")){try{pc.close()}catch(e){}pc=null;setTimeout(function(){if(whepWanted)connectWhep()},3000)}};pc.createOffer().then(function(o){return pc.setLocalDescription(o)}).then(function(){return new Promise(function(res){if(pc.iceGatheringState==="complete")return res();pc.addEventListener("icegatheringstatechange",function f(){if(pc.iceGatheringState==="complete"){pc.removeEventListener("icegatheringstatechange",f);res()}});setTimeout(res,2500)})}).then(function(){return fetch(${JSON.stringify(whepUrl)},{method:"POST",headers:{"Content-Type":"application/sdp"},body:pc.localDescription.sdp})}).then(function(r){if(!r.ok)throw new Error("whep "+r.status);return r.text()}).then(function(sdp){return pc.setRemoteDescription({type:"answer",sdp:sdp})}).catch(function(){try{pc&&pc.close()}catch(e){}pc=null;setTimeout(function(){if(whepWanted)connectWhep()},3000)})}
@@ -295,8 +300,9 @@ function programPage(login, model, { preview = false, guides = "", query = "" } 
   const dataUrl = programDataUrl(login, orientation, query);
   // WHEP is only dialled when a visible Gameplay/OBS layer exists, so scenes
   // without gameplay (BRB, Starting Soon) do not decode the source at all.
-  const body = `<style>${PROGRAM_CSS}${scenePerfCss(model.effects)}</style><style id="cn-layer-css"></style><div id="cn-stage"></div><script type="application/json" id="cn-model">${JSON.stringify(model).replace(/</g, "\\u003c")}</script>${programRuntime({ login, orientation, dataUrl, eventsUrl:`${loginPath(login)}/events`, whepUrl:whepUrlFor(login), preview, guides })}`;
-  return page({ title:`Program ${orientation}`, body, transparent:false });
+  const hybridCss = model.hybrid ? "html,body{background:transparent!important}.cn-hole{width:100%;height:100%;background:transparent}" : "";
+  const body = `<style>${PROGRAM_CSS}${scenePerfCss(model.effects)}${hybridCss}</style><style id="cn-layer-css"></style><div id="cn-stage"></div><script type="application/json" id="cn-model">${JSON.stringify(model).replace(/</g, "\\u003c")}</script>${programRuntime({ login, orientation, dataUrl, eventsUrl:`${loginPath(login)}/events`, whepUrl:whepUrlFor(login), preview, guides, hybrid:!!model.hybrid })}`;
+  return page({ title:`Program ${orientation}`, body, transparent:!!model.hybrid });
 }
 
 module.exports = {
