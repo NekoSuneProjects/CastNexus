@@ -621,6 +621,30 @@ monitor.registerComponent("dashboard:republish",{label:"Public republish (stream
 
 const app = express();
 app.set("trust proxy", 1);
+// Request diagnostics: log API/page requests that are slow or never finish, so
+// a "page keeps loading" report shows the stuck request in `docker logs`.
+// Long-lived streams (SSE, HLS/WebRTC proxies, media files) are excluded.
+const SLOW_REQUEST_MS=Number(process.env.CASTNEXUS_SLOW_REQUEST_MS||3000);
+app.use((req,res,next)=>{
+  const url=String(req.originalUrl||req.url||"").split("?")[0];
+  if(/\/events$|^\/(hls|vrchat-hls|webrtc)\/|\/music\/.*\/file\/|^\/api\/recordings\/play/.test(url))return next();
+  const started=Date.now();
+  const pending=setTimeout(()=>console.warn(`[http] still pending after 15s: ${req.method} ${url}`),15000);
+  pending.unref?.();
+  const done=()=>{clearTimeout(pending);const ms=Date.now()-started;if(ms>=SLOW_REQUEST_MS)console.warn(`[http] slow ${req.method} ${url} ${res.statusCode} ${ms}ms`);};
+  res.once("finish",done);
+  res.once("close",()=>{clearTimeout(pending);if(!res.writableFinished)console.warn(`[http] client gave up: ${req.method} ${url} after ${Date.now()-started}ms`);});
+  next();
+});
+// Browser-side diagnostics (JS errors / page never finished loading). Small,
+// rate limited and logged only - never stored or echoed back.
+const clientLogBudget=new Map();
+app.post("/api/client-log",express.text({type:"*/*",limit:"8kb"}),(req,res)=>{
+  const ip=req.ip||"?",now=Date.now(),b=clientLogBudget.get(ip)||{at:now,n:0};
+  if(now-b.at>60000){b.at=now;b.n=0;}
+  if(++b.n<=20){clientLogBudget.set(ip,b);console.warn(`[client] ${String(req.body||"").replace(/[\r\n]+/g," ").slice(0,1500)}`);}
+  res.status(204).end();
+});
 function fixRedirectPrefix(prefix) { return proxyRes => { const location = proxyRes.headers.location; if (location && location.startsWith("/")) proxyRes.headers.location = prefix + location; }; }
 
 app.use("/setup", require("./setup-routes"));

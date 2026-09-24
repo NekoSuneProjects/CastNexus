@@ -262,7 +262,12 @@ async function runProbe({ force = false, logger = console } = {}) {
   const fp = fingerprint(encoder.id);
   if (!force) {
     const cached = loadCache(fp);
-    if (cached) return (current = finalise(cached));
+    if (cached) {
+      current = finalise(cached);
+      const m = current.recommendations.music, p = current.recommendations.program;
+      logger.log?.(`[hardware] using saved test from ${cached.probedAt || "earlier"} (${current.hostType?.label}, ${current.encoder}, Chromium GPU ${current.chromiumGpu ? "yes" : "no"}); auto: Music 24/7 ${m.width}x${m.height}@${m.fps} ${m.mode}, programs ${p.width}x${p.height}@${p.fps}. Re-test from Settings -> System performance.`);
+      return current;
+    }
   }
   const started = Date.now();
   const [cpu, chromium] = [await probeX264(), await probeChromiumGpu()];
