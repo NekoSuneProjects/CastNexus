@@ -26,6 +26,7 @@ const PACTL = process.env.PACTL_BIN || "pactl";
 const PULSEAUDIO = process.env.PULSEAUDIO_BIN || "pulseaudio";
 let daemonChecked = false;
 let daemonAvailable = false;
+let lastDaemonAttempt = 0;
 
 function enabledByEnv() {
   const v = String(process.env.CASTNEXUS_BROWSER_AUDIO || "auto").toLowerCase();
@@ -50,7 +51,11 @@ function pactl(args, timeout = 4000) {
 function ensureDaemon({ platform = process.platform } = {}) {
   if (platform !== "linux" || !enabledByEnv()) return false;
   if (daemonChecked && daemonAvailable) return true;
+  // A failed start is remembered for a minute: retrying runs synchronous
+  // pactl/pulseaudio calls that would otherwise stall the dashboard each time.
+  if (daemonChecked && Date.now() - lastDaemonAttempt < 60000) return false;
   daemonChecked = true;
+  lastDaemonAttempt = Date.now();
   if (pactl(["info"]).ok) return (daemonAvailable = true);
   try {
     if (process.env.XDG_RUNTIME_DIR) require("node:fs").mkdirSync(process.env.XDG_RUNTIME_DIR, { recursive:true, mode:0o700 });

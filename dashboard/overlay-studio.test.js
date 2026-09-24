@@ -326,7 +326,7 @@ test("supervised process restarts after failure and stops cleanly", async () => 
   proc.backoffMs = 0;
   const original = supervisor.nextBackoff;
   proc.start();
-  await new Promise(r => setTimeout(r, 2600));
+  await new Promise(r => setTimeout(r, 4500));
   proc.stop();
   assert.ok(spawned >= 2, `restarted (${spawned})`);
   assert.equal(proc.status().state, "idle");

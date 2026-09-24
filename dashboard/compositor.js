@@ -694,8 +694,10 @@ class Compositor extends EventEmitter {
         owed=maxOwed;
         if(!warned){warned=true;this.logger.warn(`[compositor:${this.accountId}] frame pump: FFmpeg fell ${Math.round(forgiven/fps*10)/10}s behind; skipping ahead`);}
       }
-      let blocked=false;
-      if(frame&&stdin?.writable){
+      // No frame yet or FFmpeg not accepting input: wait half a frame instead of
+      // spinning on 0 ms timers while the clock keeps "owing" frames.
+      let blocked=!frame||!stdin?.writable;
+      if(!blocked){
         const limit=cfrBacklogLimit(frame.length,fps);
         for(let i=0;i<Math.min(owed,maxBurst);i++){
           if(stdin.writableLength>limit){blocked=true;break;}
@@ -705,7 +707,7 @@ class Compositor extends EventEmitter {
       }
       // Next frame (index `written`) is due at startedAt + written*interval;
       // if FFmpeg is backpressured, look again half a frame later.
-      const delay=blocked||!frame?interval/2:startedAt+written*interval-Date.now();
+      const delay=blocked?interval/2:startedAt+written*interval-Date.now();
       this.framePumpTimer=setTimeout(tick,Math.max(0,Math.round(delay)));
     };
     tick();

@@ -1,5 +1,10 @@
 name: Publish Docker Image
 
+# Push to the dashboard branch:
+#   normal commit           -> stable image: :latest + main/VERSION
+#   commit containing [beta] -> beta image only: :beta + <BETA_VERSION>-beta.<run>
+#                              (:latest and the other images are not touched)
+
 on:
   push:
     branches: [dashboard]
@@ -14,18 +19,34 @@ jobs:
     runs-on: [self-hosted, Linux, docker, buildx]
     steps:
       - uses: actions/checkout@v4
-      - name: Read version from main
+      - name: Resolve version and channel
         id: version
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
-          VALUE=$(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/VERSION | tr -d '[:space:]')
-          echo "value=$VALUE" >> "$GITHUB_OUTPUT"
-          if [[ "$VALUE" == *-* ]]; then echo "channel=beta" >> "$GITHUB_OUTPUT"; else echo "channel=stable" >> "$GITHUB_OUTPUT"; fi
+          if [[ "$COMMIT_MESSAGE" == *"[beta]"* ]]; then
+            BASE=$(tr -d '[:space:]' < BETA_VERSION 2>/dev/null || true)
+            [ -n "$BASE" ] || BASE=$(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/VERSION | tr -d '[:space:]')
+            VALUE="${BASE%%-*}-beta.${{ github.run_number }}"
+            echo "value=$VALUE" >> "$GITHUB_OUTPUT"
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+            echo "tags=ghcr.io/nekosuneprojects/castnexus-dashboard:beta,ghcr.io/nekosuneprojects/castnexus-dashboard:$VALUE" >> "$GITHUB_OUTPUT"
+          else
+            VALUE=$(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/VERSION | tr -d '[:space:]')
+            echo "value=$VALUE" >> "$GITHUB_OUTPUT"
+            if [[ "$VALUE" == *-* ]]; then echo "channel=beta" >> "$GITHUB_OUTPUT"; else echo "channel=stable" >> "$GITHUB_OUTPUT"; fi
+            echo "tags=ghcr.io/nekosuneprojects/castnexus-dashboard:latest,ghcr.io/nekosuneprojects/castnexus-dashboard:$VALUE" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Publishing dashboard $VALUE"
       - uses: actions/setup-node@v4
+        if: steps.version.outputs.channel != 'beta'
         with:
           node-version: "24"
       - name: Sync package.json/package-lock.json to this version
+        if: steps.version.outputs.channel != 'beta'
         run: npm version "${{ steps.version.outputs.value }}" --workspaces --include-workspace-root --no-git-tag-version --allow-same-version
       - name: Commit version bump if it changed anything
+        if: steps.version.outputs.channel != 'beta'
         run: |
           if ! git diff --quiet; then
             git config user.name "github-actions[bot]"
@@ -53,9 +74,7 @@ jobs:
             CASTNEXUS_REVISION=${{ github.sha }}
             CASTNEXUS_VERSION=${{ steps.version.outputs.value }}
             CASTNEXUS_CHANNEL=${{ steps.version.outputs.channel }}
-          tags: |
-            ghcr.io/nekosuneprojects/castnexus-dashboard:latest
-            ghcr.io/nekosuneprojects/castnexus-dashboard:${{ steps.version.outputs.value }}
+          tags: ${{ steps.version.outputs.tags }}
           labels: |
             org.opencontainers.image.title=CastNexus dashboard
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
