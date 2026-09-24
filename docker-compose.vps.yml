@@ -10,6 +10,8 @@ services:
 
   dashboard:
     environment:
+      # Program size/FPS is chosen by the hardware test (Auto). Set
+      # COMPOSITOR_WIDTH/HEIGHT/FPS in .env to pin a fixed size instead.
       # CPU-only VPS hosts need the same protection as Raspberry Pi installs.
       # These defaults keep Chromium + x264 below the point where the frame
       # pump starts backing up, while still allowing every value to be
@@ -19,9 +21,9 @@ services:
       CASTNEXUS_CPU_SAFE_HEIGHT: ${CASTNEXUS_CPU_SAFE_HEIGHT:-540}
       CASTNEXUS_CPU_SAFE_FPS: ${CASTNEXUS_CPU_SAFE_FPS:-20}
       CASTNEXUS_CPU_JPEG_QUALITY: ${CASTNEXUS_CPU_JPEG_QUALITY:-55}
-      COMPOSITOR_WIDTH: ${COMPOSITOR_WIDTH:-960}
-      COMPOSITOR_HEIGHT: ${COMPOSITOR_HEIGHT:-540}
-      COMPOSITOR_FPS: ${COMPOSITOR_FPS:-20}
+      COMPOSITOR_WIDTH: ${COMPOSITOR_WIDTH:-}
+      COMPOSITOR_HEIGHT: ${COMPOSITOR_HEIGHT:-}
+      COMPOSITOR_FPS: ${COMPOSITOR_FPS:-}
       COMPOSITOR_JPEG_QUALITY: ${COMPOSITOR_JPEG_QUALITY:-55}
       COMPOSITOR_VIDEO_BITRATE: ${COMPOSITOR_VIDEO_BITRATE:-2500k}
       COMPOSITOR_VIDEO_MAXRATE: ${COMPOSITOR_VIDEO_MAXRATE:-3000k}

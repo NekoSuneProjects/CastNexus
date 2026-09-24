@@ -9,6 +9,8 @@ RUN apt-get update \
       chromium \
       ca-certificates \
       fonts-freefont-ttf \
+      pulseaudio \
+      pulseaudio-utils \
       dumb-init \
       python3 python3-venv \
       curl unzip bash \
@@ -31,6 +33,11 @@ ENV YTDLP_BIN=/usr/local/bin/yt-dlp
 # Chromium + FFmpeg can take tens of seconds to warm up on Raspberry Pi.
 # Older custom Compose files don't pass this variable, so keep a safe image default.
 ENV MUSIC24_START_TIMEOUT_MS=60000
+# Browser-source audio (StreamElements alerts etc.) is captured from a private
+# per-compositor PulseAudio null sink started on demand inside the container.
+# No host audio device or socket is needed or exposed.
+ENV XDG_RUNTIME_DIR=/tmp/castnexus-runtime
+RUN mkdir -p /tmp/castnexus-runtime && chmod 700 /tmp/castnexus-runtime
 
 ARG CASTNEXUS_VERSION=0.0.0-dev
 ARG CASTNEXUS_CHANNEL=dev

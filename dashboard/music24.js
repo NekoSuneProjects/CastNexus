@@ -4,9 +4,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { Compositor } = require("./compositor");
-const { detectEncoder } = require("./gpu-encoder");
+const { resolveEncoder, normalisePreference } = require("./gpu-encoder");
 const { safeCanvas } = require("./rtmp-pipeline");
 const { activeProfileFor, profilePublishPath, validRtmpKey } = require("./profile-rtmp");
+const { resolveMusicPerformance, sceneQueryFor, normaliseMode, everyNthFrameFor } = require("./performance-modes");
+const events = require("./events");
+const monitor = require("./resource-monitor");
+const hardwareProfile = require("./hardware-profile");
 
 const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, "data", "state.json");
 const MUSIC_DIR = process.env.MUSIC_DIR || path.join(path.dirname(STATE_FILE), "music");
@@ -17,7 +21,10 @@ const MEDIAMTX_API = process.env.MEDIAMTX_API || "http://127.0.0.1:9997";
 const FFPROBE_BIN = process.env.FFPROBE_BIN || "ffprobe";
 const FFMPEG_BIN = process.env.FFMPEG_BIN || "ffmpeg";
 const POLL_MS = Number(process.env.MUSIC24_POLL_MS || 2000);
-const NOW_POLL_MS = Number(process.env.MUSIC24_NOW_POLL_MS || 750);
+// Now-playing is event driven (music engine "music" events + a timer at the
+// end of each track). This interval is only the safety resync. It used to be
+// 750 ms of loopback HTTP requests forever.
+const NOW_POLL_MS = Math.max(1000, Number(process.env.MUSIC24_NOW_POLL_MS || 5000));
 const START_TIMEOUT_MS = Number(process.env.MUSIC24_START_TIMEOUT_MS || 15000);
 const API_PROBE_TIMEOUT_MS = Number(process.env.MUSIC24_API_PROBE_TIMEOUT_MS || 700);
 const RTMP_PROBE_TIMEOUT_MS = Number(process.env.MUSIC24_RTMP_PROBE_TIMEOUT_MS || 2500);
@@ -44,22 +51,103 @@ function profileMusicState(account, profile) {
   };
 }
 
+// Dashboard-controlled Music 24/7 settings (profile.musicPerformance), with
+// the old MUSIC24_* environment variables as defaults. `explicit` records
+// what the user actually chose, so Auto only fills in the rest.
+function musicPerformanceSettings(profile) {
+  const raw = profile?.musicPerformance && typeof profile.musicPerformance === "object" ? profile.musicPerformance : {};
+  const vertical = profile?.canvasMode === "vertical";
+  const positive = value => (Number(value) > 0 ? Math.round(Number(value)) : null);
+  const explicitSize = !!(positive(raw.width) && positive(raw.height)) || !!(process.env.MUSIC24_WIDTH && process.env.MUSIC24_HEIGHT && String(process.env.MUSIC24_AUTO_SIZE || "").toLowerCase() === "false");
+  let width = positive(raw.width) || Number(process.env.MUSIC24_WIDTH || (vertical ? 1080 : 1920));
+  let height = positive(raw.height) || Number(process.env.MUSIC24_HEIGHT || (vertical ? 1920 : 1080));
+  // A landscape size on a vertical profile (or vice versa) is rotated rather
+  // than stretched.
+  if (vertical !== (height > width)) [width, height] = [height, width];
+  return {
+    mode:normaliseMode(raw.mode || process.env.MUSIC24_PERFORMANCE_MODE),
+    encoder:normalisePreference(raw.encoder || process.env.MUSIC24_ENCODER || "auto"),
+    width,
+    height,
+    fps:Math.max(1, Math.min(60, positive(raw.fps) || Number(process.env.MUSIC24_FPS || 30))),
+    renderFps:positive(raw.renderFps),
+    bitrateKbps:positive(raw.bitrateKbps),
+    explicit:{ size:explicitSize, fps:!!positive(raw.fps) },
+  };
+}
+
+// COMPOSITOR_GPU=auto now trusts the hardware test: headless Chromium only
+// gets GPU flags when the probe saw a real GPU renderer (not SwiftShader).
+// Before the first probe the old rule (hardware encoder => GPU) applies.
+function chromiumGpuFor(hardwareEncoder, host = hardwareProfile.getHostProfile()) {
+  const mode = String(process.env.COMPOSITOR_GPU || "auto").toLowerCase();
+  if (mode === "true") return true;
+  if (mode !== "auto") return false;
+  return host?.probed ? !!host.chromiumGpu : !!hardwareEncoder;
+}
+
+// The quality tier Auto uses for this profile on this host, or null when the
+// user pinned a mode / size or forced CASTNEXUS_CPU_SAFE_MODE.
+function autoTierFor(settings, encoder, host) {
+  const safe = String(process.env.CASTNEXUS_CPU_SAFE_MODE ?? "").toLowerCase();
+  if (settings.mode !== "auto" || settings.explicit.size || ["true", "1", "yes", "on"].includes(safe)) return null;
+  // Recommendation for the encoder this profile will really use.
+  const view = encoder.hardware === host.hardwareEncoder ? host : hardwareProfile.finalise({ ...host, hardwareEncoder:encoder.hardware });
+  return view.recommendations?.music || null;
+}
+
 function profileVideo(profile) {
   const vertical = profile?.canvasMode === "vertical";
-  const detected = detectEncoder();
-  const canvas=safeCanvas(vertical ? "vertical" : "landscape", {
-    hardwareEncoder:detected.hardware,
-    width:Number(process.env.MUSIC24_WIDTH || (vertical ? 1080 : 1920)),
-    height:Number(process.env.MUSIC24_HEIGHT || (vertical ? 1920 : 1080)),
-    fps:Number(process.env.MUSIC24_FPS || 30),
-  });
+  const settings = musicPerformanceSettings(profile);
+  const encoder = resolveEncoder(settings.encoder);
+  const host = hardwareProfile.getHostProfile();
+  const chromiumGpu = chromiumGpuFor(encoder.hardware, host);
+  const tier = autoTierFor(settings, encoder, host);
+  let canvas;
+  let perfSettings = settings;
+  if (tier) {
+    // Auto: the best tier this host's measured CPU/GPU can hold in realtime.
+    canvas = vertical ? { width:tier.height, height:tier.width, fps:settings.explicit.fps ? settings.fps : tier.fps } : { width:tier.width, height:tier.height, fps:settings.explicit.fps ? settings.fps : tier.fps };
+    perfSettings = { ...settings, mode:tier.mode };
+  } else if (settings.mode === "auto") {
+    // Auto with a pinned size, or CPU-safe mode forced on: previous behaviour.
+    canvas = safeCanvas(vertical ? "vertical" : "landscape", { hardwareEncoder:encoder.hardware, width:settings.width, height:settings.height, fps:settings.fps });
+  } else {
+    canvas = { width:settings.width, height:settings.height, fps:settings.fps };
+  }
+  const perf = resolveMusicPerformance(perfSettings, { hardwareEncoder:encoder.hardware, chromiumGpu, outputFps:canvas.fps });
+  if (tier) perf.requested = "auto";
+  const bitrate = settings.bitrateKbps ? `${settings.bitrateKbps}k` : (process.env.MUSIC24_VIDEO_BITRATE || "3500k");
   return {
     ...canvas,
+    renderFps:perf.renderFps,
+    screencastQuality:perf.jpegQuality,
+    // Full effects animate at Chromium's 60 Hz; skip frames above the capture
+    // rate. Reduced/minimal pages only change at spectrumHz already.
+    screencastEveryNth:perf.effects === "full" ? everyNthFrameFor(perf.renderFps) : 1,
+    gpuEnabled:chromiumGpu,
+    performance:perf,
+    autoTier:tier ? tier.id : null,
+    autoReason:tier ? `${host.hostType?.label || "host"}: ~${tier.cores} of ${tier.budgetCores} budget cores${host.probed ? "" : " (estimate - hardware test pending)"}` : null,
+    encoderPreference:settings.encoder,
+    encoderLabel:encoder.label,
     // Music visualisers contain far less motion/detail than gameplay. This
     // keeps Twitch quality clean while reducing viewer decode/network load.
-    bitrate:process.env.MUSIC24_VIDEO_BITRATE||"3500k",
-    maxrate:process.env.MUSIC24_VIDEO_MAXRATE||process.env.MUSIC24_VIDEO_BITRATE||"3500k",
-    bufsize:process.env.MUSIC24_VIDEO_BUFSIZE||"7000k",
+    bitrate,
+    maxrate:process.env.MUSIC24_VIDEO_MAXRATE||bitrate,
+    bufsize:process.env.MUSIC24_VIDEO_BUFSIZE||`${Math.max(1000, (parseInt(bitrate, 10) || 3500) * 2)}k`,
+    // Two-second GOP: music frames barely change, and a longer GOP makes the
+    // repeated (skipped) frames between keyframes almost free.
+    gopSeconds:2,
+  };
+}
+
+// Extra Compositor options derived from the profile. Exported so the
+// benchmark tool drives the exact same configuration as production.
+function compositorExtras(profile, video = profileVideo(profile)) {
+  return {
+    encoderPreference:video.encoderPreference || "auto",
+    diagnostics:{ group:"music24", label:`Music 24/7 (${profile?.name || profile?.id || "profile"})` },
   };
 }
 
@@ -70,6 +158,8 @@ function musicSceneUrl(account, profile) {
     if (visual[key]) params.set(key, String(visual[key]));
   }
   params.set("layout", profile?.canvasMode === "vertical" ? "vertical" : "landscape");
+  const perf = profileVideo(profile).performance;
+  for (const [key, value] of Object.entries(sceneQueryFor(perf))) params.set(key, value);
   const query = params.toString();
   return `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/music/${encodeURIComponent(profile.id)}${query ? `?${query}` : ""}`;
 }
@@ -86,7 +176,10 @@ function programSceneUrl(account, profile) {
   // padded the output to 30 fps. NekoStreamAPP's proven desktop backend loads
   // its scene directly; use the same architecture here.
   if (activeProgramScene(account)) {
-    return `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/master`;
+    // Starting Soon / BRB / Ending cards follow the same Music Performance
+    // Mode: reduced effects stop their 60 Hz CSS animations server-side.
+    const effects = profileVideo(profile).performance.effects;
+    return `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/master${effects !== "full" ? `?effects=${effects}` : ""}`;
   }
   return musicSceneUrl(account, profile);
 }
@@ -245,16 +338,33 @@ class Music24Worker {
       const url = `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(this.account.twitchLogin)}/music/${encodeURIComponent(this.profile.id)}/now.json`;
       const res = await fetch(url, { cache:"no-store" });
       if (res.ok) {
+        const previousTrack = this.now?.track?.id || null;
         this.now = await res.json();
         this.nowFetchedAt = Date.now();
+        this.scheduleTrackEndPoll();
+        if ((this.now?.track?.id || null) !== previousTrack) this.compositor?.syncMusic?.();
       }
     } catch {}
+  }
+
+  // One request at the end of the current track instead of polling the whole
+  // time. The engine also emits an in-process event on every advance.
+  scheduleTrackEndPoll() {
+    if (this.trackEndTimer) clearTimeout(this.trackEndTimer);
+    this.trackEndTimer = null;
+    const now = this.now;
+    if (now?.mode !== "playing" || !(Number(now.durationS) > 0)) return;
+    const remainingMs = Math.max(250, (Number(now.durationS) - Number(now.positionS || 0)) * 1000 + 300);
+    this.trackEndTimer = setTimeout(() => { this.trackEndTimer = null; this.pollNow(); }, Math.min(remainingMs, 2 ** 31 - 1));
   }
 
   startNowPoll() {
     this.stopNowPoll();
     this.pollNow();
     this.nowTimer = setInterval(() => this.pollNow(), NOW_POLL_MS);
+    this.offEvents = events.on(String(this.accountId), event => {
+      if (event?.type === "music" && (!event.profileId || String(event.profileId) === String(this.profile?.id))) this.pollNow();
+    });
   }
 
   stopNowPoll() {
@@ -262,6 +372,83 @@ class Music24Worker {
       clearInterval(this.nowTimer);
       this.nowTimer = null;
     }
+    if (this.trackEndTimer) {
+      clearTimeout(this.trackEndTimer);
+      this.trackEndTimer = null;
+    }
+    if (this.offEvents) {
+      try { this.offEvents(); } catch {}
+      this.offEvents = null;
+    }
+  }
+
+  // Auto quality is verified live: if the chosen tier cannot hold its render
+  // rate (Chromium) or FFmpeg cannot take frames in realtime for ~30 s, the
+  // tier is marked too heavy and the reconcile loop restarts one tier lower.
+  startHealthWatch(video) {
+    this.stopHealthWatch();
+    if (!video?.autoTier) return;
+    const graceMs = Number(process.env.MUSIC24_HEALTH_GRACE_MS || 20000);
+    const intervalMs = Number(process.env.MUSIC24_HEALTH_INTERVAL_MS || 10000);
+    const startedAt = Date.now();
+    let strikes = 0, lastDropped = null;
+    this.healthTimer = setInterval(() => {
+      const s = this.compositor?.status?.();
+      if (!s || s.state !== "running" || Date.now() - startedAt < graceMs) { lastDropped = s?.framesDropped ?? lastDropped; return; }
+      const expectedRender = Math.min(video.renderFps, video.performance?.spectrumHz || video.renderFps);
+      const dropped = lastDropped == null ? 0 : (s.framesDropped || 0) - lastDropped;
+      lastDropped = s.framesDropped || 0;
+      const slowRender = s.measuredRenderFps != null && s.measuredRenderFps < expectedRender * 0.55;
+      const slowEncode = s.measuredEncodeFps != null && s.measuredEncodeFps < video.renderFps * 0.8;
+      const dropping = dropped > video.renderFps * (intervalMs / 1000) * 0.1;
+      strikes = slowRender || slowEncode || dropping ? strikes + 1 : 0;
+      if (strikes >= 3) {
+        this.stopHealthWatch();
+        const reason = slowRender ? `browser ${s.measuredRenderFps}/${expectedRender} fps` : slowEncode ? `encoder ${s.measuredEncodeFps}/${video.renderFps} fps` : `${dropped} frames dropped`;
+        if (hardwareProfile.markTooHeavy("music", video.autoTier, reason)) reconcile().catch(() => {});
+      }
+    }, intervalMs);
+    this.healthTimer.unref?.();
+  }
+
+  stopHealthWatch() {
+    if (this.healthTimer) { clearInterval(this.healthTimer); this.healthTimer = null; }
+  }
+
+  runtimeStatus() {
+    const compositor = this.compositor?.status?.() || null;
+    const video = this.video || profileVideo(this.profile);
+    const snapshot = monitor.sample();
+    const mine = snapshot.components.filter(row => row.group === "music24" && row.name.includes(`music24-${this.accountId}-`));
+    const measured = mine.filter(row => row.cpuPercent != null);
+    return {
+      encoder:compositor?.encoder || video.encoderLabel,
+      encoderId:compositor?.encoderId || null,
+      encoderPreference:video.encoderPreference,
+      encoderFallbackReason:compositor?.encoderFallbackReason || null,
+      gpuEncoding:!!compositor?.hardwareEncoder,
+      chromiumGpu:!!video.gpuEnabled,
+      resolution:`${video.width}x${video.height}`,
+      width:video.width,
+      height:video.height,
+      fps:video.fps,
+      renderFps:video.renderFps,
+      measuredRenderFps:compositor?.measuredRenderFps ?? null,
+      measuredEncodeFps:compositor?.measuredEncodeFps ?? null,
+      performanceMode:video.performance?.mode,
+      autoTier:video.autoTier || null,
+      autoReason:video.autoReason || null,
+      hostType:hardwareProfile.getHostProfile().hostType?.label || null,
+      performanceRequested:video.performance?.requested,
+      performanceLabel:video.performance?.label,
+      spectrumHz:video.performance?.spectrumHz,
+      progressHz:video.performance?.progressHz,
+      effects:video.performance?.effects,
+      cpuPercent:measured.length ? Math.round(measured.reduce((sum, row) => sum + row.cpuPercent, 0) * 10) / 10 : null,
+      rssBytes:mine.reduce((sum, row) => sum + (row.rssBytes || 0), 0),
+      components:mine.map(({ label, cpuPercent, rssBytes, meta }) => ({ label, cpuPercent, rssBytes, meta })),
+      framesDropped:compositor?.framesDropped ?? 0,
+    };
   }
 
   setStatus(state, error = null, extra = {}) {
@@ -311,7 +498,15 @@ class Music24Worker {
 
       const outputUrl = `${RTMP_ORIGIN}/${outputPath}`;
       const video = profileVideo(this.profile);
+      this.video = video;
+      this.offSilenceDiagnostics = monitor.registerComponent(`music24:music24-${this.accountId}-${sanitizeSegment(this.profile.id)}:silence`, {
+        label:"Music 24/7 · silence/keep-alive feed",
+        group:"music24",
+        tree:false,
+        pids:() => [this.silence?.child?.pid].filter(Boolean),
+      });
       this.compositor = new Compositor({
+        ...compositorExtras(this.profile, video),
         accountId:`music24-${this.accountId}-${sanitizeSegment(this.profile.id)}`,
         pageUrl:programSceneUrl(this.account, this.profile),
         audioSourceUrl:`${RTMP_ORIGIN}/${silencePath}`,
@@ -334,7 +529,9 @@ class Music24Worker {
       }
 
       this.setStatus("live", null, { video });
-      console.log(`[music24:${this.accountId}:${this.profile.id}] ON AIR ${video.width}x${video.height}@${video.fps} -> ${outputPath}`);
+      this.startHealthWatch(video);
+      const enc = this.compositor?.status?.();
+      console.log(`[music24:${this.accountId}:${this.profile.id}] ON AIR ${video.width}x${video.height}@${video.fps} (render ${video.renderFps} fps, ${video.performance.label}, ${enc?.encoder || video.encoderLabel}) -> ${outputPath}`);
     } catch (err) {
       this.setStatus("error", err.message);
       await this.stop({ preserveStatus:true });
@@ -347,6 +544,8 @@ class Music24Worker {
     this.stopping = true;
     this.running = false;
     this.stopNowPoll();
+    this.stopHealthWatch();
+    if (this.offSilenceDiagnostics) { try { this.offSilenceDiagnostics(); } catch {} this.offSilenceDiagnostics = null; }
 
     if (this.compositor) {
       try { await this.compositor.stop(); } catch {}
@@ -431,6 +630,7 @@ function statusFor(accountId) {
       outputPath:worker.outputPath || null,
       error:worker.error || null,
       running:!!worker.running,
+      runtime:worker.runtimeStatus(),
     };
   }
   return lastStatus.get(key) || {
@@ -447,8 +647,14 @@ function startMusic24() {
   shuttingDown = false;
   serviceStarted = true;
   console.log(`[music24] watching ${STATE_FILE} for active profile-scoped 24/7 music`);
-  reconcile().catch(err => console.error("[music24] initial reconcile failed", err));
-  reconcileTimer = setInterval(() => reconcile().catch(err => console.error("[music24] reconcile failed", err)), POLL_MS);
+  // Test the hardware BEFORE the first stream starts, so Auto pushes the best
+  // quality this host can hold from the first frame (cached after one run).
+  let hardwareReady = false;
+  hardwareProfile.ensureHostProfile().catch(() => null).finally(() => {
+    hardwareReady = true;
+    if (!shuttingDown) reconcile().catch(err => console.error("[music24] initial reconcile failed", err));
+  });
+  reconcileTimer = setInterval(() => { if (hardwareReady) reconcile().catch(err => console.error("[music24] reconcile failed", err)); }, POLL_MS);
   return { started:true, alreadyRunning:false };
 }
 
@@ -494,4 +700,7 @@ module.exports = {
   activeProgramScene,
   programSceneUrl,
   musicWorkerSignature,
+  musicPerformanceSettings,
+  profileVideo,
+  compositorExtras,
 };

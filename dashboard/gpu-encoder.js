@@ -142,6 +142,80 @@ function videoEncoderArgs(profile = detectEncoder(), options = {}) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Per-component encoder preference + fallback chain.
+//
+// detectEncoder() is the install-wide choice (CASTNEXUS_VIDEO_ENCODER). Music
+// 24/7 and individual destinations can additionally ask for a specific
+// encoder from the dashboard. Every hardware choice is still probed with a
+// real one-frame encode before use, and a runtime failure walks down the
+// chain (e.g. NVENC -> Quick Sync/VAAPI -> x264) instead of stopping output.
+
+const PREFERENCES = Object.freeze(["auto", "nvenc", "qsv", "vaapi", "amf", "videotoolbox", "cpu"]);
+const PREFERENCE_LABELS = Object.freeze({ auto:"Auto", nvenc:"NVIDIA NVENC", qsv:"Intel Quick Sync", vaapi:"VAAPI", amf:"AMD AMF", videotoolbox:"Apple VideoToolbox", cpu:"CPU x264" });
+const probeCache = new Map();
+let advertisedCache = null;
+
+function normalisePreference(value) {
+  const v = String(value || "auto").trim().toLowerCase();
+  if (["cpu", "x264", "libx264", "software"].includes(v)) return "cpu";
+  if (["quicksync", "quick-sync", "intel", "h264_qsv"].includes(v)) return "qsv";
+  if (["nvidia", "h264_nvenc"].includes(v)) return "nvenc";
+  if (v === "h264_vaapi") return "vaapi";
+  if (["amd", "h264_amf"].includes(v)) return "amf";
+  return PREFERENCES.includes(v) ? v : "auto";
+}
+
+function advertisedSet(advertisedText = null) {
+  if (advertisedText != null) return advertisedEncoders(advertisedText);
+  if (!advertisedCache) advertisedCache = advertisedEncoders(encoderOutput());
+  return advertisedCache;
+}
+
+function probeOnce(profile, probe = probeProfile) {
+  if (probe !== probeProfile) return probe(profile);
+  const hit = probeCache.get(profile.id);
+  if (hit) return hit;
+  const result = probe(profile);
+  probeCache.set(profile.id, result);
+  return result;
+}
+
+// Ordered candidates for a preference: the preferred encoder first, then the
+// remaining hardware encoders in the platform's normal order, then x264.
+function fallbackOrder(preference = "auto", { platform = process.platform, advertisedText = null } = {}) {
+  const pref = normalisePreference(preference);
+  if (pref === "cpu") return [CPU_PROFILE];
+  const advertised = advertisedSet(advertisedText);
+  const hardware = reorderCandidates(candidateProfiles(platform)).filter(p => advertised.has(p.encoder));
+  const preferred = hardware.filter(p => p.id === pref);
+  const rest = hardware.filter(p => p.id !== pref);
+  return [...preferred, ...rest, CPU_PROFILE];
+}
+
+// Next working encoder after the given one failed at runtime. Probes lazily and
+// caches probe results so repeated fallbacks do not re-spawn FFmpeg.
+function nextWorkingEncoder(preference, failedIds = [], { probe = probeProfile, advertisedText = null } = {}) {
+  const failed = new Set((failedIds || []).map(String));
+  const reason = failed.size ? `fell back after ${[...failed].join(", ")} failed` : undefined;
+  for (const candidate of fallbackOrder(preference, { advertisedText })) {
+    if (failed.has(candidate.id)) continue;
+    if (!candidate.hardware) return { ...CPU_PROFILE, requested:normalisePreference(preference), ...(reason ? { fallbackReason:reason } : {}) };
+    const result = probeOnce(candidate, probe);
+    if (result.ok) return { ...candidate, requested:normalisePreference(preference), ...(reason ? { fallbackReason:reason } : {}) };
+  }
+  return { ...CPU_PROFILE, requested:normalisePreference(preference) };
+}
+
+function resolveEncoder(preference = "auto", options = {}) {
+  const pref = normalisePreference(preference);
+  if (pref === "auto") return detectEncoder(options.advertisedText != null || options.probe ? { force:true, advertisedText:options.advertisedText, probe:options.probe || probeProfile } : {});
+  if (pref === "cpu") return { ...CPU_PROFILE, requested:"cpu" };
+  const chosen = nextWorkingEncoder(pref, [], options);
+  if (chosen.id !== pref) return { ...chosen, fallbackReason:chosen.fallbackReason || `${PREFERENCE_LABELS[pref] || pref} is not available on this host` };
+  return chosen;
+}
+
 function status() {
   const selected = detectEncoder();
   return {
@@ -165,4 +239,10 @@ module.exports = {
   encoderFilterSuffix,
   videoEncoderArgs,
   status,
+  PREFERENCES,
+  PREFERENCE_LABELS,
+  normalisePreference,
+  fallbackOrder,
+  nextWorkingEncoder,
+  resolveEncoder,
 };

@@ -6,9 +6,11 @@ const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const { EventEmitter } = require("node:events");
 const puppeteer = require("puppeteer-core");
-const { CPU_PROFILE, detectEncoder, globalEncoderArgs, encoderFilterSuffix, videoEncoderArgs } = require("./gpu-encoder");
+const { CPU_PROFILE, detectEncoder, resolveEncoder, nextWorkingEncoder, normalisePreference, globalEncoderArgs, encoderFilterSuffix, videoEncoderArgs } = require("./gpu-encoder");
 const { cpuX264Preset, liveMuxArgs } = require("./rtmp-pipeline");
 const { PcmAudioRelay } = require("./audio-relay");
+const { BrowserAudioCapture, layerVolumeScript } = require("./browser-audio");
+const monitor = require("./resource-monitor");
 const FFMPEG_BIN = process.env.FFMPEG_BIN || "ffmpeg";
 
 // Both Desktop and Docker now carry PCM over the independently paced relay.
@@ -23,13 +25,15 @@ function audioTransportFor(accountId, runtimeDir, platform = process.platform, o
   if (platform !== "win32" && forceFifo) return {
     live:{ input:path.join(runtimeDir,"live-audio.fifo"), output:path.join(runtimeDir,"live-audio.fifo") },
     music:{ input:path.join(runtimeDir,"music-audio.fifo"), output:path.join(runtimeDir,"music-audio.fifo") },
+    browser:{ input:path.join(runtimeDir,"browser-audio.fifo"), output:path.join(runtimeDir,"browser-audio.fifo") },
     fifo:true,
   };
   let hash=2166136261;
   for(const char of String(accountId||"castnexus")){hash^=char.charCodeAt(0);hash=Math.imul(hash,16777619);}
-  const base=30000+((hash>>>0)%8000)*4;
+  // Six ports per compositor: live, music and browser-source audio buses.
+  const base=30000+((hash>>>0)%5000)*6;
   const endpoint=(inputPort,outputPort)=>({input:`tcp://127.0.0.1:${outputPort}`,output:`tcp://127.0.0.1:${inputPort}`,inputPort,outputPort});
-  return { live:endpoint(base,base+1), music:endpoint(base+2,base+3), fifo:false, paced:true };
+  return { live:endpoint(base,base+1), music:endpoint(base+2,base+3), browser:endpoint(base+4,base+5), fifo:false, paced:true };
 }
 
 function buildChromiumGpuArgs(gpuEnabled, platform = process.platform) {
@@ -45,6 +49,38 @@ function buildChromiumGpuArgs(gpuEnabled, platform = process.platform) {
   return ["--ignore-gpu-blocklist", "--enable-gpu-rasterization", "--enable-zero-copy", ...backend, "--disable-frame-rate-limit"];
 }
 
+// Browser sources are untrusted web content. Private/Local Network Access
+// protections stop a public overlay page from calling loopback services on
+// the host (MediaMTX API :9997, the dashboard itself, other containers on the
+// host network) while CastNexus' own local scene page keeps working.
+function chromiumSecurityArgs({ blockLocalNetwork = String(process.env.CASTNEXUS_BROWSER_BLOCK_LOCAL_NETWORK ?? "true").toLowerCase() !== "false" } = {}) {
+  const enable = blockLocalNetwork ? ["BlockInsecurePrivateNetworkRequests", "PrivateNetworkAccessSendPreflights", "PrivateNetworkAccessRespectPreflightResults", "LocalNetworkAccessChecks"] : [];
+  return [
+    ...(enable.length ? [`--enable-features=${enable.join(",")}`] : []),
+    "--disable-features=Translate,BackForwardCache,PaintHolding",
+    "--disable-client-side-phishing-detection",
+    "--disable-component-update",
+    "--disable-domain-reliability",
+    "--deny-permission-prompts",
+  ];
+}
+
+function chromiumLaunchArgs({ width, height, gpuEnabled, browserAudio = false }) {
+  return [
+    "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
+    ...buildChromiumGpuArgs(gpuEnabled),
+    "--no-zygote", "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
+    // Autoplay without a user gesture is what lets StreamElements alerts and
+    // browser music play. It is a playback policy, not a privilege grant.
+    "--autoplay-policy=no-user-gesture-required",
+    "--hide-scrollbars",
+    ...(browserAudio ? [] : ["--mute-audio"]),
+    ...chromiumSecurityArgs(),
+    "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-notifications", "--disable-sync", "--metrics-recording-only", "--no-pings",
+    `--window-size=${width},${height}`,
+  ];
+}
+
 function useElectronOffscreen(installType = process.env.CASTNEXUS_INSTALL_TYPE, versions = process.versions) {
   return String(installType || "").toLowerCase() === "electron" && !!versions?.electron;
 }
@@ -53,28 +89,70 @@ function watchdogActivityAt(electronOffscreen, lastPaintAt, lastFrameAt) {
   return electronOffscreen ? lastPaintAt : lastFrameAt;
 }
 
-function audioInputPlan(includeLiveAudio, live, music) {
-  const pcm=input=>["-thread_queue_size","1024","-f","s16le","-ar","48000","-ac","2","-i",input];
-  if(!includeLiveAudio)return {
-    args:pcm(music),
-    filter:"[1:a]aresample=async=1:first_pts=0[a]",
-  };
+// PCM inputs are headerless s16le: there is nothing to probe, so skip the
+// default 5 s analysis (it delayed first audio and let video frames pile up).
+function pcmInputArgs(input) {
+  return ["-thread_queue_size","1024","-analyzeduration","0","-probesize","32","-f","s16le","-ar","48000","-ac","2","-i",input];
+}
+
+function audioInputPlan(includeLiveAudio, live, music, browser = null) {
+  const inputs=[...(includeLiveAudio?[live]:[]),music,...(browser?[browser]:[])];
+  const args=inputs.flatMap(pcmInputArgs);
+  if(inputs.length===1)return { args, filter:"[1:a]aresample=async=1:first_pts=0[a]", inputs:inputs.length };
+  const labels=inputs.map((_,i)=>`[${i+1}:a]`).join("");
   return {
-    args:[...pcm(live),...pcm(music)],
-    filter:"[1:a][2:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0[a]",
+    args,
+    filter:`${labels}amix=inputs=${inputs.length}:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0[a]`,
+    inputs:inputs.length,
   };
 }
 
 function compositorFilterGraph({ fps, encoder, audioPlan }) {
+  // fps= is the OUTPUT rate. When the browser is captured at a lower render
+  // rate, this filter repeats frames; repeated frames encode as near-free
+  // P-skips, so viewers still get a steady 30 fps stream.
   return [`[0:v]fps=${fps},setsar=1[vbase]`,encoderFilterSuffix(encoder,"vbase","v"),audioPlan.filter].join(";");
 }
 
-function videoInputArgs({electronOffscreen,fps,width,height}){
-  if(electronOffscreen)return ["-thread_queue_size","1024","-framerate",String(fps),"-use_wallclock_as_timestamps","1","-f","rawvideo","-pixel_format","bgra","-video_size",`${width}x${height}`,"-i","-"];
-  return ["-thread_queue_size","1024","-framerate",String(fps),"-use_wallclock_as_timestamps","1","-f","image2pipe","-vcodec","mjpeg","-i","-"];
+// How the Chromium/CDP frame pump timestamps video.
+//
+// "cfr" (default): frames carry constant-rate timestamps (frame n = n/fps) and
+// the pump itself is locked to the wall clock, repeating the latest frame to
+// pay back any frames it owes. Benchmarks with FFmpeg 7/8's threaded
+// scheduler showed that wallclock-stamped video next to a realtime-paced PCM
+// input is permanently "ahead" of the audio by the input start-up delay, so
+// the video demuxer is choked and only 5-6 of 20 fps got through (the rest
+// were dropped by the pump). With CFR the two timelines start together.
+//
+// "wallclock": the previous behaviour, kept as an escape hatch.
+function pumpTimestampMode(value=process.env.COMPOSITOR_PUMP_TIMESTAMPS){
+  return String(value||"cfr").toLowerCase()==="wallclock"?"wallclock":"cfr";
 }
 
-// Docker's Chromium path pumps the most recent screencast frame at the output
+function videoInputArgs({electronOffscreen,fps,width,height,inputFps=null,timestamps=pumpTimestampMode()}){
+  const rate=String(Math.max(1,Number(inputFps||fps)||30));
+  if(electronOffscreen)return ["-thread_queue_size","1024","-framerate",rate,"-use_wallclock_as_timestamps","1","-f","rawvideo","-pixel_format","bgra","-video_size",`${width}x${height}`,"-i","-"];
+  // Bounded probing: one JPEG is enough to learn the frame size. The default
+  // (5 s of stream) kept FFmpeg from reading stdin for several seconds on
+  // start/restart while the pump dropped every frame.
+  const clock=timestamps==="wallclock"?["-use_wallclock_as_timestamps","1"]:[];
+  return ["-thread_queue_size","1024","-analyzeduration","0","-probesize",String(Math.max(2_000_000,width*height*2)),"-framerate",rate,...clock,"-f","image2pipe","-vcodec","mjpeg","-i","-"];
+}
+
+// CFR pump backlog: FFmpeg legitimately stops reading stdin for a second or
+// two while its encoder and audio inputs start. Absorb about two seconds of
+// frames instead of dropping them (a drop in CFR mode is A/V drift).
+function cfrBacklogLimit(frameBytes, fps) {
+  const bytes=(Number(frameBytes)||0)*Math.max(4,Math.round((Number(fps)||30)*2));
+  return Math.max(4*1024*1024,Math.min(64*1024*1024,bytes));
+}
+
+// Frames the CFR pump still owes FFmpeg to stay locked to the wall clock.
+function framesOwed(startedAt, written, intervalMs, now) {
+  return Math.max(0,Math.floor((now-startedAt)/intervalMs)+1-written);
+}
+
+// Docker's Chromium path pumps the most recent screencast frame at the input
 // cadence (CDP only emits on visual change). Two things decide whether that
 // pump is actually realtime:
 //
@@ -122,14 +200,28 @@ function electronOffscreenWindowOptions(width, height) {
   };
 }
 
+function chromiumGpuVerdict(hardwareEncoder) {
+  try {
+    const host = require("./hardware-profile").getHostProfile();
+    return host?.probed ? !!host.chromiumGpu : !!hardwareEncoder;
+  } catch {
+    return !!hardwareEncoder;
+  }
+}
+
 function defaultVideoConfig() {
   const detected = detectEncoder();
   const mode = String(process.env.COMPOSITOR_GPU || "auto").toLowerCase();
+  const renderFps = Number(process.env.COMPOSITOR_RENDER_FPS || 0);
   return {
     width:Number(process.env.COMPOSITOR_WIDTH || 1280),
     height:Number(process.env.COMPOSITOR_HEIGHT || 720),
     fps:Number(process.env.COMPOSITOR_FPS || 30),
-    gpuEnabled:mode === "true" || (mode === "auto" && detected.hardware),
+    // Browser capture rate fed to FFmpeg. null = same as fps.
+    renderFps:renderFps > 0 ? renderFps : null,
+    // auto: use the hardware test's verdict on whether headless Chromium
+    // really gets a GPU (not SwiftShader); before a test, the old rule.
+    gpuEnabled:mode === "true" || (mode === "auto" && chromiumGpuVerdict(detected.hardware)),
     // JPEG is an intermediate transport into FFmpeg, not the final stream
     // quality. 70 materially reduces main-process encode work at 1080p while
     // the final NVENC/x264 bitrate remains unchanged.
@@ -137,8 +229,27 @@ function defaultVideoConfig() {
   };
 }
 
+function clampGain(value, fallback = 1) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(4, n)) : fallback;
+}
+
+// Resolve mute/solo into the effective gain for each mixer bus.
+function effectiveMixerGains(mixer = {}) {
+  const buses = ["program", "music", "browser"];
+  const soloed = buses.filter(bus => mixer[bus]?.solo);
+  const out = {};
+  for (const bus of buses) {
+    const row = mixer[bus] && typeof mixer[bus] === "object" ? mixer[bus] : { volume:mixer[bus] };
+    const volume = clampGain(row.volume ?? 1);
+    const audible = !row.muted && (!soloed.length || soloed.includes(bus));
+    out[bus] = audible ? volume : 0;
+  }
+  return out;
+}
+
 class Compositor extends EventEmitter {
-  constructor({ accountId, pageUrl, audioSourceUrl, outputUrl, getMusicNow, musicFilePathFor, video, runtimeDir, logger, includeLiveAudio = true }) {
+  constructor({ accountId, pageUrl, audioSourceUrl, outputUrl, getMusicNow, musicFilePathFor, video, runtimeDir, logger, includeLiveAudio = true, encoderPreference = "auto", browserAudio = false, mixer = null, diagnostics = null }) {
     super();
     this.accountId=accountId;
     this.pageUrl=pageUrl;
@@ -151,18 +262,28 @@ class Compositor extends EventEmitter {
     this.runtimeDir=runtimeDir||path.join(os.tmpdir(),"restreamnode-compositor",accountId);
     this.audioTransport=audioTransportFor(accountId,this.runtimeDir);
     this.audioRelays=[];
+    this.relayByBus={};
     if(!this.audioTransport.fifo){
-      for(const name of ["live-audio.fifo","music-audio.fifo"]){try{fs.rmSync(path.join(this.runtimeDir,name),{force:true});}catch{}}
+      for(const name of ["live-audio.fifo","music-audio.fifo","browser-audio.fifo"]){try{fs.rmSync(path.join(this.runtimeDir,name),{force:true});}catch{}}
     }
     this.logger=logger||console;
     this.debug=String(process.env.COMPOSITOR_DEBUG||"").toLowerCase()==="true";
-    this.encoder=detectEncoder();
+    this.encoderPreference=normalisePreference(encoderPreference);
+    this.encoder=resolveEncoder(this.encoderPreference);
+    this.failedEncoders=[];
     this.forceCpu=false;
+    this.browserAudioWanted=!!browserAudio;
+    this.browserAudio=null;
+    this.mixer=effectiveMixerGains(mixer||{});
+    this.diagnostics=diagnostics||{ group:"compositor", label:String(accountId) };
+    this.unregisterDiagnostics=[];
     this.state="idle";
     this.shouldRun=false;
     this.error=null;
     this.frameCount=0;
     this.framesDropped=0;
+    this.renderFrames=0;
+    this.rateWindow={ at:Date.now(), renderFrames:0, frameCount:0, renderFps:null, encodeFps:null };
     this.lastFrameAt=null;
     this.lastPaintAt=null;
     this.latestFrame=null;
@@ -170,6 +291,7 @@ class Compositor extends EventEmitter {
     this.framePumpTimer=null;
     this.framePumpRunning=false;
     this.paintKeepaliveTimer=null;
+    this.layerVolumeTimer=null;
     this.electronOffscreen=useElectronOffscreen();
     this.offscreenWindow=null;
     this.browser=null;
@@ -189,18 +311,45 @@ class Compositor extends EventEmitter {
     this.watchdogTimer=null;
   }
 
+  activeEncoder(){return this.forceCpu?CPU_PROFILE:this.encoder;}
+  inputFps(){return Math.max(1,Math.min(Number(this.video.fps)||30,Number(this.video.renderFps||this.video.fps)||30));}
+
+  _rates(){
+    const now=Date.now(),w=this.rateWindow,elapsed=(now-w.at)/1000;
+    if(elapsed>=2){
+      w.renderFps=Math.round((this.renderFrames-w.renderFrames)/elapsed*10)/10;
+      w.encodeFps=Math.round((this.frameCount-w.frameCount)/elapsed*10)/10;
+      w.at=now;w.renderFrames=this.renderFrames;w.frameCount=this.frameCount;
+    }
+    return w;
+  }
+
   status(){
-    const enc=this.forceCpu?CPU_PROFILE:this.encoder;
+    const enc=this.activeEncoder();
+    const rates=this._rates();
     return {
       state:this.state,
       error:this.error,
       frameCount:this.frameCount,
       framesDropped:this.framesDropped,
+      renderFrames:this.renderFrames,
       lastFrameAt:this.lastFrameAt,
       lastRenderAt:this.electronOffscreen?this.lastPaintAt:this.lastScreencastAt,
       firstFrameReady:!!this.latestFrame,
       encoder:enc.label,
+      encoderId:enc.id,
+      encoderPreference:this.encoderPreference,
+      encoderFallbackReason:enc.fallbackReason||(this.failedEncoders.length?`fell back after ${this.failedEncoders.join(", ")} failed`:null),
       hardwareEncoder:!!enc.hardware,
+      width:this.video.width,
+      height:this.video.height,
+      outputFps:this.video.fps,
+      renderFps:this.inputFps(),
+      measuredRenderFps:rates.renderFps,
+      measuredEncodeFps:rates.encodeFps,
+      chromiumGpu:!!this.video.gpuEnabled,
+      browserAudio:{ wanted:this.browserAudioWanted, active:!!this.browserAudio?.available, error:this.browserAudio?.error||null },
+      mixer:{ ...this.mixer },
     };
   }
 
@@ -226,6 +375,7 @@ class Compositor extends EventEmitter {
     this._setState("stopping");
     if(this.restartTimer){clearTimeout(this.restartTimer);this.restartTimer=null;}
     await this._teardown();
+    this._unregisterDiagnostics();
     this._setState("idle");
   }
 
@@ -248,10 +398,32 @@ class Compositor extends EventEmitter {
     }
   }
 
+  // Live mixer update from Overlay Studio. Applied in the PCM relays, so it
+  // takes effect within one relay tick and never restarts FFmpeg.
+  setMixer(mixer){
+    this.mixer=effectiveMixerGains(mixer||{});
+    this.relayByBus.live?.setGain(this.mixer.program);
+    this.relayByBus.music?.setGain(this.mixer.music);
+    this.relayByBus.browser?.setGain(this.mixer.browser);
+    return this.mixer;
+  }
+
+  // Scenes can gain or lose audio-enabled browser layers while live. Turning
+  // capture on requires relaunching Chromium without --mute-audio, so do it
+  // through the normal reconnect path (audio bus + page) only when it changes.
+  setBrowserAudio(enabled){
+    const wanted=!!enabled;
+    if(wanted===this.browserAudioWanted)return false;
+    this.browserAudioWanted=wanted;
+    if(this.state==="running"){this.logger.log(`[compositor:${this.accountId}] browser audio ${wanted?"enabled":"disabled"}; restarting renderer`);this._scheduleReconnect(250);}
+    return true;
+  }
+
   _setState(s){if(this.state===s)return;this.state=s;this.emit("status",this.status());}
 
   async _runOnce(){
     fs.mkdirSync(this.runtimeDir,{recursive:true});
+    this._prepareBrowserAudio();
     await this._startAudioRelays();
     if(this.includeLiveAudio)this._startLiveAudioTap();
     await this._startMusicAudioTap();
@@ -261,17 +433,39 @@ class Compositor extends EventEmitter {
     await this._startScreencast();
     this._startWatchdog();
     this._startMusicPoll();
-    const enc=this.forceCpu?CPU_PROFILE:this.encoder;
+    this._registerDiagnostics();
+    const enc=this.activeEncoder();
     const renderer=this.electronOffscreen?"electron-offscreen":"chromium-cdp";
-    this.logger.log(`[compositor:${this.accountId}] running (${this.video.width}x${this.video.height}@${this.video.fps}, encoder=${enc.label}, renderer=${renderer}, chromiumGpu=${this.video.gpuEnabled})`);
+    this.logger.log(`[compositor:${this.accountId}] running (${this.video.width}x${this.video.height}@${this.video.fps}, render=${this.inputFps()}fps, encoder=${enc.label}, renderer=${renderer}, chromiumGpu=${this.video.gpuEnabled}, browserAudio=${!!this.browserAudio?.available})`);
   }
+
+  _prepareBrowserAudio(){
+    if(!this.browserAudioWanted||this.electronOffscreen){this.browserAudio=null;return;}
+    if(!this.browserAudio)this.browserAudio=new BrowserAudioCapture({id:this.accountId,logger:this.logger,debug:this.debug});
+    if(!this.browserAudio.prepare())this.logger.warn(`[compositor:${this.accountId}] browser audio unavailable: ${this.browserAudio.error}`);
+  }
+
+  _registerDiagnostics(){
+    this._unregisterDiagnostics();
+    const base=`${this.diagnostics.group}:${this.accountId}`;
+    const label=this.diagnostics.label||this.accountId;
+    const group=this.diagnostics.group;
+    this.unregisterDiagnostics.push(
+      monitor.registerComponent(`${base}:renderer`,{label:`${label} · Chromium renderer`,group,pids:()=>[this.browser?.process?.()?.pid].filter(Boolean),meta:()=>({renderFps:this.inputFps(),measuredRenderFps:this._rates().renderFps,chromiumGpu:!!this.video.gpuEnabled})}),
+      monitor.registerComponent(`${base}:encoder`,{label:`${label} · FFmpeg encoder`,group,tree:false,pids:()=>[this.ffmpeg?.pid].filter(Boolean),meta:()=>({encoder:this.activeEncoder().label,outputFps:this.video.fps,measuredEncodeFps:this._rates().encodeFps})}),
+      monitor.registerComponent(`${base}:audio`,{label:`${label} · audio taps`,group,tree:false,pids:()=>[this.liveAudioTap?.pid,this.musicAudioTap?.pid,this.browserAudio?.pid()].filter(Boolean)}),
+    );
+  }
+
+  _unregisterDiagnostics(){for(const off of this.unregisterDiagnostics.splice(0))try{off();}catch{}}
 
   async _launchBrowser(){
     if(this.electronOffscreen){
       const { BrowserWindow }=require("electron");
       this.offscreenWindow=new BrowserWindow(electronOffscreenWindowOptions(this.video.width,this.video.height));
       this.offscreenWindow.setContentSize(this.video.width,this.video.height);
-      this.offscreenWindow.webContents.setFrameRate(Math.max(1,Math.min(Number(this.video.fps||30),60)));
+      // Electron can render at exactly the capture rate - no wasted paints.
+      this.offscreenWindow.webContents.setFrameRate(Math.max(1,Math.min(this.inputFps(),60)));
       this.offscreenWindow.once("closed",()=>{
         this.offscreenWindow=null;
         if(this.shouldRun&&this.state!=="stopping")this._scheduleReconnect();
@@ -282,13 +476,15 @@ class Compositor extends EventEmitter {
     const profileRoot=path.join(this.runtimeDir,"profiles");
     fs.mkdirSync(profileRoot,{recursive:true});
     this.browserProfileDir=fs.mkdtempSync(path.join(profileRoot,"profile-"));
+    const browserAudio=!!this.browserAudio?.available;
     try{
       this.browser=await puppeteer.launch({
         executablePath:execPath,
         headless:"new",
         userDataDir:this.browserProfileDir,
         defaultViewport:{width:this.video.width,height:this.video.height,deviceScaleFactor:1},
-        args:["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage",...buildChromiumGpuArgs(this.video.gpuEnabled),"--no-zygote","--disable-background-timer-throttling","--disable-backgrounding-occluded-windows","--disable-renderer-backgrounding","--autoplay-policy=no-user-gesture-required","--hide-scrollbars","--mute-audio","--disable-features=Translate,BackForwardCache,PaintHolding","--no-first-run","--no-default-browser-check","--disable-extensions","--disable-notifications","--disable-sync","--metrics-recording-only","--no-pings",`--window-size=${this.video.width},${this.video.height}`],
+        env:{...process.env,...(this.browserAudio?.chromiumEnv()||{})},
+        args:chromiumLaunchArgs({width:this.video.width,height:this.video.height,gpuEnabled:this.video.gpuEnabled,browserAudio}),
       });
     }catch(err){
       this._cleanupBrowserProfile();
@@ -310,8 +506,48 @@ class Compositor extends EventEmitter {
     }
     this.page=await this.browser.newPage();
     await this.page.setViewport({width:this.video.width,height:this.video.height,deviceScaleFactor:1});
+    if(this.browserAudio?.available)this._watchLayerVolumes();
     await this.page.goto(this.pageUrl,{waitUntil:"domcontentloaded",timeout:30000});
     if(this.debug)this.logger.log(`[compositor:${this.accountId}] scene loaded ${this.pageUrl}`);
+  }
+
+  // Browser-layer iframes carry data-cn-volume / data-cn-muted. Apply those
+  // inside each frame (including cross-origin OOPIFs, which DevTools can
+  // reach) whenever frames appear or navigate, plus a slow safety sweep for
+  // SSE-driven layer edits.
+  _watchLayerVolumes(){
+    const page=this.page;
+    const run=()=>{this.applyLayerVolumes().catch(()=>{});};
+    page.on("frameattached",()=>setTimeout(run,300));
+    page.on("framenavigated",()=>setTimeout(run,300));
+    page.on("load",run);
+    if(this.layerVolumeTimer)clearInterval(this.layerVolumeTimer);
+    this.layerVolumeTimer=setInterval(run,Number(process.env.COMPOSITOR_LAYER_VOLUME_SWEEP_MS||4000));
+  }
+
+  async applyLayerVolumes(){
+    const page=this.page;
+    if(!page||page.isClosed?.())return 0;
+    const script=layerVolumeScript();
+    let applied=0;
+    const visit=async(frame,volume,muted)=>{
+      try{await frame.evaluate(script,volume,muted);applied++;}catch{}
+      for(const child of frame.childFrames())await visit(child,volume,muted);
+    };
+    for(const frame of page.mainFrame().childFrames()){
+      let volume=1,muted=false;
+      try{
+        const el=await frame.frameElement();
+        if(el){
+          const data=await el.evaluate(node=>({volume:node.getAttribute("data-cn-volume"),muted:node.getAttribute("data-cn-muted"),audio:node.getAttribute("data-cn-audio")}));
+          await el.dispose?.();
+          volume=data.volume==null?1:Number(data.volume);
+          muted=data.muted==="1"||data.audio==="0";
+        }
+      }catch{}
+      await visit(frame,volume,muted);
+    }
+    return applied;
   }
 
   async _startScreencast(){
@@ -323,6 +559,7 @@ class Compositor extends EventEmitter {
       let firstCapture=true;
       const onPaint=(_event,_dirty,image)=>{
         this.lastPaintAt=Date.now();
+        this.renderFrames++;
         const ffmpeg=this.ffmpeg;
         const stdin=ffmpeg?.stdin;
         if(!stdin?.writable)return;
@@ -370,13 +607,19 @@ class Compositor extends EventEmitter {
       try{
         this.latestFrame=Buffer.from(data,"base64");
         this.lastScreencastAt=Date.now();
+        this.renderFrames++;
         if(this.debug&&firstCapture){
           firstCapture=false;
           this.logger.log(`[compositor:${this.accountId}] first Chromium frame (${this.latestFrame.length} bytes)`);
         }
       }catch{}
     });
-    await this.client.send("Page.startScreencast",{format:"jpeg",quality:this.video.screencastQuality,maxWidth:this.video.width,maxHeight:this.video.height});
+    // everyNthFrame counts frames Chromium actually produced (damage driven).
+    // Pages that animate at the compositor's 60 Hz (full effects) set it so
+    // Chromium stops JPEG-encoding frames above the capture rate; pages that
+    // already change only at their own low rate must keep every frame.
+    const everyNth=Math.max(1,Math.round(Number(this.video.screencastEveryNth)||1));
+    await this.client.send("Page.startScreencast",{format:"jpeg",quality:this.video.screencastQuality,maxWidth:this.video.width,maxHeight:this.video.height,everyNthFrame:everyNth});
 
     const firstFrameTimeout=Math.max(1000,Number(process.env.COMPOSITOR_FIRST_FRAME_TIMEOUT_MS||10000));
     const deadline=Date.now()+firstFrameTimeout;
@@ -391,8 +634,9 @@ class Compositor extends EventEmitter {
   }
 
   _startFramePump(){
-    this._stopFramePump();
-    const interval=1000/Math.max(1,Number(this.video.fps||30));
+    this._stopFramePump({keepFrame:true});
+    if(pumpTimestampMode()==="cfr")return this._startCfrFramePump();
+    const interval=1000/this.inputFps();
     const startedAt=Date.now();
     let frameIndex=0;
     this.framePumpRunning=true;
@@ -423,7 +667,51 @@ class Compositor extends EventEmitter {
     tick();
   }
 
-  _stopFramePump(){
+  // Wall-clock locked CFR pump: every tick writes as many copies of the
+  // latest frame as the clock says are due (normally exactly one). Frames owed
+  // after an FFmpeg stall are repaid in small bursts so the video timeline
+  // never drifts from the realtime audio. Only if FFmpeg cannot keep up for
+  // longer than ~2 s are owed frames forgiven (logged, counted as drops).
+  _startCfrFramePump(){
+    const fps=this.inputFps();
+    const interval=1000/fps;
+    const startedAt=Date.now();
+    const maxBurst=Math.max(2,Math.ceil(fps/4));
+    const maxOwed=Math.max(8,fps*2);
+    let written=0;
+    let warned=false;
+    this.framePumpRunning=true;
+    const tick=()=>{
+      this.framePumpTimer=null;
+      if(!this.framePumpRunning)return;
+      const ffmpeg=this.ffmpeg,frame=this.latestFrame,stdin=ffmpeg?.stdin;
+      const now=Date.now();
+      let owed=framesOwed(startedAt,written,interval,now);
+      if(owed>maxOwed){
+        const forgiven=owed-maxOwed;
+        written+=forgiven;
+        this.framesDropped+=forgiven;
+        owed=maxOwed;
+        if(!warned){warned=true;this.logger.warn(`[compositor:${this.accountId}] frame pump: FFmpeg fell ${Math.round(forgiven/fps*10)/10}s behind; skipping ahead`);}
+      }
+      let blocked=false;
+      if(frame&&stdin?.writable){
+        const limit=cfrBacklogLimit(frame.length,fps);
+        for(let i=0;i<Math.min(owed,maxBurst);i++){
+          if(stdin.writableLength>limit){blocked=true;break;}
+          try{stdin.write(frame);written++;this.frameCount++;this.lastFrameAt=Date.now();}
+          catch(err){if(err?.code!=="EPIPE")this.logger.warn(`[compositor:${this.accountId}] frame pump error: ${err.message}`);blocked=true;break;}
+        }
+      }
+      // Next frame (index `written`) is due at startedAt + written*interval;
+      // if FFmpeg is backpressured, look again half a frame later.
+      const delay=blocked||!frame?interval/2:startedAt+written*interval-Date.now();
+      this.framePumpTimer=setTimeout(tick,Math.max(0,Math.round(delay)));
+    };
+    tick();
+  }
+
+  _stopFramePump({keepFrame=false}={}){
     this.framePumpRunning=false;
     if(this.framePumpTimer){clearTimeout(this.framePumpTimer);this.framePumpTimer=null;}
     if(this.paintKeepaliveTimer){clearInterval(this.paintKeepaliveTimer);this.paintKeepaliveTimer=null;}
@@ -431,6 +719,7 @@ class Compositor extends EventEmitter {
       try{this.offscreenWindow.webContents.removeListener("paint",this.electronPaintHandler);}catch{}
     }
     this.electronPaintHandler=null;
+    if(keepFrame)return;
     this.latestFrame=null;
     this.lastPaintAt=null;
     this.lastScreencastAt=null;
@@ -440,21 +729,26 @@ class Compositor extends EventEmitter {
 
   async _startAudioRelays(){
     if(!this.audioTransport.paced||this.audioRelays.length)return;
-    for(const endpoint of [this.audioTransport.live,this.audioTransport.music]){
-      const relay=new PcmAudioRelay({inputPort:endpoint.inputPort,outputPort:endpoint.outputPort,logger:this.logger});
+    const buses=[["live",this.audioTransport.live,this.mixer.program],["music",this.audioTransport.music,this.mixer.music]];
+    if(this.browserAudio?.available)buses.push(["browser",this.audioTransport.browser,this.mixer.browser]);
+    for(const [bus,endpoint,gain] of buses){
+      const relay=new PcmAudioRelay({inputPort:endpoint.inputPort,outputPort:endpoint.outputPort,logger:this.logger,gain});
       relay.start();
       this.audioRelays.push(relay);
+      this.relayByBus[bus]=relay;
     }
     // Wait for the loopback listeners before the FFmpeg taps try to connect,
     // but never block startup on them: a relay that cannot listen still lets
     // the taps respawn into it later.
     const deadline=new Promise(resolve=>setTimeout(resolve,Number(process.env.COMPOSITOR_AUDIO_READY_TIMEOUT_MS||3000)));
     await Promise.race([Promise.all(this.audioRelays.map(relay=>relay.ready())),deadline]);
+    if(this.browserAudio?.available)this.browserAudio.start(this.audioTransport.browser.output);
   }
 
   _stopAudioRelays(){
     for(const relay of this.audioRelays){try{relay.stop();}catch{}}
     this.audioRelays=[];
+    this.relayByBus={};
   }
 
   _ensureFifo(fifoPath){
@@ -526,6 +820,10 @@ class Compositor extends EventEmitter {
     this._syncMusicTap();
   }
 
+  // Public so the owner can react to music engine events immediately instead
+  // of waiting for the next 1 s check.
+  syncMusic(){this._syncMusicTap();}
+
   _syncMusicTap(){
     let now;
     try{now=this.getMusicNow();}catch{now=null;}
@@ -568,14 +866,15 @@ class Compositor extends EventEmitter {
   _stopMusicPoll(){if(this.musicPollTimer){clearInterval(this.musicPollTimer);this.musicPollTimer=null;}}
 
   _spawnFfmpeg(){
-    const live=this.audioTransport.live.input,music=this.audioTransport.music.input,enc=this.forceCpu?CPU_PROFILE:this.encoder;
-    const audioPlan=audioInputPlan(this.includeLiveAudio,live,music);
+    const live=this.audioTransport.live.input,music=this.audioTransport.music.input,enc=this.activeEncoder();
+    const browser=this.browserAudio?.available?this.audioTransport.browser.input:null;
+    const audioPlan=audioInputPlan(this.includeLiveAudio,live,music,browser);
     const lowPower=!enc.hardware&&(process.arch==="arm64"||process.arch==="arm");
     const bitrate=this.video.bitrate||process.env.COMPOSITOR_VIDEO_BITRATE||(this.video.width<=1280&&this.video.height<=1280?"4000k":"6000k");
     const maxrate=this.video.maxrate||process.env.COMPOSITOR_VIDEO_MAXRATE||bitrate;
     const bufsize=this.video.bufsize||process.env.COMPOSITOR_VIDEO_BUFSIZE||(this.video.width<=1280&&this.video.height<=1280?"8000k":"12000k");
     const filter=compositorFilterGraph({fps:this.video.fps,width:this.video.width,height:this.video.height,encoder:enc,audioPlan,musicOnly:!this.includeLiveAudio});
-    const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats",...globalEncoderArgs(enc),...videoInputArgs({electronOffscreen:this.electronOffscreen,fps:this.video.fps,width:this.video.width,height:this.video.height}),...audioPlan.args,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,gop:this.video.fps,bitrate,maxrate,bufsize,x264Preset:process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
+    const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats",...globalEncoderArgs(enc),...videoInputArgs({electronOffscreen:this.electronOffscreen,fps:this.video.fps,inputFps:this.inputFps(),width:this.video.width,height:this.video.height}),...audioPlan.args,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,gop:this.video.fps*(Number(this.video.gopSeconds)||1),bitrate,maxrate,bufsize,x264Preset:this.video.x264Preset||process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",this.video.audioBitrate||process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
     if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg command: ffmpeg ${args.join(" ")}`);
     const started=Date.now();
     this.ffmpeg=spawn(FFMPEG_BIN,args,{stdio:["pipe","ignore","pipe"]});
@@ -587,15 +886,26 @@ class Compositor extends EventEmitter {
       if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg: ${line}`);
       else if(/error|failed|cannot|buffer|queue/i.test(line))this.logger.warn(`[compositor:${this.accountId}] ffmpeg: ${line}`);
     });
-    this.ffmpeg.on("exit",(code,signal)=>{
+    const proc=this.ffmpeg;
+    proc.on("exit",(code,signal)=>{
+      if(this.ffmpeg!==proc&&this.ffmpeg!==null)return;
       this.logger.warn(`[compositor:${this.accountId}] ffmpeg exited (code ${code}, signal ${signal})`);
-      if(code!==0&&enc.hardware&&!this.forceCpu&&Date.now()-started<8000){
-        this.forceCpu=true;
-        this.logger.warn(`[compositor:${this.accountId}] ${enc.label} failed quickly - switching compositor to CPU x264`);
-      }
+      if(code!==0&&enc.hardware&&Date.now()-started<8000)this._fallbackEncoder(enc);
       if(this.shouldRun&&this.state!=="stopping")this._scheduleReconnect();
     });
     this.ffmpeg.stdin.on("error",err=>{if(err.code!=="EPIPE")this.logger.warn(`[compositor:${this.accountId}] ffmpeg stdin error: ${err.message}`);});
+  }
+
+  // A hardware encoder that dies within seconds of starting is treated as
+  // broken for this compositor: walk the chain (NVENC -> QSV/VAAPI -> x264)
+  // and keep broadcasting instead of retrying the same failure forever.
+  _fallbackEncoder(failed){
+    if(!this.failedEncoders.includes(failed.id))this.failedEncoders.push(failed.id);
+    const next=nextWorkingEncoder(this.encoderPreference,this.failedEncoders);
+    this.encoder=next;
+    this.forceCpu=!next.hardware;
+    this.logger.warn(`[compositor:${this.accountId}] ${failed.label} failed quickly - switching compositor to ${next.label}`);
+    return next;
   }
 
   _startWatchdog(){
@@ -620,10 +930,10 @@ class Compositor extends EventEmitter {
 
   _stopWatchdog(){if(this.watchdogTimer){clearInterval(this.watchdogTimer);this.watchdogTimer=null;}}
 
-  _scheduleReconnect(){
+  _scheduleReconnect(delayOverride=null){
     if(!this.shouldRun||this.restartTimer||this.reconnecting)return;
-    const delay=this.reconnectBackoffMs;
-    this.reconnectBackoffMs=Math.min(this.reconnectBackoffMs*2,30000);
+    const delay=delayOverride??this.reconnectBackoffMs;
+    if(delayOverride==null)this.reconnectBackoffMs=Math.min(this.reconnectBackoffMs*2,30000);
     this._setState("reconnecting");
     this.restartTimer=setTimeout(async()=>{
       this.restartTimer=null;
@@ -650,6 +960,7 @@ class Compositor extends EventEmitter {
     this._stopFramePump();
     this._stopMusicPoll();
     this._stopLiveAudioTap();
+    if(this.layerVolumeTimer){clearInterval(this.layerVolumeTimer);this.layerVolumeTimer=null;}
     if(this.musicAudioTap){
       const c=this.musicAudioTap;
       this.musicAudioTap=null;
@@ -658,6 +969,7 @@ class Compositor extends EventEmitter {
     }
     if(this.musicAudioFifoFd!=null){try{fs.closeSync(this.musicAudioFifoFd);}catch{}this.musicAudioFifoFd=null;}
     this.currentMusicTrackId=null;
+    if(this.browserAudio){try{this.browserAudio.stop();}catch{}}
     const work=(async()=>{
       if(this.client){try{await this.client.send("Page.stopScreencast");}catch{}try{await this.client.detach();}catch{}this.client=null;}
       if(this.ffmpeg){
@@ -696,4 +1008,4 @@ class Compositor extends EventEmitter {
   }
 }
 
-module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan,compositorFilterGraph,videoInputArgs,framePumpBacklogLimit,nextFrameDelay,resyncFrameIndex,electronOffscreenWindowOptions};
+module.exports={Compositor,defaultVideoConfig,buildChromiumGpuArgs,chromiumSecurityArgs,chromiumLaunchArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan,pcmInputArgs,compositorFilterGraph,videoInputArgs,pumpTimestampMode,framePumpBacklogLimit,cfrBacklogLimit,framesOwed,nextFrameDelay,resyncFrameIndex,electronOffscreenWindowOptions,effectiveMixerGains};

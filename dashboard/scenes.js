@@ -150,6 +150,43 @@ const SCENE_BASE_CSS = `
   @media (max-width:800px) { .rn-content{padding:2rem}.rn-brand{top:18px;left:18px}.rn-corner{right:18px;bottom:18px}.rn-countdown{gap:.6rem;padding:.8rem}.rn-countdown-cell{min-width:3.2rem} }
 `;
 
+// Server-side render performance.
+//
+// Headless Chromium re-rasterises and (for the CDP screencast) JPEG-encodes
+// the WHOLE viewport whenever any pixel is damaged. The scene shell above has
+// several infinite 60 Hz animations (grid drift behind a mask, title pulse,
+// glitch layers, pulsing dot) plus full-screen blend layers, so even a static
+// Starting Soon card forced 60 full software frames per second on a VPS.
+//
+// "full"    = unchanged look (OBS browser sources, GPU hosts)
+// "reduced" = no continuous CSS animation / blend layers; motion that matters
+//             is driven by the page's own low-rate JS tick instead
+// "minimal" = reduced + no glow filters/shadows at all
+const EFFECT_LEVELS = ["full", "reduced", "minimal"];
+
+function normaliseEffects(value) {
+  const v = String(value || "full").toLowerCase();
+  return EFFECT_LEVELS.includes(v) ? v : "full";
+}
+
+function scenePerfCss(effects) {
+  const level = normaliseEffects(effects);
+  if (level === "full") return "";
+  const reduced = `
+    .rn-scene *, .rn-scene *::before, .rn-scene *::after, .rn-scene,
+    .rn-music-stage *, .rn-music-stage *::before, .rn-music-stage *::after, .rn-music-stage { animation:none !important; transition:none !important; }
+    .rn-scanlines, .rn-music-stage::after { display:none !important; }
+    .rn-glitch::before, .rn-glitch::after { display:none !important; }
+    .rn-grid { will-change:auto !important; }
+    .rn-eyebrow, .rn-countdown { backdrop-filter:none !important; background:rgba(10,13,24,.82) !important; }`;
+  if (level === "reduced") return reduced;
+  return `${reduced}
+    .rn-title, .rn-countdown-num, .rn-brand, .rn-music-title { text-shadow:none !important; }
+    .rn-brand img, #rn-spectrum { filter:none !important; }
+    .rn-cover-halo, .rn-wash { display:none !important; }
+    .rn-pulse { box-shadow:none !important; }`;
+}
+
 function sceneStyleVars(accent) {
   const a = accent || "#00f0ff";
   return [
@@ -339,8 +376,16 @@ function nowPlayingWidget(login, corner) {
         }
         poll();
         window.addEventListener("resize", fitMeta);
+        // Track changes arrive as "music" events; the interval is only a
+        // resync fallback (it used to poll every 2 s).
+        try {
+          if (window.__rnNowPlayingEvents) window.__rnNowPlayingEvents.close();
+          var es = new EventSource(${JSON.stringify(`/overlay/${encodeURIComponent(login)}/events`)});
+          window.__rnNowPlayingEvents = es;
+          es.onmessage = function (e) { try { var m = JSON.parse(e.data); if (m && m.type === "music") poll(); } catch (err) {} };
+        } catch (e) {}
         window.__rnNowPlayingTimer && clearInterval(window.__rnNowPlayingTimer);
-        window.__rnNowPlayingTimer = setInterval(poll, 2000);
+        window.__rnNowPlayingTimer = setInterval(poll, 15000);
       })();
     </script>`;
 }
@@ -353,6 +398,7 @@ function withWidgets(fragment, overlayConfig, login) {
 
 module.exports = {
   escapeHtml, cssUrl, hexAlpha, page, SCENE_BASE_CSS, sceneStyleVars,
+  EFFECT_LEVELS, normaliseEffects, scenePerfCss,
   startingSoonFragment, brbFragment, endingFragment, offlineFragment,
   nowPlayingWidget, withWidgets,
 };

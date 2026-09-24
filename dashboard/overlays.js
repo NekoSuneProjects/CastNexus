@@ -2,9 +2,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const express = require("express");
 const {
-  escapeHtml, page, startingSoonFragment, brbFragment, endingFragment, offlineFragment, withWidgets,
+  escapeHtml, page, startingSoonFragment, brbFragment, endingFragment, offlineFragment, withWidgets, scenePerfCss, nowPlayingWidget,
 } = require("./scenes");
 const { musicSceneFragment } = require("./music-scene");
+const { resolveProgram, programPage } = require("./scene-render");
 
 const PROFILE_STORE_SYSTEM = "restreamnode-profile-store-v1";
 const AUDIO_MIME = {
@@ -177,8 +178,45 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn, subscribeE
     return getActiveProfile?.(account)?.id || activeProfileForAccount(account)?.id || null;
   }
 
-  function sceneWithMusic(fragment, account, sceneName) {
-    return withWidgets(fragment + profileSceneMusicFrame(account, sceneName), account.overlayConfig, account.twitchLogin);
+  // ?effects=reduced|minimal from the server-side compositor switches off the
+  // scene shell's continuous 60 Hz CSS animations (see scenePerfCss).
+  function perfStyle(query) {
+    const css = scenePerfCss(query?.effects);
+    return css ? `<style>${css}</style>` : "";
+  }
+
+  function sceneWithMusic(fragment, account, sceneName, query) {
+    return withWidgets(fragment + profileSceneMusicFrame(account, sceneName), account.overlayConfig, account.twitchLogin) + perfStyle(query);
+  }
+
+  function activeMusicUrl(account) {
+    const profile = getActiveProfile?.(account) || activeProfileForAccount(account);
+    return profile?.id ? `/overlay/${encodeURIComponent(account.twitchLogin)}/music/${encodeURIComponent(profile.id)}` : null;
+  }
+
+  function programOptions(account, req) {
+    const q = req.query || {};
+    return {
+      sceneId:q.scene ? String(q.scene) : null,
+      preview:String(q.preview || "") === "1",
+      effects:q.effects ? String(q.effects) : null,
+      liveContent:String(q.live || "1") !== "0",
+      ignoreSlot:String(q.ignoreSlot || "") === "1",
+      musicUrl:activeMusicUrl(account),
+    };
+  }
+
+  function forwardedQuery(req) {
+    const params = new URLSearchParams();
+    for (const key of ["scene", "preview", "effects", "live", "ignoreSlot"]) if (req.query?.[key] != null) params.set(key, String(req.query[key]));
+    return params.toString();
+  }
+
+  function sendProgramPage(req, res, account, orientation) {
+    const options = programOptions(account, req);
+    const model = resolveProgram(account, orientation, options);
+    res.setHeader("Cache-Control", "no-store");
+    res.send(programPage(req.params.login, model, { preview:options.preview, guides:options.preview && String(req.query.guides || "") === "1" ? "safe" : "", query:forwardedQuery(req) }));
   }
 
   function sendTrackCover(res, account, profileId, musicState, trackId) {
@@ -195,22 +233,44 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn, subscribeE
   router.get("/:login/starting-soon", (req, res) => {
     const account = accountOr404(req, res); if (!account) return;
     const cfg = account.overlayConfig?.startingSoon || {};
-    res.send(page({ title: req.query.title || cfg.title || "Starting Soon", body: sceneWithMusic(startingSoonFragment(cfg, req.query, account), account, "startingSoon"), transparent: false }));
+    res.send(page({ title: req.query.title || cfg.title || "Starting Soon", body: sceneWithMusic(startingSoonFragment(cfg, req.query, account), account, "startingSoon", req.query), transparent: false }));
   });
   router.get("/:login/brb", (req, res) => {
     const account = accountOr404(req, res); if (!account) return;
     const cfg = account.overlayConfig?.brb || {};
-    res.send(page({ title: req.query.title || cfg.title || "BRB", body: sceneWithMusic(brbFragment(cfg, req.query, account), account, "brb"), transparent: false }));
+    res.send(page({ title: req.query.title || cfg.title || "BRB", body: sceneWithMusic(brbFragment(cfg, req.query, account), account, "brb", req.query), transparent: false }));
   });
   router.get("/:login/ending", (req, res) => {
     const account = accountOr404(req, res); if (!account) return;
     const cfg = account.overlayConfig?.ending || {};
-    res.send(page({ title: req.query.title || cfg.title || "Thanks for watching", body: sceneWithMusic(endingFragment(cfg, req.query, account), account, "ending"), transparent: false }));
+    res.send(page({ title: req.query.title || cfg.title || "Thanks for watching", body: sceneWithMusic(endingFragment(cfg, req.query, account), account, "ending", req.query), transparent: false }));
   });
   router.get("/:login/offline", (req, res) => {
     const account = accountOr404(req, res); if (!account) return;
     const cfg = account.overlayConfig?.offline || {};
-    res.send(page({ title: req.query.title || cfg.title || "Offline", body: withWidgets(offlineFragment(cfg, req.query, account), account.overlayConfig, req.params.login), transparent: false }));
+    res.send(page({ title: req.query.title || cfg.title || "Offline", body: withWidgets(offlineFragment(cfg, req.query, account), account.overlayConfig, req.params.login) + perfStyle(req.query), transparent: false }));
+  });
+
+  // Overlay Studio program output. The compositor loads /program/<orientation>;
+  // the dashboard preview adds ?preview=1 (and ?scene=<id>&ignoreSlot=1 to
+  // preview a scene that is not live, &guides=1 for editor-only safe areas).
+  router.get("/:login/program/:orientation/data.json", (req, res) => {
+    const account = accountOr404(req, res); if (!account) return;
+    const orientation = req.params.orientation === "vertical" ? "vertical" : "landscape";
+    res.setHeader("Cache-Control", "no-store");
+    res.json(resolveProgram(account, orientation, programOptions(account, req)));
+  });
+  router.get("/:login/program/:orientation", (req, res) => {
+    const account = accountOr404(req, res); if (!account) return;
+    sendProgramPage(req, res, account, req.params.orientation === "vertical" ? "vertical" : "landscape");
+  });
+
+  // Small CastNexus widgets usable as Overlay Studio layers or OBS sources.
+  router.get("/:login/widget/nowplaying", (req, res) => {
+    const account = accountOr404(req, res); if (!account) return;
+    const fill = String(req.query.fill || "") === "1";
+    const css = fill ? `<style>#cs-now-playing{position:absolute!important;inset:0!important;width:100%!important;max-width:none!important;min-width:0!important;height:100%!important}</style>` : "";
+    res.send(page({ title:"Now Playing", body:nowPlayingWidget(req.params.login, req.query.corner || "br") + css }));
   });
 
   router.get("/:login/music/:profileId/now.json", (req, res) => {
@@ -283,12 +343,17 @@ function createOverlayRouter({ getAccountByLogin, musicDir, isLiveFn, subscribeE
   router.get("/:login/master", (req, res) => {
     const account = accountOr404(req, res); if (!account) return;
     const fragment = withWidgets(resolveSceneFragment(account.currentScene, account), account.overlayConfig, req.params.login);
-    res.send(masterPage(req.params.login, fragment));
+    res.send(masterPage(req.params.login, fragment + perfStyle(req.query)));
   });
+  // Legacy compositor URL: now the landscape Overlay Studio program, which
+  // renders the same live video + active scene, plus any library layers.
   router.get("/:login/compositor", (req, res) => {
     const account = accountOr404(req, res); if (!account) return;
-    const fragment = withWidgets(resolveSceneFragment(account.currentScene, account), account.overlayConfig, req.params.login);
-    res.send(compositorPage(req.params.login, fragment));
+    if (String(req.query.legacy || "") === "1") {
+      const fragment = withWidgets(resolveSceneFragment(account.currentScene, account), account.overlayConfig, req.params.login);
+      return res.send(compositorPage(req.params.login, fragment));
+    }
+    sendProgramPage(req, res, account, "landscape");
   });
   router.get("/:login/events", (req, res) => {
     const account = accountOr404(req, res); if (!account) return;

@@ -14,6 +14,20 @@ const TARGET_SOURCE_BUFFER = Math.round(BYTES_PER_SEC * 0.10);
 const PRIME_BYTES = Math.round(BYTES_PER_SEC * 0.075);
 const MAX_CONSUMER_BACKLOG = BYTES_PER_SEC;
 
+// Scale s16le PCM in place. Used for the Overlay Studio audio mixer so a volume
+// change is applied server-side instantly, without restarting FFmpeg.
+function applyPcmGain(buffer,gain){
+  if(!(gain>=0)||gain===1)return buffer;
+  if(gain===0){buffer.fill(0);return buffer;}
+  const samples=Math.floor(buffer.length/BYTES_PER_SAMPLE);
+  for(let i=0;i<samples;i++){
+    const offset=i*BYTES_PER_SAMPLE;
+    const value=Math.round(buffer.readInt16LE(offset)*gain);
+    buffer.writeInt16LE(value>32767?32767:value<-32768?-32768:value,offset);
+  }
+  return buffer;
+}
+
 function trimPcmQueue(chunks,chunkBytes,maxBytes){
   let excess=Math.max(0,chunkBytes-maxBytes);
   excess-=excess%FRAME_BYTES;
@@ -31,8 +45,9 @@ function trimPcmQueue(chunks,chunkBytes,maxBytes){
 // as a timing master, so a stalled producer must become silence rather than
 // a gap; otherwise video delivery also stalls even while capture stays fluid.
 class PcmAudioRelay {
-  constructor({ inputPort, outputPort, logger }) {
+  constructor({ inputPort, outputPort, logger, gain = 1 }) {
     this.inputPort=inputPort;
+    this.gain=Number.isFinite(Number(gain))?Math.max(0,Number(gain)):1;
     this.outputPort=outputPort;
     this.logger=logger||console;
     this.writer=null;
@@ -60,7 +75,7 @@ class PcmAudioRelay {
       if(this.worker)return this.readyPromise;
       this.readyPromise=new Promise(resolve=>{this._resolveReady=resolve;});
       const settle=value=>{const resolve=this._resolveReady;this._resolveReady=null;resolve?.(value);};
-      this.worker=new Worker(__filename,{workerData:{castNexusPcmRelay:true,inputPort:this.inputPort,outputPort:this.outputPort}});
+      this.worker=new Worker(__filename,{workerData:{castNexusPcmRelay:true,inputPort:this.inputPort,outputPort:this.outputPort,gain:this.gain}});
       this.worker.on("message",message=>{if(message?.ready)settle(true);});
       this.worker.on("error",error=>{this.logger.warn?.(`[audio-relay:${this.inputPort}] worker error: ${error.message}`);settle(false);});
       this.worker.on("exit",()=>settle(false));
@@ -104,6 +119,13 @@ class PcmAudioRelay {
     this.pacer=setInterval(()=>this._tick(),TICK_MS);
   }
 
+  setGain(gain){
+    const next=Number.isFinite(Number(gain))?Math.max(0,Math.min(4,Number(gain))):1;
+    this.gain=next;
+    if(this.worker)this.worker.postMessage({gain:next});
+    return next;
+  }
+
   _tick(){
     const consumer=this.consumer;
     if(!consumer?.writable)return;
@@ -128,6 +150,7 @@ class PcmAudioRelay {
       if(this.chunkBytes===0)this.primed=false;
     }
     if(filled<need)output.fill(0,filled);
+    if(this.gain!==1&&filled>0)applyPcmGain(output.subarray(0,filled-(filled%BYTES_PER_SAMPLE)),this.gain);
     consumer.write(output);
     this.bytesSent+=need;
   }
@@ -155,9 +178,9 @@ class PcmAudioRelay {
 }
 
 if(!isMainThread&&workerData?.castNexusPcmRelay){
-  const relay=new PcmAudioRelay({inputPort:workerData.inputPort,outputPort:workerData.outputPort});
+  const relay=new PcmAudioRelay({inputPort:workerData.inputPort,outputPort:workerData.outputPort,gain:workerData.gain});
   relay.start();
-  parentPort.on("message",message=>{if(message==="stop"){relay.stop();process.exit(0);}});
+  parentPort.on("message",message=>{if(message==="stop"){relay.stop();process.exit(0);}if(message&&typeof message==="object"&&message.gain!=null)relay.setGain(message.gain);});
 }
 
-module.exports={PcmAudioRelay,SAMPLE_RATE,BYTES_PER_SEC,PRIME_BYTES,TARGET_SOURCE_BUFFER,MAX_SOURCE_BUFFER,trimPcmQueue,isMainThread};
+module.exports={PcmAudioRelay,applyPcmGain,SAMPLE_RATE,BYTES_PER_SEC,PRIME_BYTES,TARGET_SOURCE_BUFFER,MAX_SOURCE_BUFFER,trimPcmQueue,isMainThread};

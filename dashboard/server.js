@@ -19,7 +19,14 @@ const { createHostedOauth } = require("./hosted-oauth");
 const { homePage, loginPage, privacyPage, termsPage } = require("./site-pages");
 const profileRtmp = require("./profile-rtmp");
 const gpuEncoder = require("./gpu-encoder");
-const { OUTPUT_LAYOUTS, normaliseLayout, destinationFfmpegArgs } = require("./destination-output");
+const { OUTPUT_LAYOUTS, OUTPUT_MODES, normaliseLayout, destinationFfmpegArgs, sanitiseOutput, effectiveOutput, planDestination, plannedDestinationArgs, renditionKey, renditionArgs } = require("./destination-output");
+const sceneModel = require("./scene-model");
+const { resolveProgram } = require("./scene-render");
+const { SupervisedProcess, killHard } = require("./process-supervisor");
+const captions = require("./captions");
+const monitor = require("./resource-monitor");
+const performanceModes = require("./performance-modes");
+const hardwareProfile = require("./hardware-profile");
 const relayPush = require("./relay-push");
 const { EncryptedFileSessionStore, accountSessionIsValid } = require("./persistent-session-store");
 const { publicBaseUrl, normalisePublicBase, playbackTargets } = require("./public-playback");
@@ -104,6 +111,9 @@ function getAccount(id) {
     if (dest.layout !== layout) { dest.layout = layout; dirty = true; }
   }
   if (profileRtmp.ensureProfileRtmpKeys(account, { legacyKey:account.pcKey })) dirty = true;
+  // Overlay Studio scene library (created from defaults on first load; old
+  // overlayConfig / currentScene data keeps working through the slots).
+  if (sceneModel.ensure(account)) dirty = true;
   if (dirty) saveState(state);
   return account;
 }
@@ -142,59 +152,296 @@ function destinationSourcePathFor(account) {
   if (!pathName) return null;
   return account.compositorEnabled ? compositedPathFor(account.twitchUserId) : pathName;
 }
-function compositorFor(account) {
-  let compositor = compositors.get(account.twitchUserId);
-  if (!compositor) {
-    compositor = new Compositor({
-      accountId:account.twitchUserId,
-      pageUrl:`${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/compositor`,
-      audioSourceUrl:`rtmp://127.0.0.1:1935/${safePathFor(account)}`,
-      outputUrl:`rtmp://127.0.0.1:1935/${compositedPathFor(account.twitchUserId)}`,
-      getMusicNow:() => profileMusic.getNow(getAccount(account.twitchUserId), null, { respectScene:true }),
-      musicFilePathFor:(trackId) => {
-        const acc = getAccount(account.twitchUserId);
-        const profile = profileMusic.activeProfileFor(acc);
-        return profile ? profileMusic.filePathFor(acc, profile.id, trackId) : null;
+// ---------------------------------------------------------------------------
+// Program compositors (Overlay Studio output).
+//
+// One headless renderer per (orientation, scene) that some enabled
+// destination actually consumes. The landscape live program keeps the
+// historic composited/<id> MediaMTX path, so existing consumers are
+// unaffected; a vertical program exists only while a 9:16 destination needs
+// it. Destinations that match a program's size/fps/bitrate stream-copy it,
+// so N destinations share ONE browser render + ONE encode.
+const PROGRAM_IDLE_STOP_MS = Number(process.env.PROGRAM_IDLE_STOP_MS || 15000);
+const programCompositors = new Map(); // key -> { key, accountId, orientation, sceneId, path, compositor, refs:Set, stopTimer }
+const renditions = new Map(); // key -> { id, path, supervisor, refs:Set, failed:[], forceCpu }
+let lastReadyPaths = new Set();
+
+function safeSeg(value) { return String(value || "x").replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 80) || "x"; }
+function programKey(accountId, orientation, sceneId) { return `${accountId}|${orientation}|${sceneId || "live"}`; }
+function programPathFor(accountId, orientation, sceneId) {
+  if (orientation === "landscape" && !sceneId) return compositedPathFor(accountId);
+  return `program/${safeSeg(accountId)}/${orientation}-${safeSeg(sceneId || "live")}`;
+}
+// Source stream info (fps/size) per account, probed once each time a source
+// goes live so auto programs never render more frames than the source has.
+const sourceInfo = new Map(); // accountId -> { info, promise }
+function probeSourceFor(account, pathName) {
+  const entry = { info:null, promise:null };
+  entry.promise = hardwareProfile.probeStreamInfo(`rtmp://127.0.0.1:1935/${pathName}`).then(info => {
+    entry.info = info;
+    if (info) console.log(`[dashboard] ${account.twitchLogin} source ${info.width || "?"}x${info.height || "?"} @ ${info.fps || "?"} fps`);
+    return info;
+  }).catch(() => null);
+  sourceInfo.set(account.twitchUserId, entry);
+  return entry.promise;
+}
+function programSettings(account, orientation) {
+  const o = orientation === "vertical" ? "vertical" : "landscape";
+  const p = (sceneModel.library(account).programs || {})[o];
+  if (!p?.auto) return p;
+  const auto = hardwareProfile.autoProgram(o, { sourceFps:sourceInfo.get(account.twitchUserId)?.info?.fps || null });
+  return { ...p, width:auto.width, height:auto.height, fps:auto.fps, autoTier:auto.tier };
+}
+function programContext(account) {
+  return { enabled:!!account.compositorEnabled, landscape:programSettings(account, "landscape"), vertical:programSettings(account, "vertical") };
+}
+function programVideo(account, orientation) {
+  const p = programSettings(account, orientation);
+  return { width:p.width, height:p.height, fps:p.fps, ...(p.bitrateKbps ? { bitrate:`${p.bitrateKbps}k`, maxrate:`${p.bitrateKbps}k`, bufsize:`${p.bitrateKbps * 2}k` } : {}) };
+}
+function programPageUrl(account, orientation, sceneId) {
+  const q = sceneId ? `?scene=${encodeURIComponent(sceneId)}` : "";
+  return `${DASHBOARD_ORIGIN}/overlay/${encodeURIComponent(account.twitchLogin)}/program/${orientation}${q}`;
+}
+function musicNowFor(accountId) { return profileMusic.getNow(getAccount(accountId), null, { respectScene:true }); }
+function musicFileFor(accountId, trackId) {
+  const acc = getAccount(accountId);
+  const profile = profileMusic.activeProfileFor(acc);
+  return profile ? profileMusic.filePathFor(acc, profile.id, trackId) : null;
+}
+
+function programEntry(account, orientation, sceneId) {
+  const key = programKey(account.twitchUserId, orientation, sceneId);
+  let entry = programCompositors.get(key);
+  if (entry) return entry;
+  const accountId = account.twitchUserId;
+  const lib = sceneModel.library(account);
+  const pathName = programPathFor(accountId, orientation, sceneId);
+  const compositor = new Compositor({
+    accountId:orientation === "landscape" && !sceneId ? accountId : `${accountId}-${orientation}-${safeSeg(sceneId || "live")}`,
+    pageUrl:programPageUrl(account, orientation, sceneId),
+    audioSourceUrl:`rtmp://127.0.0.1:1935/${safePathFor(account)}`,
+    outputUrl:`rtmp://127.0.0.1:1935/${pathName}`,
+    getMusicNow:() => musicNowFor(accountId),
+    musicFilePathFor:trackId => musicFileFor(accountId, trackId),
+    video:programVideo(account, orientation),
+    browserAudio:sceneModel.libraryNeedsBrowserAudio(account),
+    mixer:lib.mixer,
+    diagnostics:{ group:"program", label:`${orientation === "vertical" ? "Vertical" : "Horizontal"} program${sceneId ? ` (${sceneModel.findScene(account, sceneId)?.name || sceneId})` : ""}` },
+  });
+  entry = { key, accountId, orientation, sceneId:sceneId || null, path:pathName, compositor, refs:new Set(), stopTimer:null, signature:JSON.stringify(programVideo(account, orientation)) };
+  programCompositors.set(key, entry);
+  return entry;
+}
+
+function acquireProgram(account, orientation, sceneId, ref) {
+  const entry = programEntry(account, orientation, sceneId);
+  entry.refs.add(ref);
+  if (entry.stopTimer) { clearTimeout(entry.stopTimer); entry.stopTimer = null; }
+  if (!["running", "starting", "reconnecting"].includes(entry.compositor.state) && !entry.starting) {
+    // Wait for the source probe (fps/size) so an auto program starts at the
+    // right frame rate instead of restarting a few seconds later.
+    entry.starting = true;
+    const pending = sourceInfo.get(account.twitchUserId)?.promise || Promise.resolve(null);
+    Promise.race([pending, new Promise(resolve => setTimeout(resolve, 6000))]).finally(() => {
+      entry.starting = false;
+      if (!programCompositors.has(entry.key) || !entry.refs.size) return;
+      const video = programVideo(getAccount(account.twitchUserId) || account, orientation);
+      entry.compositor.video = { ...entry.compositor.video, ...video };
+      entry.signature = JSON.stringify(video);
+      entry.compositor.start();
+      const p = programSettings(account, orientation);
+      console.log(`[dashboard] ${account.twitchLogin} ${orientation} program started ${video.width}x${video.height}@${video.fps}${p?.autoTier ? ` (auto: ${p.autoTier})` : ""} -> ${entry.path}`);
+    });
+  }
+  return entry;
+}
+
+function releaseProgram(key, ref) {
+  const entry = programCompositors.get(key);
+  if (!entry) return;
+  entry.refs.delete(ref);
+  if (entry.refs.size || entry.stopTimer) return;
+  // Linger briefly so toggling a destination does not thrash Chromium.
+  entry.stopTimer = setTimeout(() => {
+    entry.stopTimer = null;
+    if (entry.refs.size) return;
+    programCompositors.delete(entry.key);
+    entry.compositor.stop().catch(() => {});
+    console.log(`[dashboard] ${entry.orientation} program stopped (no consumers) ${entry.path}`);
+  }, PROGRAM_IDLE_STOP_MS);
+}
+
+function stopProgramsFor(accountId) {
+  for (const entry of [...programCompositors.values()]) {
+    if (entry.accountId !== accountId) continue;
+    if (entry.stopTimer) clearTimeout(entry.stopTimer);
+    programCompositors.delete(entry.key);
+    entry.compositor.stop().catch(() => {});
+  }
+}
+
+// Push live scene/mixer/audio changes into running renderers: page content
+// updates over SSE (no restart); the mixer applies in the audio relays; only
+// a change in whether browser audio is needed (or program size) restarts.
+function refreshPrograms(account, { restartOnResize = true } = {}) {
+  const lib = sceneModel.library(account);
+  const needsAudio = sceneModel.libraryNeedsBrowserAudio(account);
+  for (const entry of programCompositors.values()) {
+    if (entry.accountId !== account.twitchUserId) continue;
+    entry.compositor.setMixer(lib.mixer);
+    entry.compositor.setBrowserAudio(needsAudio);
+    const signature = JSON.stringify(programVideo(account, entry.orientation));
+    if (restartOnResize && signature !== entry.signature) {
+      entry.signature = signature;
+      entry.compositor.video = { ...entry.compositor.video, ...programVideo(account, entry.orientation) };
+      if (entry.compositor.state === "running") entry.compositor._scheduleReconnect(250);
+    }
+  }
+  for (const orientation of sceneModel.ORIENTATIONS) events.publish(account.twitchUserId, { type:"program", orientation });
+}
+
+// Legacy single-compositor API used elsewhere (and by older tests/tools).
+function compositorFor(account) { return programEntry(account, "landscape", null).compositor; }
+function startCompositorFor(account) { if (account.compositorEnabled) acquireProgram(account, "landscape", null, "legacy"); }
+function stopCompositorFor(accountId) { stopProgramsFor(accountId); }
+
+// ---------------------------------------------------------------------------
+// Shared renditions: destinations that must re-encode the same feed to the
+// same size/fps/bitrate/encoder share ONE FFmpeg encode and stream-copy it.
+function renditionFor(account, plan, sourcePath, ref) {
+  const key = renditionKey(plan, sourcePath);
+  if (!key) return null;
+  let r = renditions.get(key);
+  if (!r) {
+    const id = crypto.createHash("sha1").update(key).digest("hex").slice(0, 12);
+    const accountId = account.twitchUserId;
+    const outputPath = `rendition/${safeSeg(accountId)}/${id}`;
+    r = { key, id, accountId, path:outputPath, refs:new Set(), failed:[], forceCpu:false, encoder:null, plan };
+    const pref = plan.output?.videoEncoder || "auto";
+    r.supervisor = new SupervisedProcess({
+      name:`${account.twitchLogin}/rendition-${id}`,
+      shouldRun:() => r.refs.size > 0 && activeFeedPath.has(accountId),
+      build:() => {
+        if (sourcePath !== activeFeedPath.get(accountId) && !lastReadyPaths.has(sourcePath)) return { wait:true, reason:`waiting for ${sourcePath}` };
+        r.encoder = r.forceCpu ? gpuEncoder.CPU_PROFILE : (r.failed.length ? gpuEncoder.nextWorkingEncoder(pref, r.failed) : gpuEncoder.resolveEncoder(pref));
+        r.startedAt = Date.now();
+        return { args:renditionArgs(`rtmp://127.0.0.1:1935/${sourcePath}`, r.plan, `rtmp://127.0.0.1:1935/${outputPath}`, { encoder:r.encoder }) };
+      },
+      onExit:({ code, uptimeMs }) => {
+        if (code !== 0 && r.encoder?.hardware && uptimeMs < 8000) {
+          r.failed.push(r.encoder.id);
+          const next = gpuEncoder.nextWorkingEncoder(pref, r.failed);
+          console.warn(`[dashboard] rendition ${id}: ${r.encoder.label} failed quickly - falling back to ${next.label}`);
+          if (!next.hardware) r.forceCpu = true;
+        }
       },
     });
-    compositors.set(account.twitchUserId, compositor);
+    r.offDiagnostics = monitor.registerComponent(`destination:${accountId}:rendition-${id}`, { label:`Shared rendition ${plan.width}x${plan.height}@${plan.fps}`, group:"destination", tree:false, pids:() => [r.supervisor.pid()].filter(Boolean), meta:() => ({ encoder:r.encoder?.label || null }) });
+    renditions.set(key, r);
   }
-  return compositor;
+  r.refs.add(ref);
+  r.supervisor.start();
+  return r;
 }
-function startCompositorFor(account) { if (account.compositorEnabled) compositorFor(account).start(); }
-function stopCompositorFor(accountId) { const compositor = compositors.get(accountId); if (compositor) compositor.stop(); }
+
+function releaseRendition(key, ref) {
+  const r = renditions.get(key);
+  if (!r) return;
+  r.refs.delete(ref);
+  if (r.refs.size) return;
+  r.supervisor.stop();
+  r.offDiagnostics?.();
+  renditions.delete(key);
+}
 
 const DESTINATION_URL_RE = /^(rtmps?|srt):\/\/.+/i;
 const DESTINATION_URL_HINT = "a valid rtmp://, rtmps://, or srt:// url is required";
-function startDestination(account, dest, pathName, { forceCpu = false } = {}) {
-  const key = `${account.twitchUserId}:${dest.id}`;
-  if (activeDestinations.has(key) || !dest.enabled || !pathName) return;
-  const source = `rtmp://127.0.0.1:1935/${pathName}`;
-  const started = Date.now();
-  const child = spawn("ffmpeg", destinationFfmpegArgs(source, dest, { forceCpu }));
-  child.stderr.on("data", () => {});
-  child.on("exit", code => {
-    activeDestinations.delete(key);
-    const stillWanted = findDestination(account, dest.id)?.enabled;
-    const stillSource = destinationSourcePathFor(account) === pathName;
-    const selected = gpuEncoder.status().selected;
-    if (code !== 0 && !forceCpu && selected.hardware && normaliseLayout(dest.layout) !== "source" && Date.now() - started < 8000 && stillWanted && stillSource) {
-      console.warn(`[dashboard] ${account.twitchLogin}/${dest.name} ${selected.label} failed quickly - falling back to CPU x264`);
-      return setTimeout(() => startDestination(account, findDestination(account, dest.id) || dest, pathName, { forceCpu:true }), 500);
-    }
-    if (code !== 0) console.log(`[dashboard] ${account.twitchLogin}/${dest.name} push exited (code ${code})`);
-    if (stillSource && stillWanted) setTimeout(() => { if (destinationSourcePathFor(account) === pathName) startDestination(account, findDestination(account, dest.id) || dest, pathName, { forceCpu }); }, 2000);
+
+// Every destination is a supervised FFmpeg worker. Its build() is evaluated
+// on each (re)start, so it always reads the current profile, scene routing,
+// encoder fallback state and program readiness.
+function startDestination(account, dest, _legacyPathName = null, { forceCpu = false } = {}) {
+  const accountId = account.twitchUserId;
+  const key = `${accountId}:${dest.id}`;
+  if (activeDestinations.has(key) || !dest.enabled || !activeFeedPath.has(accountId)) return;
+  const worker = { key, destId:dest.id, name:dest.name, forceCpu, failedEncoders:[], encoder:null, plan:null, programKey:null, renditionKey:null, startedAt:null };
+  const current = () => findDestination(getAccount(accountId), dest.id) || (dest.id === relayPush.RELAY_DESTINATION_ID ? dest : null);
+  worker.supervisor = new SupervisedProcess({
+    name:`${account.twitchLogin}/${dest.name}`,
+    shouldRun:() => !!current()?.enabled && activeFeedPath.has(accountId),
+    build:() => {
+      const acc = getAccount(accountId);
+      const d = current();
+      const raw = activeFeedPath.get(accountId);
+      if (!acc || !d || !raw) return null;
+      const plan = planDestination(d, programContext(acc));
+      worker.plan = plan;
+      let sourcePath = raw;
+      if (plan.feed === "program") {
+        const entry = acquireProgram(acc, plan.orientation, plan.sceneId, key);
+        if (worker.programKey && worker.programKey !== entry.key) releaseProgram(worker.programKey, key);
+        worker.programKey = entry.key;
+        sourcePath = entry.path;
+      } else if (worker.programKey) { releaseProgram(worker.programKey, key); worker.programKey = null; }
+      let effective = plan;
+      const shared = !plan.legacy && !plan.copy && String(process.env.DESTINATION_SHARED_RENDITIONS || "true").toLowerCase() !== "false";
+      if (shared) {
+        const r = renditionFor(acc, plan, sourcePath, key);
+        if (worker.renditionKey && worker.renditionKey !== r.key) releaseRendition(worker.renditionKey, key);
+        worker.renditionKey = r.key;
+        sourcePath = r.path;
+        effective = { ...plan, copy:true, feed:"rendition" };
+      } else if (worker.renditionKey) { releaseRendition(worker.renditionKey, key); worker.renditionKey = null; }
+      if (sourcePath !== raw && !lastReadyPaths.has(sourcePath)) return { wait:true, reason:`waiting for ${sourcePath}` };
+      const pref = plan.output?.videoEncoder || "auto";
+      worker.encoder = worker.forceCpu ? gpuEncoder.CPU_PROFILE : (worker.failedEncoders.length ? gpuEncoder.nextWorkingEncoder(pref, worker.failedEncoders) : (pref === "auto" ? gpuEncoder.status().selected : gpuEncoder.resolveEncoder(pref)));
+      worker.startedAt = Date.now();
+      worker.sourcePath = sourcePath;
+      const sourceUrl = `rtmp://127.0.0.1:1935/${sourcePath}`;
+      const args = plan.legacy ? destinationFfmpegArgs(sourceUrl, d, { forceCpu:worker.forceCpu }) : plannedDestinationArgs(sourceUrl, d, effective, { encoder:worker.encoder, forceCpu:worker.forceCpu });
+      return { args };
+    },
+    onExit:({ code, uptimeMs }) => {
+      const plan = worker.plan;
+      const transcoding = plan && !(plan.legacy ? plan.copy : true);
+      const enc = worker.encoder;
+      if (code !== 0 && transcoding && !worker.forceCpu && enc?.hardware && uptimeMs < 8000) {
+        worker.failedEncoders.push(enc.id);
+        const next = gpuEncoder.nextWorkingEncoder(plan.output?.videoEncoder || "auto", worker.failedEncoders);
+        if (!next.hardware) worker.forceCpu = true;
+        console.warn(`[dashboard] ${account.twitchLogin}/${dest.name} ${enc.label} failed quickly - falling back to ${next.label}`);
+      }
+    },
   });
-  activeDestinations.set(key, child);
-  console.log(`[dashboard] started push -> ${account.twitchLogin}/${dest.name} (${normaliseLayout(dest.layout)}, ${forceCpu ? "CPU fallback" : gpuEncoder.status().selected.label})`);
+  worker.offDiagnostics = monitor.registerComponent(`destination:${accountId}:${dest.id}`, { label:`Destination · ${dest.name}`, group:"destination", tree:false, pids:() => [worker.supervisor.pid()].filter(Boolean), meta:() => ({ mode:worker.plan?.output?.mode || worker.plan?.layout || null, copy:!!worker.plan?.copy, encoder:worker.plan?.copy ? "copy" : worker.encoder?.label || null }) });
+  activeDestinations.set(key, worker);
+  worker.supervisor.start();
+  const plan = planDestination(dest, programContext(account));
+  console.log(`[dashboard] started push -> ${account.twitchLogin}/${dest.name} (${plan.reason})`);
 }
+
 function stopDestination(accountId, destId) {
-  const key = `${accountId}:${destId}`, child = activeDestinations.get(key);
-  if (!child) return;
-  child.removeAllListeners("exit"); child.kill("SIGTERM"); activeDestinations.delete(key);
+  const key = `${accountId}:${destId}`, worker = activeDestinations.get(key);
+  if (!worker) return;
+  activeDestinations.delete(key);
+  worker.supervisor.stop();
+  worker.offDiagnostics?.();
+  if (worker.programKey) releaseProgram(worker.programKey, key);
+  if (worker.renditionKey) releaseRendition(worker.renditionKey, key);
+}
+function restartDestination(account, dest) {
+  stopDestination(account.twitchUserId, dest.id);
+  if (dest.enabled && activeFeedPath.has(account.twitchUserId)) startDestination(account, dest);
 }
 function stopAllDestinationsFor(accountId) {
-  for (const key of [...activeDestinations.keys()]) if (key.startsWith(`${accountId}:`)) stopDestination(accountId, key.split(":")[1]);
+  for (const key of [...activeDestinations.keys()]) if (key.startsWith(`${accountId}:`)) stopDestination(accountId, key.slice(String(accountId).length + 1));
+}
+function destinationHealth(accountId, destId) {
+  const worker = activeDestinations.get(`${accountId}:${destId}`);
+  if (!worker) return null;
+  const s = worker.supervisor.status();
+  return { ...s, plan:worker.plan ? { feed:worker.plan.feed, orientation:worker.plan.orientation, copy:!!worker.plan.copy, legacy:!!worker.plan.legacy, reason:worker.plan.reason, shared:!!worker.renditionKey, width:worker.plan.width || null, height:worker.plan.height || null, fps:worker.plan.fps || null } : null, encoder:worker.plan?.copy && !worker.renditionKey ? "stream copy" : (worker.renditionKey ? renditions.get(worker.renditionKey)?.encoder?.label || null : worker.encoder?.label || null), sourcePath:worker.sourcePath || null };
 }
 function startRepublish(account, pathName) {
   if (activeRepublish.has(account.twitchUserId)) return;
@@ -268,8 +515,11 @@ async function startRelayPushFor(account, pathName) {
 function startOutputsFor(account, pathName) {
   const sourceSession = liveSessions.get(pathName);
   activeFeedPath.set(account.twitchUserId, pathName);
+  probeSourceFor(account, pathName);
   startRepublish(account, pathName);
-  if (account.compositorEnabled) startCompositorFor(account);
+  // Program compositors are started on demand by the destinations that read
+  // them (see acquireProgram), so an all-passthrough setup never launches
+  // Chromium or re-encodes video at all.
   const source = destinationSourcePathFor(account);
   for (const dest of account.destinations) if (dest.enabled) startDestination(account, dest, source);
   if (account.relayPushEnabled) startRelayPushFor(account, source);
@@ -321,6 +571,7 @@ async function pollLive() {
     const data = await response.json();
     readyPaths = new Set((data.items || []).filter(item => item.ready).map(item => item.name));
   } catch { readyPaths = new Set(); }
+  lastReadyPaths = readyPaths;
   for (const [pathName, live] of [...liveSessions.entries()]) {
     if (readyPaths.has(pathName)) continue;
     liveSessions.delete(pathName);
@@ -365,6 +616,8 @@ async function pollLive() {
   for (const raw of Object.values(state.accounts)) reconcileSelectedProfile(getAccount(raw.twitchUserId));
 }
 const pollLiveTimer=setInterval(pollLive, POLL_MS);
+monitor.registerComponent("dashboard:node",{label:"CastNexus dashboard (Node.js)",group:"dashboard",tree:false,pids:()=>[process.pid]});
+monitor.registerComponent("dashboard:republish",{label:"Public republish (stream copy)",group:"dashboard",tree:false,pids:()=>[...activeRepublish.values()].map(child=>child.pid).filter(Boolean)});
 
 const app = express();
 app.set("trust proxy", 1);
@@ -462,9 +715,9 @@ app.delete("/api/overlays/:id",requireAuth,(req,res)=>{const before=req.account.
 
 app.use("/api/music",requireAuth,profileMusic.createApiRouter());
 app.use("/api/vod",requireAuth,profileVod.createApiRouter());
-const SCENE_KINDS=["none","builtin","custom"],BUILTIN_SCENE_NAMES=["startingSoon","brb","ending"];
+const SCENE_KINDS=["none","builtin","custom"],BUILTIN_SCENE_NAMES=["startingSoon","brb","ending","offline"];
 app.get("/api/scenes/current",requireAuth,(req,res)=>res.json({currentScene:req.account.currentScene}));
-app.post("/api/scenes/current",requireAuth,(req,res)=>{const{kind,name,overlayId}=req.body||{};if(!SCENE_KINDS.includes(kind))return res.status(400).json({error:`kind must be one of ${SCENE_KINDS.join(", ")}`});let scene=null;if(kind==="builtin"){if(!BUILTIN_SCENE_NAMES.includes(name))return res.status(400).json({error:`name must be one of ${BUILTIN_SCENE_NAMES.join(", ")}`});scene={kind,name};if(name==="startingSoon"){const minutes=Number(req.account.overlayConfig?.startingSoon?.countdownMinutes||0);if(Number.isFinite(minutes)&&minutes>0)scene.countdownAt=new Date(Date.now()+minutes*60000).toISOString();}}else if(kind==="custom"){const overlay=req.account.overlays.find(o=>o.id===overlayId&&(o.type==="text"||o.type==="html"||o.type==="music"));if(!overlay)return res.status(404).json({error:"unknown overlay"});scene={kind,overlayId};}req.account.currentScene=scene;saveState(state);const html=withWidgets(resolveSceneFragment(scene,req.account),req.account.overlayConfig,req.account.twitchLogin);events.publish(req.account.twitchUserId,{type:"scene",html});res.json({ok:true,currentScene:scene});});
+app.post("/api/scenes/current",requireAuth,(req,res)=>{const{kind,name,overlayId}=req.body||{};if(!SCENE_KINDS.includes(kind))return res.status(400).json({error:`kind must be one of ${SCENE_KINDS.join(", ")}`});let scene=null;if(kind==="builtin"){if(!BUILTIN_SCENE_NAMES.includes(name))return res.status(400).json({error:`name must be one of ${BUILTIN_SCENE_NAMES.join(", ")}`});scene={kind,name};if(name==="startingSoon"){const minutes=Number(req.account.overlayConfig?.startingSoon?.countdownMinutes||0);if(Number.isFinite(minutes)&&minutes>0)scene.countdownAt=new Date(Date.now()+minutes*60000).toISOString();}}else if(kind==="custom"){const overlay=req.account.overlays.find(o=>o.id===overlayId&&(o.type==="text"||o.type==="html"||o.type==="music"));if(!overlay)return res.status(404).json({error:"unknown overlay"});scene={kind,overlayId};}req.account.currentScene=scene;saveState(state);const html=withWidgets(resolveSceneFragment(scene,req.account),req.account.overlayConfig,req.account.twitchLogin);events.publish(req.account.twitchUserId,{type:"scene",html});for(const orientation of sceneModel.ORIENTATIONS)events.publish(req.account.twitchUserId,{type:"program",orientation});res.json({ok:true,currentScene:scene});});
 app.get("/api/compositor",requireAuth,(req,res)=>res.json({enabled:!!req.account.compositorEnabled}));
 app.get("/api/public-base-url",requireAuth,(req,res)=>{res.json({value:state.publicBaseUrl||"",effective:publicPlaybackBase(req),lockedByEnv:!!PUBLIC_BASE_URL_ENV});});
 app.post("/api/public-base-url",requireAuth,(req,res)=>{
@@ -483,12 +736,161 @@ function configuredPublicBaseUrl(){return PUBLIC_BASE_URL_ENV||normalisePublicBa
 function publicPlaybackBase(req){return publicBaseUrl(req,{explicitBase:configuredPublicBaseUrl()});}
 function playbackUrlsFor(req,account){if(!activeSourceFor(account.twitchUserId))return null;return playbackTargets({base:publicPlaybackBase(req),safePath:safePathFor(account),mediaHost:PUBLIC_MEDIA_HOST});}
 function sourcesStatusFor(account){const selected=activeProfile(account);const sources={console:{enabled:selected?.mode==="console",live:false},pc:{enabled:selected?.mode==="pc",live:false},music:{enabled:selected?.mode==="music",live:false},rerun:{enabled:selected?.mode!=="console",live:false}};const connectedProfiles=[];for(const[pathName,live]of liveSessions.entries()){if(live.accountId!==account.twitchUserId)continue;connectedProfiles.push({profileId:live.profileId,source:live.source,path:pathName,active:activeFeedPath.get(account.twitchUserId)===pathName});if(live.profileId===selected?.id&&sources[live.source])sources[live.source].live=true;}return{sources,activeSource:activeSourceFor(account.twitchUserId),connectedProfiles};}
-app.get("/api/status",requireAuth,(req,res)=>{const account=req.account;ensureAccountProfileKeys(account);const selected=activeProfile(account),rtmp=profileRtmp.profileRtmpInfo(account,MEDIA_HOST,selected?.id);const{sources,activeSource,connectedProfiles}=sourcesStatusFor(account);res.json({twitchLogin:account.twitchLogin,displayName:account.displayName,profileImageUrl:account.profileImageUrl,needsSourceMode:!account.sourceMode,needsStreamKey:needsStreamKeyFor(account),streamKeyMasked:account.streamKey?maskSecret(account.streamKey):null,sourceMode:account.sourceMode||null,activeProfileId:selected?.id||null,profileRtmp:rtmp,live:!!activeSource,sources,activeSource,connectedProfiles,rerun:profileVod.publicStatus(account.twitchUserId),recordingEnabled:!!account.recordingEnabled,encoder:gpuEncoder.status(),graceUntil:graceState.get(account.twitchUserId)?.deadline??null,pcServer:rtmp?.server||`rtmp://${MEDIA_HOST}:1935/${PC_APP}`,pcKey:rtmp?.key||account.pcKey,mediaHost:MEDIA_HOST,publicBaseUrl:{value:state.publicBaseUrl||"",effective:publicPlaybackBase(req),lockedByEnv:!!PUBLIC_BASE_URL_ENV},playback:playbackUrlsFor(req,account),destinations:account.destinations.map(d=>({id:d.id,name:d.name,platform:normaliseDestinationPlatform(d.platform),urlMasked:maskUrl(d.url),layout:normaliseLayout(d.layout),enabled:d.enabled,active:activeDestinations.has(`${account.twitchUserId}:${d.id}`)})),relayPush:{available:!!relayPush.relaystreamBaseUrl(),enabled:!!account.relayPushEnabled,mode:account.relayPushMode,nodeId:account.relayNodeId,active:activeDestinations.has(`${account.twitchUserId}:${relayPush.RELAY_DESTINATION_ID}`),watchUrl:relayPush.cachedRelayDestination(account)?.watchUrl||null}});});
+app.get("/api/status",requireAuth,(req,res)=>{const account=req.account;ensureAccountProfileKeys(account);const selected=activeProfile(account),rtmp=profileRtmp.profileRtmpInfo(account,MEDIA_HOST,selected?.id);const{sources,activeSource,connectedProfiles}=sourcesStatusFor(account);res.json({twitchLogin:account.twitchLogin,displayName:account.displayName,profileImageUrl:account.profileImageUrl,needsSourceMode:!account.sourceMode,needsStreamKey:needsStreamKeyFor(account),streamKeyMasked:account.streamKey?maskSecret(account.streamKey):null,sourceMode:account.sourceMode||null,activeProfileId:selected?.id||null,profileRtmp:rtmp,live:!!activeSource,sources,activeSource,connectedProfiles,rerun:profileVod.publicStatus(account.twitchUserId),recordingEnabled:!!account.recordingEnabled,encoder:gpuEncoder.status(),graceUntil:graceState.get(account.twitchUserId)?.deadline??null,pcServer:rtmp?.server||`rtmp://${MEDIA_HOST}:1935/${PC_APP}`,pcKey:rtmp?.key||account.pcKey,mediaHost:MEDIA_HOST,publicBaseUrl:{value:state.publicBaseUrl||"",effective:publicPlaybackBase(req),lockedByEnv:!!PUBLIC_BASE_URL_ENV},playback:playbackUrlsFor(req,account),destinations:account.destinations.map(d=>({id:d.id,name:d.name,platform:normaliseDestinationPlatform(d.platform),urlMasked:maskUrl(d.url),layout:normaliseLayout(d.layout),output:effectiveOutput(d),outputConfigured:!!d.output,route:planDestination(d,programContext(account)).reason,enabled:d.enabled,active:activeDestinations.has(`${account.twitchUserId}:${d.id}`),health:destinationHealth(account.twitchUserId,d.id)})),programs:programStatusFor(account),music24:music24Status(account),relayPush:{available:!!relayPush.relaystreamBaseUrl(),enabled:!!account.relayPushEnabled,mode:account.relayPushMode,nodeId:account.relayNodeId,active:activeDestinations.has(`${account.twitchUserId}:${relayPush.RELAY_DESTINATION_ID}`),watchUrl:relayPush.cachedRelayDestination(account)?.watchUrl||null}});});
 app.post("/api/relay-push",requireAuth,requireOnboarded,(req,res)=>{const{enabled,mode}=req.body||{};if(enabled&&!relayPush.relaystreamBaseUrl())return res.status(503).json({error:"RELAYSTREAM_URL is not configured on this install"});if(mode!==undefined){if(!["rtmp","whip"].includes(mode))return res.status(400).json({error:"mode must be rtmp or whip"});req.account.relayPushMode=mode;}const wasEnabled=req.account.relayPushEnabled;if(enabled!==undefined)req.account.relayPushEnabled=Boolean(enabled);saveState(state);const source=destinationSourcePathFor(req.account);if(req.account.relayPushEnabled){if(source){if(wasEnabled)stopDestination(req.account.twitchUserId,relayPush.RELAY_DESTINATION_ID);startRelayPushFor(req.account,source);}}else{stopDestination(req.account.twitchUserId,relayPush.RELAY_DESTINATION_ID);}res.json({ok:true,enabled:req.account.relayPushEnabled,mode:req.account.relayPushMode});});
-app.post("/api/destinations",requireAuth,requireOnboarded,(req,res)=>{const{name,url,layout,platform}=req.body||{};if(!name||!String(name).trim())return res.status(400).json({error:"name is required"});if(!url||!DESTINATION_URL_RE.test(url))return res.status(400).json({error:DESTINATION_URL_HINT});if(layout!==undefined&&!OUTPUT_LAYOUTS.includes(layout))return res.status(400).json({error:`layout must be one of ${OUTPUT_LAYOUTS.join(", ")}`});const dest={id:crypto.randomUUID(),name:String(name).trim(),platform:normaliseDestinationPlatform(platform),url:String(url).trim(),layout:normaliseLayout(layout),enabled:false};req.account.destinations.push(dest);saveState(state);res.json({ok:true,id:dest.id});});
-app.put("/api/destinations/:id",requireAuth,requireOnboarded,(req,res)=>{const dest=findDestination(req.account,req.params.id);if(!dest)return res.status(404).json({error:"unknown destination"});const{name,url,layout}=req.body||{};let restart=false;if(name!==undefined){if(!String(name).trim())return res.status(400).json({error:"name cannot be empty"});dest.name=String(name).trim();}if(url!==undefined){if(!DESTINATION_URL_RE.test(url))return res.status(400).json({error:DESTINATION_URL_HINT});dest.url=String(url).trim();restart=true;}if(layout!==undefined){if(!OUTPUT_LAYOUTS.includes(layout))return res.status(400).json({error:`layout must be one of ${OUTPUT_LAYOUTS.join(", ")}`});if(dest.layout!==layout){dest.layout=layout;restart=true;}}saveState(state);const source=destinationSourcePathFor(req.account);if(restart&&source&&dest.enabled){stopDestination(req.account.twitchUserId,dest.id);startDestination(req.account,dest,source);}res.json({ok:true});});
+// `output` is the per-destination layout (mode/scene/size/fps/encoder/bitrate/
+// audio/captions). `layout` is still accepted for older clients and scripts;
+// a destination that never received `output` keeps its historic behaviour.
+function layoutForOutput(output){return output.mode==="source"?"source":output.mode==="vertical"||(output.mode==="custom"&&output.height>output.width)?"vertical":"landscape";}
+function validateOutput(raw){if(raw===undefined||raw===null)return{output:undefined};if(typeof raw!=="object")return{error:"output must be an object"};if(raw.mode!==undefined&&!OUTPUT_MODES.includes(raw.mode))return{error:`output.mode must be one of ${OUTPUT_MODES.join(", ")}`};return{output:sanitiseOutput(raw)};}
+app.post("/api/destinations",requireAuth,requireOnboarded,(req,res)=>{const{name,url,layout,platform}=req.body||{};if(!name||!String(name).trim())return res.status(400).json({error:"name is required"});if(!url||!DESTINATION_URL_RE.test(url))return res.status(400).json({error:DESTINATION_URL_HINT});if(layout!==undefined&&!OUTPUT_LAYOUTS.includes(layout))return res.status(400).json({error:`layout must be one of ${OUTPUT_LAYOUTS.join(", ")}`});const checked=validateOutput(req.body?.output);if(checked.error)return res.status(400).json({error:checked.error});if(checked.output?.sceneId&&!sceneModel.findScene(req.account,checked.output.sceneId))return res.status(404).json({error:"unknown scene for destination"});const dest={id:crypto.randomUUID(),name:String(name).trim(),platform:normaliseDestinationPlatform(platform),url:String(url).trim(),layout:checked.output?layoutForOutput(checked.output):normaliseLayout(layout),enabled:false,...(checked.output?{output:checked.output}:{})};req.account.destinations.push(dest);saveState(state);res.json({ok:true,id:dest.id});});
+app.put("/api/destinations/:id",requireAuth,requireOnboarded,(req,res)=>{const dest=findDestination(req.account,req.params.id);if(!dest)return res.status(404).json({error:"unknown destination"});const{name,url,layout}=req.body||{};let restart=false;if(name!==undefined){if(!String(name).trim())return res.status(400).json({error:"name cannot be empty"});dest.name=String(name).trim();}if(url!==undefined){if(!DESTINATION_URL_RE.test(url))return res.status(400).json({error:DESTINATION_URL_HINT});dest.url=String(url).trim();restart=true;}const checked=validateOutput(req.body?.output);if(checked.error)return res.status(400).json({error:checked.error});if(checked.output){if(checked.output.sceneId&&!sceneModel.findScene(req.account,checked.output.sceneId))return res.status(404).json({error:"unknown scene for destination"});if(JSON.stringify(dest.output||null)!==JSON.stringify(checked.output)){dest.output=checked.output;dest.layout=layoutForOutput(checked.output);restart=true;}}else if(layout!==undefined){if(!OUTPUT_LAYOUTS.includes(layout))return res.status(400).json({error:`layout must be one of ${OUTPUT_LAYOUTS.join(", ")}`});if(dest.layout!==layout){dest.layout=layout;delete dest.output;restart=true;}}saveState(state);if(restart&&dest.enabled&&activeFeedPath.has(req.account.twitchUserId))restartDestination(req.account,dest);res.json({ok:true,output:effectiveOutput(dest),route:planDestination(dest,programContext(req.account)).reason});});
 app.delete("/api/destinations/:id",requireAuth,requireOnboarded,(req,res)=>{const dest=findDestination(req.account,req.params.id);if(!dest)return res.status(404).json({error:"unknown destination"});stopDestination(req.account.twitchUserId,dest.id);req.account.destinations=req.account.destinations.filter(d=>d.id!==dest.id);saveState(state);res.json({ok:true});});
 app.post("/api/destinations/:id/toggle",requireAuth,requireOnboarded,(req,res)=>{const dest=findDestination(req.account,req.params.id);if(!dest)return res.status(404).json({error:"unknown destination"});dest.enabled=Boolean(req.body?.enabled);saveState(state);const source=destinationSourcePathFor(req.account);if(source){if(dest.enabled)startDestination(req.account,dest,source);else stopDestination(req.account.twitchUserId,dest.id);}res.json({ok:true});});
+
+// ---------------------------------------------------------------------------
+// Overlay Studio scene library API. Every write publishes a "program" SSE
+// event; open program pages (the compositors and dashboard previews) diff
+// their layers in place, so edits and scene switches never restart a stream.
+const music24Runtime = require("./music24");
+
+function programStatusFor(account) {
+  const out = [];
+  for (const entry of programCompositors.values()) {
+    if (entry.accountId !== account.twitchUserId) continue;
+    const s = entry.compositor.status();
+    out.push({ orientation:entry.orientation, sceneId:entry.sceneId, path:entry.path, consumers:entry.refs.size, state:s.state, error:s.error, encoder:s.encoder, hardwareEncoder:s.hardwareEncoder, encoderFallbackReason:s.encoderFallbackReason, width:s.width, height:s.height, fps:s.outputFps, renderFps:s.renderFps, measuredRenderFps:s.measuredRenderFps, measuredEncodeFps:s.measuredEncodeFps, browserAudio:s.browserAudio, mixer:s.mixer });
+  }
+  return out;
+}
+
+function music24Status(account) {
+  try { return music24Runtime.statusFor(account.twitchUserId); } catch { return null; }
+}
+
+function libraryResponse(account) {
+  const lib = sceneModel.library(account);
+  return {
+    library:lib,
+    layerTypes:sceneModel.LAYER_TYPES,
+    browserTypes:sceneModel.BROWSER_TYPES,
+    audioTypes:sceneModel.AUDIO_TYPES,
+    slotNames:sceneModel.SLOT_NAMES,
+    slotModes:sceneModel.SLOT_MODES,
+    canvasPresets:sceneModel.CANVAS_PRESETS,
+    currentScene:account.currentScene || null,
+    onAir:Object.fromEntries(sceneModel.ORIENTATIONS.map(o => {
+      const model = resolveProgram(account, o, { liveContent:false });
+      return [o, { source:model.source, sceneId:model.sceneId, sceneName:model.sceneName, canvas:model.canvas, browserAudio:model.browserAudio }];
+    })),
+    browserAudioNeeded:sceneModel.libraryNeedsBrowserAudio(account),
+    programs:programStatusFor(account),
+  };
+}
+
+function sceneWrite(res, account, fn) {
+  try {
+    const result = fn();
+    saveState(state);
+    refreshPrograms(account);
+    res.json({ ok:true, ...result, ...libraryResponse(account) });
+  } catch (error) {
+    res.status(error.status || 400).json({ error:error.message });
+  }
+}
+
+app.get("/api/scenes/library", requireAuth, (req, res) => res.json(libraryResponse(req.account)));
+app.post("/api/scenes/library/scenes", requireAuth, (req, res) => sceneWrite(res, req.account, () => ({ scene:sceneModel.createScene(req.account, req.body || {}) })));
+app.put("/api/scenes/library/scenes/:id", requireAuth, (req, res) => sceneWrite(res, req.account, () => {
+  const scene = sceneModel.updateScene(req.account, req.params.id, req.body || {});
+  if (!scene) throw Object.assign(new Error("unknown scene"), { status:404 });
+  return { scene };
+}));
+app.delete("/api/scenes/library/scenes/:id", requireAuth, (req, res) => sceneWrite(res, req.account, () => {
+  if (!sceneModel.deleteScene(req.account, req.params.id)) throw Object.assign(new Error("unknown scene"), { status:404 });
+  // Destinations pinned to a deleted scene fall back to following the live scene.
+  for (const dest of req.account.destinations) if (dest.output?.sceneId === req.params.id) { dest.output = { ...dest.output, sceneId:null }; if (dest.enabled) restartDestination(req.account, dest); }
+  return {};
+}));
+// Switch what LIVE / GAMEPLAY shows for one orientation. SSE only.
+app.post("/api/scenes/library/live", requireAuth, (req, res) => sceneWrite(res, req.account, () => ({ live:sceneModel.setLive(req.account, req.body?.orientation, req.body?.sceneId) })));
+app.put("/api/scenes/library/slots/:name", requireAuth, (req, res) => sceneWrite(res, req.account, () => ({ slot:sceneModel.setSlot(req.account, req.params.name, req.body || {}) })));
+app.put("/api/scenes/library/mixer", requireAuth, (req, res) => sceneWrite(res, req.account, () => ({ mixer:sceneModel.setMixer(req.account, req.body || {}) })));
+app.put("/api/scenes/library/programs", requireAuth, (req, res) => sceneWrite(res, req.account, () => {
+  const programs = sceneModel.setPrograms(req.account, req.body || {});
+  const effects = String(req.body?.effects || "");
+  if (["auto", "full", "reduced", "minimal"].includes(effects)) programs.effects = effects;
+  // Copy destinations must re-evaluate copy vs transcode against the new size.
+  for (const dest of req.account.destinations) if (dest.enabled && dest.output) restartDestination(req.account, dest);
+  return { programs };
+}));
+
+// System / performance diagnostics. Sampling is cached inside the monitor
+// (2 s on Linux, 15 s on Windows), so polling this is cheap.
+// Hardware test: host type, working encoder, real Chromium GPU, measured CPU
+// speed and the Auto quality it leads to. POST re-runs it (a few seconds).
+function hardwareSummary(account) {
+  const h = hardwareProfile.getHostProfile();
+  const program = o => { const p = programSettings(account, o); return p ? { width:p.width, height:p.height, fps:p.fps, auto:!!p.auto, tier:p.autoTier || null } : null; };
+  return {
+    probed:!!h.probed, probedAt:h.probedAt || null, probeMs:h.probeMs || null,
+    hostType:h.hostType, cores:h.cores, cpuModel:h.cpuModel, ramBytes:h.ramBytes || null,
+    encoder:h.encoder, hardwareEncoder:h.hardwareEncoder,
+    chromiumGpu:h.chromiumGpu, chromiumRenderer:h.chromium?.renderer || null, chromiumReason:h.chromium?.reason || null,
+    x264MsPerFrame1080p:Math.round(h.cpu.coreSecondsPerFrame * 10000) / 10,
+    cpuSpeedVsReference:h.cpuSpeedVsReference,
+    budget:hardwareProfile.budgetFor(h),
+    music:h.recommendations.music,
+    program:h.recommendations.program,
+    programs:{ landscape:program("landscape"), vertical:program("vertical") },
+    sourceStream:sourceInfo.get(account.twitchUserId)?.info || null,
+    tooHeavy:h.tooHeavy || {},
+  };
+}
+app.get("/api/system/hardware", requireAuth, (req, res) => res.json(hardwareSummary(req.account)));
+app.post("/api/system/hardware/probe", requireAuth, async (req, res) => {
+  try {
+    await hardwareProfile.ensureHostProfile({ force:true });
+    // Running auto workers/programs pick the new recommendation up: Music via
+    // its signature on the next reconcile, programs via a renderer restart.
+    refreshPrograms(req.account);
+    res.json({ ok:true, ...hardwareSummary(req.account) });
+  } catch (error) {
+    res.status(500).json({ error:error.message });
+  }
+});
+
+app.get("/api/system/performance", requireAuth, (req, res) => {
+  const snapshot = monitor.sample();
+  const mine = snapshot.components.filter(row => row.name.includes(String(req.account.twitchUserId)) || row.group === "dashboard");
+  const destinations = req.account.destinations.map(d => ({ id:d.id, name:d.name, enabled:d.enabled, active:activeDestinations.has(`${req.account.twitchUserId}:${d.id}`), route:planDestination(d, programContext(req.account)).reason, health:destinationHealth(req.account.twitchUserId, d.id) }));
+  res.json({
+    at:snapshot.at,
+    intervalMs:snapshot.intervalMs,
+    supported:snapshot.supported,
+    system:snapshot.system,
+    components:mine,
+    groups:monitor.groupTotals({ components:mine }),
+    encoder:gpuEncoder.status(),
+    hardware:hardwareSummary(req.account),
+    music24:music24Status(req.account),
+    programs:programStatusFor(req.account),
+    destinations,
+  });
+});
+
+app.get("/api/destinations/capabilities", requireAuth, (req, res) => {
+  const order = gpuEncoder.fallbackOrder("auto");
+  res.json({
+    outputModes:OUTPUT_MODES,
+    encoders:gpuEncoder.PREFERENCES.map(id => ({ id, label:gpuEncoder.PREFERENCE_LABELS[id], available:id === "auto" || id === "cpu" || order.some(p => p.id === id) })),
+    captions:captions.captionCapabilities(),
+    programs:sceneModel.library(req.account).programs,
+    scenes:sceneModel.library(req.account).scenes.map(s => ({ id:s.id, name:s.name, orientation:s.orientation })),
+    musicPerformanceModes:performanceModes.MODES.map(id => ({ id, label:performanceModes.MODE_LABELS[id] })),
+    musicRenderFps:performanceModes.RENDER_FPS_CHOICES,
+  });
+});
 
 app.get("/build-info.js",(_req,res)=>{
   const info={
@@ -501,7 +903,7 @@ app.get("/build-info.js",(_req,res)=>{
   res.type("application/javascript").send(`window.CASTNEXUS_BUILD = Object.freeze(${JSON.stringify(info)});\n`);
 });
 app.use(express.static(path.join(__dirname,"public"),{index:false}));
-const httpServer=app.listen(PORT,()=>{const encoder=gpuEncoder.status().selected;console.log(`[dashboard] listening on :${PORT}`);console.log(`[dashboard] video encoder: ${encoder.label}${encoder.hardware?" (hardware)":" (software fallback)"}`);console.log(`[dashboard] oauth-broker: ${hostedOauth.baseUrl}`);const allowList=registration.allowedLogins();if(allowList.length)console.log(`[dashboard] sign-in restricted to: ${allowList.join(", ")}`);else if(registration.registrationDisabled())console.log(`[dashboard] registration disabled - only the ${Object.keys(state.accounts).length} existing account(s) can sign in`);if(registration.locksOutEveryone({accountCount:Object.keys(state.accounts).length}))console.warn("[dashboard] DISABLE_REGISTRATION is set but no account exists yet - nobody can sign in. Set ALLOWED_TWITCH_LOGINS to your Twitch login, or unset DISABLE_REGISTRATION for one sign-in.");});
+const httpServer=app.listen(PORT,()=>{const encoder=gpuEncoder.status().selected;console.log(`[dashboard] listening on :${PORT}`);hardwareProfile.ensureHostProfile().catch(()=>{});console.log(`[dashboard] video encoder: ${encoder.label}${encoder.hardware?" (hardware)":" (software fallback)"}`);console.log(`[dashboard] oauth-broker: ${hostedOauth.baseUrl}`);const allowList=registration.allowedLogins();if(allowList.length)console.log(`[dashboard] sign-in restricted to: ${allowList.join(", ")}`);else if(registration.registrationDisabled())console.log(`[dashboard] registration disabled - only the ${Object.keys(state.accounts).length} existing account(s) can sign in`);if(registration.locksOutEveryone({accountCount:Object.keys(state.accounts).length}))console.warn("[dashboard] DISABLE_REGISTRATION is set but no account exists yet - nobody can sign in. Set ALLOWED_TWITCH_LOGINS to your Twitch login, or unset DISABLE_REGISTRATION for one sign-in.");});
 
 let dashboardShuttingDown=false;
 async function shutdown(){
@@ -510,10 +912,14 @@ async function shutdown(){
   clearInterval(pollLiveTimer);
   for(const grace of graceState.values())clearTimeout(grace.timer);
   graceState.clear();activeFeedPath.clear();
-  for(const child of activeDestinations.values()){child.removeAllListeners("exit");try{child.kill("SIGTERM");}catch{}}
-  for(const child of activeRepublish.values()){child.removeAllListeners("exit");try{child.kill("SIGTERM");}catch{}}
-  activeDestinations.clear();activeRepublish.clear();
-  await Promise.allSettled([...compositors.values()].map(compositor=>compositor.stop()));
+  for(const worker of activeDestinations.values()){try{worker.supervisor.stop();}catch{}}
+  for(const r of renditions.values()){try{r.supervisor.stop();}catch{}}
+  for(const child of activeRepublish.values()){child.removeAllListeners("exit");killHard(child);}
+  activeDestinations.clear();activeRepublish.clear();renditions.clear();
+  const programs=[...programCompositors.values()];
+  for(const entry of programs)if(entry.stopTimer)clearTimeout(entry.stopTimer);
+  programCompositors.clear();
+  await Promise.allSettled([...programs.map(entry=>entry.compositor.stop()),...[...compositors.values()].map(compositor=>compositor.stop())]);
   compositors.clear();
   await new Promise(resolve=>{try{let done=false;const finish=()=>{if(done)return;done=true;clearTimeout(timer);resolve();};const timer=setTimeout(finish,2000);httpServer.close(finish);httpServer.closeAllConnections?.();}catch{resolve();}});
 }

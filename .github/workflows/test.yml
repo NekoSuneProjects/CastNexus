@@ -58,6 +58,7 @@ jobs:
           node --check dashboard/public/app-program-routing.js
           node --check dashboard/public/app-runtime.js
           node --check dashboard/public/app-updater.js
+          for f in hardware-profile performance-modes scene-model scene-render browser-audio captions process-supervisor resource-monitor audio-relay tools/music24-benchmark public/app-studio public/app-outputs; do node --check "dashboard/$f.js"; done
           node --check dashboard/public/app-vod.js
 
       - name: Hosted OAuth broker-client tests

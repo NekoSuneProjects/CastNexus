@@ -23,11 +23,33 @@ function subscribe(accountId, req, res) {
   });
 }
 
+// In-process listeners (Music 24/7 worker, compositors). They receive the same
+// events as SSE clients, without a loopback HTTP poll.
+const listeners = new Map(); // accountId -> Set<fn>
+
+function on(accountId, listener) {
+  const key = String(accountId);
+  let set = listeners.get(key);
+  if (!set) { set = new Set(); listeners.set(key, set); }
+  set.add(listener);
+  return () => {
+    set.delete(listener);
+    if (set.size === 0) listeners.delete(key);
+  };
+}
+
 function publish(accountId, event) {
+  for (const listener of listeners.get(String(accountId)) || []) {
+    try { listener(event); } catch {}
+  }
   const set = clients.get(accountId);
   if (!set || set.size === 0) return;
   const payload = `data: ${JSON.stringify(event)}\n\n`;
   for (const res of set) res.write(payload);
+}
+
+function clientCount(accountId) {
+  return clients.get(accountId)?.size || 0;
 }
 
 // Keepalive comments so idle connections don't get closed by an intermediate
@@ -37,6 +59,6 @@ setInterval(() => {
   for (const set of clients.values()) {
     for (const res of set) res.write(": ping\n\n");
   }
-}, 25000);
+}, 25000).unref?.();
 
-module.exports = { subscribe, publish };
+module.exports = { subscribe, publish, on, clientCount };

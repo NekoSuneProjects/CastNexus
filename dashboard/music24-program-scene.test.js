@@ -42,9 +42,25 @@ test("Program scenes switch the compositor to the direct master scene", () => {
   const ending = programSceneUrl(account({ kind: "builtin", name: "ending" }), profile);
 
   assert.notEqual(starting, live);
-  assert.equal(starting, "http://127.0.0.1:8090/overlay/tester/master");
+  const url = new URL(starting);
+  assert.equal(`${url.origin}${url.pathname}`, "http://127.0.0.1:8090/overlay/tester/master");
   assert.equal(brb, starting);
   assert.equal(ending, starting);
+});
+
+test("Program scenes rendered for Music 24/7 follow its performance effects level", () => {
+  const low = { ...profile, musicPerformance:{ mode:"low" } };
+  const max = { ...profile, musicPerformance:{ mode:"max" } };
+  const scene = account({ kind: "builtin", name: "brb" });
+  assert.equal(new URL(programSceneUrl(scene, low)).searchParams.get("effects"), "reduced");
+  assert.equal(new URL(programSceneUrl(scene, max)).searchParams.get("effects"), null);
+});
+
+test("Music scene URL carries the decoupled spectrum/progress rates", () => {
+  const url = new URL(musicSceneUrl(account(null), { ...profile, musicPerformance:{ mode:"ultra" } }));
+  assert.equal(url.searchParams.get("perf"), "ultra");
+  assert.equal(url.searchParams.get("spectrumHz"), "10");
+  assert.equal(url.searchParams.get("effects"), "minimal");
 });
 
 test("Music worker signature is unaffected by entering or leaving Program Scene mode", () => {

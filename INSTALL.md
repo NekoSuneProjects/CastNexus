@@ -272,6 +272,8 @@ Optional diagnostic force:
 CASTNEXUS_VIDEO_ENCODER=nvenc
 ```
 
+The GPU overlay now also sets `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`. Without the `video` capability the NVIDIA Container Toolkit does not mount the NVENC libraries, so `h264_nvenc` fails its probe inside the container and CastNexus falls back to x264. Music 24/7 and each destination can also pick an encoder in the dashboard; the active encoder is shown on the Music page and on Overview → System performance.
+
 ## Intel / AMD Linux graphics
 
 Check:
@@ -437,6 +439,25 @@ du -sh dashboard/data
 ```
 
 If the whole host is at 95% CPU, compare `docker stats` with `htop` before assuming CastNexus is responsible for all of it.
+
+CastNexus also reports its own breakdown under **Overview → System performance**. It shows CPU/RAM per program renderer (Chromium), per FFmpeg encoder, per Music 24/7 component, per destination and shared rendition, plus the active encoder and program sizes.
+
+To measure Music 24/7 on your host (before/after comparisons, choosing a Performance Mode):
+
+```bash
+docker exec -it castnexus-dashboard node tools/music24-benchmark.js --encoder auto --mode auto
+```
+
+See [docs/MUSIC24-PERFORMANCE.md](docs/MUSIC24-PERFORMANCE.md).
+
+## Upgrading from an older CastNexus
+
+No data needs to be deleted. On first start the dashboard adds a scene library (`sceneLibrary`) to each account in `dashboard/data/state.json` and keeps every existing overlay, scene, profile, destination, music file and recording. Existing destinations keep their previous routing until you edit them. Pull the new image and restart:
+
+```bash
+docker compose pull && docker compose up -d
+# GPU hosts: add -f docker-compose.gpu-nvidia.yml (or -gpu-vaapi.yml) as before
+```
 
 ---
 

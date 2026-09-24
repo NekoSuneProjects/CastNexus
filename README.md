@@ -117,6 +117,17 @@ Custom overlays:
 
 Browser overlays use a sandbox that allows the JavaScript commonly required by alert widgets without granting popup/forms/top-navigation permissions.
 
+**Scene editor (server-side composition).** Overlay Studio is a drag/drop scene editor. It supports snapping, guides, layers, lock/hide, duplicate, keyboard nudging and touch input. Build reusable scenes (Gameplay, Just Chatting, Vertical Gameplay, …) on 16:9, 9:16 or custom canvases. CastNexus renders them on the server over your OBS/console video:
+
+- StreamElements / Streamlabs / browser sources **with their audio** mixed into the stream, plus a server-side audio mixer (volume, mute, solo)
+- Starting Soon / BRB / Ending / Offline can be the built-in scene, any Overlay Studio scene, a StreamElements or browser URL, custom HTML or an image/video, all with audio
+- independent horizontal and vertical layouts from **one** OBS stream; 16:9 gameplay is cropped/framed for 9:16, never stretched
+- per-destination output: Source/Passthrough (stream copy), 16:9, 9:16 or custom size, pinned scene, FPS, encoder, bitrate, audio and caption mode
+- destinations that match a program share one render + one encode (stream copy); identical re-encodes are shared too
+- side-by-side horizontal/vertical previews and editor-only safe-area guides
+
+See [docs/OVERLAY-STUDIO.md](docs/OVERLAY-STUDIO.md).
+
 ### Music / Radio
 
 Music is isolated by profile. A PC Gaming profile can keep a creator-safe/NCS-style BRB library while a separate Radio profile contains an entirely different library.
@@ -135,7 +146,7 @@ The music scene includes:
 - 48 spectrum bars
 - Web Audio `AnalyserNode`
 - FFT size 256
-- smooth 30 FPS visualizer
+- smooth 30 FPS visualizer (or a lower render rate chosen by the Music Performance Mode)
 - procedural fallback spectrum
 - animated vinyl
 - title / artist metadata
@@ -145,6 +156,8 @@ The music scene includes:
 - station name
 - custom accent/background/cover
 - dedicated 16:9 and 9:16 compositions
+
+**Music 24/7 performance.** Each Music profile has a Performance Mode (Auto / Maximum Quality / Balanced / Low CPU / Ultra Low CPU), a render FPS, an output FPS, a resolution and an encoder (Auto / NVENC / QuickSync / VAAPI / CPU x264, with automatic fallback). The dashboard shows the live encoder, FPS and CPU per component. Measured on one host, CPU dropped from 512% to 128% of a core at 1080p30 on CPU x264, and from 426% to 32% with the default CPU-safe clamp. See [docs/MUSIC24-PERFORMANCE.md](docs/MUSIC24-PERFORMANCE.md).
 
 ### Profiles
 
