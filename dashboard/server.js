@@ -49,6 +49,7 @@ const MUSIC_MAX_BYTES = Number(process.env.MUSIC_MAX_MB || 50) * 1024 * 1024;
 const VOD_MAX_BYTES = Number(process.env.VOD_MAX_GB || 20) * 1024 * 1024 * 1024;
 const POLL_MS = 1500;
 const RECONNECT_GRACE_MS = Number(process.env.RECONNECT_GRACE_MS || 60 * 60 * 1000);
+const RECONNECT_IDLE_STOP_MS = Number(process.env.RECONNECT_IDLE_STOP_MS ?? 120000);
 const DASHBOARD_ORIGIN = `http://127.0.0.1:${PORT}`;
 const RTMP_ORIGIN = process.env.MEDIA_RTMP_ORIGIN || "rtmp://127.0.0.1:1935";
 
@@ -239,6 +240,7 @@ function acquireProgram(account, orientation, sceneId, ref) {
   entry.refs.add(ref);
   if (entry.stopTimer) { clearTimeout(entry.stopTimer); entry.stopTimer = null; }
   if (!["running", "starting", "reconnecting"].includes(entry.compositor.state) && !entry.starting) {
+    entry.idleSince = null;
     // Wait for the source probe (fps/size) so an auto program starts at the
     // right frame rate instead of restarting a few seconds later.
     entry.starting = true;
@@ -256,6 +258,23 @@ function acquireProgram(account, orientation, sceneId, ref) {
   }
   return entry;
 }
+
+// A program whose consumers are all down (reconnecting / waiting / gave up)
+// renders for nobody. Stop it after PROGRAM_NO_CONSUMER_STOP_MS; the next
+// destination retry calls acquireProgram(), which starts it again.
+const PROGRAM_NO_CONSUMER_STOP_MS = Number(process.env.PROGRAM_NO_CONSUMER_STOP_MS ?? 90000);
+function sweepIdlePrograms(now = Date.now()) {
+  if (!(PROGRAM_NO_CONSUMER_STOP_MS > 0)) return;
+  for (const entry of programCompositors.values()) {
+    const live = [...entry.refs].some(ref => ref === "legacy" || activeDestinations.get(ref)?.supervisor?.state === "live");
+    if (live || entry.starting) { entry.idleSince = null; continue; }
+    entry.idleSince = entry.idleSince || now;
+    if (now - entry.idleSince < PROGRAM_NO_CONSUMER_STOP_MS || !["running", "reconnecting", "starting"].includes(entry.compositor.state)) continue;
+    console.log(`[dashboard] ${entry.orientation} program ${entry.path} has no live destination for ${Math.round((now - entry.idleSince) / 1000)}s - pausing it to save CPU`);
+    entry.compositor.stop().catch(() => {});
+  }
+}
+setInterval(() => sweepIdlePrograms(), 30000).unref?.();
 
 function releaseProgram(key, ref) {
   const entry = programCompositors.get(key);
@@ -322,6 +341,7 @@ function renditionFor(account, plan, sourcePath, ref) {
     r.supervisor = new SupervisedProcess({
       name:`${account.twitchLogin}/rendition-${id}`,
       shouldRun:() => r.refs.size > 0 && activeFeedPath.has(accountId),
+      maxFailures:0,
       build:() => {
         if (sourcePath !== activeFeedPath.get(accountId) && !lastReadyPaths.has(sourcePath)) return { wait:true, reason:`waiting for ${sourcePath}` };
         r.encoder = r.forceCpu ? gpuEncoder.CPU_PROFILE : (r.failed.length ? gpuEncoder.nextWorkingEncoder(pref, r.failed) : gpuEncoder.resolveEncoder(pref));
@@ -370,6 +390,12 @@ function startDestination(account, dest, _legacyPathName = null, { forceCpu = fa
   worker.supervisor = new SupervisedProcess({
     name:`${account.twitchLogin}/${dest.name}`,
     shouldRun:() => !!current()?.enabled && activeFeedPath.has(accountId),
+    // Gave up after repeated failures (bad key, dead ingest): release the
+    // program renderer / shared encode it was holding so they can stop too.
+    onGiveUp:() => {
+      if (worker.programKey) { releaseProgram(worker.programKey, key); worker.programKey = null; }
+      if (worker.renditionKey) { releaseRendition(worker.renditionKey, key); worker.renditionKey = null; }
+    },
     build:() => {
       const acc = getAccount(accountId);
       const d = current();
@@ -525,7 +551,7 @@ function startOutputsFor(account, pathName) {
   if (account.relayPushEnabled) startRelayPushFor(account, source);
   console.log(`[dashboard] ${account.twitchLogin} routed ${sourceSession?.source || "source"} for profile ${sourceSession?.profileId || "legacy"}`);
 }
-function clearGrace(accountId) { const grace = graceState.get(accountId); if (!grace) return; clearTimeout(grace.timer); graceState.delete(accountId); }
+function clearGrace(accountId) { const grace = graceState.get(accountId); if (!grace) return; clearTimeout(grace.timer); if (grace.idleTimer) clearTimeout(grace.idleTimer); graceState.delete(accountId); }
 function enterGrace(account, pathName, source, profileId) {
   const previous = graceState.get(account.twitchUserId);
   if (previous?.profileId === profileId) return;
@@ -537,7 +563,22 @@ function enterGrace(account, pathName, source, profileId) {
     const selected = activeProfile(account);
     if (selected?.id === profileId) stopOutputsFor(account.twitchUserId);
   }, RECONNECT_GRACE_MS);
-  graceState.set(account.twitchUserId, { timer, deadline, pathName, source, profileId });
+  // Short dropouts keep every output running so Twitch/YouTube do not end the
+  // broadcast. After RECONNECT_IDLE_STOP_MS without a source, the renderers
+  // and destination pushes are stopped (they would only encode a frozen frame)
+  // while the grace window keeps waiting; a reconnect restarts them.
+  let idleTimer = null;
+  if (RECONNECT_IDLE_STOP_MS > 0 && RECONNECT_IDLE_STOP_MS < RECONNECT_GRACE_MS) {
+    idleTimer = setTimeout(() => {
+      const grace = graceState.get(account.twitchUserId);
+      if (grace?.profileId !== profileId || liveSessions.has(pathName)) return;
+      console.log(`[dashboard] ${account.twitchLogin} ${source} still offline after ${Math.round(RECONNECT_IDLE_STOP_MS / 1000)}s - pausing renderers and destinations to save CPU (they restart when the source returns)`);
+      stopOutputsFor(account.twitchUserId);
+      grace.idleStopped = true;
+    }, RECONNECT_IDLE_STOP_MS);
+    idleTimer.unref?.();
+  }
+  graceState.set(account.twitchUserId, { timer, idleTimer, deadline, pathName, source, profileId });
 }
 function candidateForProfile(accountId, profile) {
   const rows = [...liveSessions.entries()].filter(([,s]) => s.accountId === accountId && s.profileId === profile?.id);

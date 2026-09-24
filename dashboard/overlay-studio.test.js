@@ -418,3 +418,31 @@ test("hybrid pipeline graph places the gameplay box and overlays the PNG layer",
   assert.match(g, /alpha=premultiplied/);
   assert.ok(g.endsWith("[vbase]"));
 });
+
+// ------------------------------------------------------- idle resources
+test("a destination that keeps failing stops retrying instead of respawning forever", async () => {
+  let spawned = 0, gaveUp = null;
+  const proc = new supervisor.SupervisedProcess({
+    name:"dead-ingest", logger:{ warn(){} }, maxFailures:2,
+    build:() => { spawned++; return { cmd:process.execPath, args:["-e", "process.exit(1)"] }; },
+    onGiveUp:status => { gaveUp = status; },
+  });
+  proc.start();
+  await new Promise(r => setTimeout(r, 4500));
+  assert.equal(proc.status().state, "gave-up");
+  assert.ok(gaveUp, "onGiveUp releases the renderer it was holding");
+  const count = spawned;
+  await new Promise(r => setTimeout(r, 2500));
+  assert.equal(spawned, count, "no more FFmpeg spawns after giving up");
+  proc.stop();
+});
+
+test("Music 24/7 only runs while something consumes it", () => {
+  const music24 = require("./music24");
+  const profile = { id:"radio" };
+  assert.equal(music24.musicHasConsumer({ destinationProfiles:{ radio:[{ enabled:false }] } }, profile), false);
+  assert.equal(music24.musicHasConsumer({ destinationProfiles:{ radio:[{ enabled:true }] } }, profile), true);
+  assert.equal(music24.musicHasConsumer({ destinationProfiles:{ radio:[] }, relayPushEnabled:true }, profile), true);
+  process.env.MUSIC24_ALWAYS_ON = "true";
+  try { assert.equal(music24.musicHasConsumer({}, profile), true); } finally { delete process.env.MUSIC24_ALWAYS_ON; }
+});

@@ -41,7 +41,7 @@
     const h = d.health;
     if (!d.enabled) return `<span class="badge">OFF</span>`;
     if (!h) return `<span class="badge purple">ENABLED</span>`;
-    const map = { live:["green", "LIVE"], starting:["cyan", "STARTING"], waiting:["yellow", "WAITING"], reconnecting:["yellow", "RECONNECTING"], error:["", "ERROR"], idle:["", "IDLE"] };
+    const map = { live:["green", "LIVE"], starting:["cyan", "STARTING"], waiting:["yellow", "WAITING"], reconnecting:["yellow", "RECONNECTING"], error:["", "ERROR"], idle:["", "IDLE"], "gave-up":["", "STOPPED · FIX & RE-ENABLE"] };
     const [cls, label] = map[h.state] || ["", String(h.state || "").toUpperCase()];
     return `<span class="badge ${cls}">${label}</span>`;
   }
@@ -193,6 +193,7 @@
         <div><label>Video bitrate (kbps)</label><input id="mp-br" type="number" min="500" max="20000" placeholder="3500" value="${perf.bitrateKbps || ""}"></div>
       </div>
       <p style="margin-top:8px">With <strong>Auto</strong> mode and <strong>Auto</strong> resolution, CastNexus tests this machine (Pi / VPS / PC, GPU encoder, real browser GPU, CPU speed) before the stream starts and pushes the best resolution, FPS and mode it can hold${rt?.autoTier ? ` - now <strong>${esc(rt.autoTier)}</strong> (${esc(rt.autoReason || "")})` : ""}. If the stream cannot keep up it steps down one level automatically. Audio quality is never reduced - only how often the visualiser redraws. Hardware encoders are probed first and fall back automatically (NVENC → QSV/VAAPI → x264).</p>
+      ${S.status?.music24?.state === "standby" ? `<div class="callout" style="margin-top:10px">⏸ ${esc(S.status.music24.reason || "Music 24/7 is paused - nothing is consuming it.")}</div>` : ""}
       ${rt ? `<div class="music-perf-status">
         <span>Encoder</span><strong>${esc(rt.encoder || "—")}${rt.encoderFallbackReason ? ` <small class="muted">(${esc(rt.encoderFallbackReason)})</small>` : ""}</strong>
         <span>Resolution</span><strong>${esc(rt.resolution || "—")}</strong>

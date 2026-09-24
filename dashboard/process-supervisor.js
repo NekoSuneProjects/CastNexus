@@ -47,8 +47,13 @@ function killHard(child, graceMs = KILL_GRACE_MS) {
 class SupervisedProcess {
   // build() -> { cmd, args } is called on every (re)start so the latest
   // encoder/fallback/destination settings are always used.
-  constructor({ name, build, shouldRun = () => true, onExit = null, logger = console, bin = process.env.FFMPEG_BIN || "ffmpeg" }) {
+  constructor({ name, build, shouldRun = () => true, onExit = null, onGiveUp = null, maxFailures = Number(process.env.DESTINATION_MAX_RETRIES ?? 20), logger = console, bin = process.env.FFMPEG_BIN || "ffmpeg" }) {
     this.name = name;
+    // Consecutive failed starts (a run shorter than STABLE_MS) before the
+    // worker stops retrying instead of respawning FFmpeg forever. 0 = never.
+    this.maxFailures = Number(maxFailures) > 0 ? Math.round(Number(maxFailures)) : 0;
+    this.onGiveUp = onGiveUp;
+    this.consecutiveFailures = 0;
     this.build = build;
     this.shouldRun = shouldRun;
     this.onExit = onExit;
@@ -68,6 +73,7 @@ class SupervisedProcess {
   }
 
   start() {
+    if (this.state === "gave-up") { this.consecutiveFailures = 0; this.state = "idle"; }
     this.stopped = false;
     if (this.child || this.timer) return;
     this._spawn();
@@ -116,6 +122,14 @@ class SupervisedProcess {
       let handled = false;
       try { handled = this.onExit?.({ code, signal, uptimeMs:uptime, errorKind:this.lastErrorKind, stderr:this.stderrTail.slice() }) === "handled"; } catch {}
       if (this.stopped || handled || !this.shouldRun()) { this.state = this.stopped ? "idle" : this.state; return; }
+      this.consecutiveFailures = uptime >= STABLE_MS ? 0 : this.consecutiveFailures + 1;
+      if (this.maxFailures && this.consecutiveFailures >= this.maxFailures) {
+        this.stopped = true;
+        this.state = "gave-up";
+        this.logger.warn?.(`[supervisor] ${this.name} failed ${this.consecutiveFailures} times in a row${this.lastErrorKind ? ` (${this.lastErrorKind})` : ""}; stopped retrying to save CPU - fix it and re-enable the destination`);
+        try { this.onGiveUp?.(this.status()); } catch {}
+        return;
+      }
       this.backoffMs = nextBackoff(this.backoffMs, uptime);
       this.restarts++;
       this.state = "reconnecting";
@@ -151,6 +165,7 @@ class SupervisedProcess {
       state:this.state,
       pid:this.pid(),
       restarts:this.restarts,
+      consecutiveFailures:this.consecutiveFailures,
       uptimeMs:this.child && this.startedAt ? Date.now() - this.startedAt : 0,
       nextRetryMs:this.timer ? this.backoffMs : null,
       waitReason:this.state === "waiting" ? this.waitReason : null,

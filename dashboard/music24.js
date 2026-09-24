@@ -11,6 +11,7 @@ const { resolveMusicPerformance, sceneQueryFor, normaliseMode, everyNthFrameFor 
 const events = require("./events");
 const monitor = require("./resource-monitor");
 const hardwareProfile = require("./hardware-profile");
+const { bucketKey } = require("./profile-destinations");
 
 const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, "data", "state.json");
 const MUSIC_DIR = process.env.MUSIC_DIR || path.join(path.dirname(STATE_FILE), "music");
@@ -566,6 +567,14 @@ class Music24Worker {
   }
 }
 
+function musicHasConsumer(account, profile) {
+  if (String(process.env.MUSIC24_ALWAYS_ON || "").toLowerCase() === "true") return true;
+  if (account.relayPushEnabled || account.recordingEnabled) return true;
+  const bucket = account.destinationProfiles?.[bucketKey(profile.id)];
+  const list = Array.isArray(bucket) ? bucket : (Array.isArray(account.destinations) ? account.destinations : []);
+  return list.some(dest => dest?.enabled);
+}
+
 async function reconcile() {
   const state = readState();
   if (!state?.accounts) return;
@@ -581,6 +590,13 @@ async function reconcile() {
       && account.twitchLogin;
 
     if (!ready) continue;
+    // Do not render/encode 24/7 for nobody: run only while something consumes
+    // the stream (an enabled destination, relay push or recording), unless
+    // MUSIC24_ALWAYS_ON=true (e.g. only watched through public playback).
+    if (!musicHasConsumer(account, profile)) {
+      lastStatus.set(String(account.twitchUserId), { state:"standby", profileId:profile.id, outputPath:null, error:null, reason:"No destination is enabled for this Music profile - Music 24/7 is paused to save CPU. Enable a destination (or set MUSIC24_ALWAYS_ON=true) to go on air." });
+      continue;
+    }
 
     const accountId = String(account.twitchUserId);
     desired.add(accountId);
@@ -700,6 +716,7 @@ module.exports = {
   activeProgramScene,
   programSceneUrl,
   musicWorkerSignature,
+  musicHasConsumer,
   musicPerformanceSettings,
   profileVideo,
   compositorExtras,
