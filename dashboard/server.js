@@ -848,7 +848,7 @@ function programStatusFor(account) {
   for (const entry of programCompositors.values()) {
     if (entry.accountId !== account.twitchUserId) continue;
     const s = entry.compositor.status();
-    out.push({ orientation:entry.orientation, sceneId:entry.sceneId, path:entry.path, consumers:entry.refs.size, state:s.state, error:s.error, encoder:s.encoder, hardwareEncoder:s.hardwareEncoder, encoderFallbackReason:s.encoderFallbackReason, width:s.width, height:s.height, fps:s.outputFps, renderFps:s.renderFps, measuredRenderFps:s.measuredRenderFps, measuredEncodeFps:s.measuredEncodeFps, browserAudio:s.browserAudio, mixer:s.mixer });
+    out.push({ orientation:entry.orientation, sceneId:entry.sceneId, path:entry.path, consumers:entry.refs.size, state:s.state, error:s.error, encoder:s.encoder, hardwareEncoder:s.hardwareEncoder, encoderFallbackReason:s.encoderFallbackReason, width:s.width, height:s.height, fps:s.outputFps, renderFps:s.renderFps, measuredRenderFps:s.measuredRenderFps, measuredEncodeFps:s.measuredEncodeFps, hybrid:!!s.hybrid, browserAudio:s.browserAudio, mixer:s.mixer });
   }
   return out;
 }

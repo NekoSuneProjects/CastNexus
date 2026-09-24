@@ -245,7 +245,7 @@
     const program = type => d.programs?.find(p => p.orientation === type);
     // Target size/fps plus what is really happening: frames the browser drew
     // and frames FFmpeg took in per second (a low encode rate = stutter).
-    const progLabel = p => p ? `${p.width}×${p.height} @ ${p.fps} · ${p.state}${p.measuredEncodeFps != null ? ` · encoding ${p.measuredEncodeFps} fps` : ""}${p.measuredRenderFps != null ? ` · browser ${p.measuredRenderFps} fps` : ""}${p.measuredEncodeFps != null && p.measuredEncodeFps < p.renderFps * 0.8 ? " ⚠ below target" : ""}` : "not running";
+    const progLabel = p => p ? `${p.width}×${p.height} @ ${p.fps} · ${p.state}${p.measuredEncodeFps != null ? ` · encoding ${p.measuredEncodeFps} fps` : ""}${p.hybrid ? " · gameplay decoded by FFmpeg, overlays redraw only on change" : p.measuredRenderFps != null ? ` · browser ${p.measuredRenderFps} fps` : ""}${p.measuredEncodeFps != null && p.measuredEncodeFps < (p.hybrid ? p.fps : p.renderFps) * 0.8 ? " ⚠ below target" : ""}` : "not running";
     const hw = d.hardware;
     const hardwareHtml = hw ? `<div class="card-title-row" style="margin-top:14px"><div><h3>Hardware test</h3><p>${hw.probed ? `Tested ${esc(new Date(hw.probedAt).toLocaleString())} in ${(hw.probeMs / 1000).toFixed(1)} s.` : "Estimate - the first hardware test is still running."} Auto quality below is chosen from these results before any stream starts, and steps down automatically if a stream cannot keep up.</p></div><button class="btn btn-ghost btn-sm" id="hw-retest">Re-test hardware</button></div>
       <table class="perf-table">

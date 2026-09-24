@@ -363,7 +363,8 @@ class Compositor extends EventEmitter {
     this.frameCount=0;
     this.framesDropped=0;
     this.renderFrames=0;
-    this.rateWindow={ at:Date.now(), renderFrames:0, frameCount:0, renderFps:null, encodeFps:null };
+    this.encodedFrames=null;
+    this.rateWindow={ at:Date.now(), renderFrames:0, frameCount:0, encodedFrames:null, renderFps:null, encodeFps:null };
     this.lastFrameAt=null;
     this.lastPaintAt=null;
     this.latestFrame=null;
@@ -418,8 +419,11 @@ class Compositor extends EventEmitter {
     const now=Date.now(),w=this.rateWindow,elapsed=(now-w.at)/1000;
     if(elapsed>=2){
       w.renderFps=Math.round((this.renderFrames-w.renderFrames)/elapsed*10)/10;
-      w.encodeFps=Math.round((this.frameCount-w.frameCount)/elapsed*10)/10;
-      w.at=now;w.renderFrames=this.renderFrames;w.frameCount=this.frameCount;
+      // Prefer FFmpeg's own output frame counter (-progress): in hybrid mode the
+      // overlay pipe only carries frames when the overlay changes.
+      const encoded=this.encodedFrames;
+      w.encodeFps=encoded!=null&&w.encodedFrames!=null&&encoded>=w.encodedFrames?Math.round((encoded-w.encodedFrames)/elapsed*10)/10:encoded!=null?w.encodeFps:Math.round((this.frameCount-w.frameCount)/elapsed*10)/10;
+      w.at=now;w.renderFrames=this.renderFrames;w.frameCount=this.frameCount;w.encodedFrames=encoded;
     }
     return w;
   }
@@ -447,6 +451,7 @@ class Compositor extends EventEmitter {
       renderFps:this.inputFps(),
       measuredRenderFps:rates.renderFps,
       measuredEncodeFps:rates.encodeFps,
+      hybrid:this.isHybrid(),
       chromiumGpu:!!this.video.gpuEnabled,
       browserAudio:{ wanted:this.browserAudioWanted, active:!!this.browserAudio?.available, error:this.browserAudio?.error||null },
       mixer:{ ...this.mixer },
@@ -986,14 +991,19 @@ class Compositor extends EventEmitter {
       ? [hybridVideoGraph({plan:this.hybridPlan,width:this.video.width,height:this.video.height,fps:this.video.fps}),encoderFilterSuffix(enc,"vbase","v"),audioPlan.filter].join(";")
       : compositorFilterGraph({fps:this.video.fps,width:this.video.width,height:this.video.height,encoder:enc,audioPlan,musicOnly:!this.includeLiveAudio});
     const sourceArgs=hybrid?[...(this.hybrid.inputArgs||["-thread_queue_size","1024","-fflags","+genpts+discardcorrupt","-analyzeduration","1000000","-probesize","1000000"]),"-an","-i",this.hybrid.sourceUrl]:[];
-    const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats",...globalEncoderArgs(enc),...sourceArgs,...videoInputArgs({electronOffscreen:this.electronOffscreen,fps:this.video.fps,inputFps:this.inputFps(),width:this.video.width,height:this.video.height,format:hybrid?"png":"mjpeg"}),...audioPlan.args,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,gop:this.video.fps*(Number(this.video.gopSeconds)||1),bitrate,maxrate,bufsize,x264Preset:this.video.x264Preset||process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",this.video.audioBitrate||process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
+    const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats","-progress","pipe:2","-stats_period","2",...globalEncoderArgs(enc),...sourceArgs,...videoInputArgs({electronOffscreen:this.electronOffscreen,fps:this.video.fps,inputFps:this.inputFps(),width:this.video.width,height:this.video.height,format:hybrid?"png":"mjpeg"}),...audioPlan.args,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,gop:this.video.fps*(Number(this.video.gopSeconds)||1),bitrate,maxrate,bufsize,x264Preset:this.video.x264Preset||process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",this.video.audioBitrate||process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
     if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg command: ffmpeg ${args.join(" ")}`);
     const started=Date.now();
     this.ffmpeg=spawn(FFMPEG_BIN,args,{stdio:["pipe","ignore","pipe"]});
     this.ffmpeg.on("spawn",()=>{if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg spawned pid=${this.ffmpeg?.pid}`);});
     this.ffmpeg.on("error",err=>{this.logger.warn(`[compositor:${this.accountId}] ffmpeg process error: ${err.message}`);});
+    this.encodedFrames=null;
     this.ffmpeg.stderr.on("data",chunk=>{
-      const line=chunk.toString().trim();
+      let text=chunk.toString();
+      const frames=[...text.matchAll(/^frame=(\d+)$/gm)];
+      if(frames.length)this.encodedFrames=Number(frames.at(-1)[1]);
+      text=text.replace(/^(frame|fps|stream_\d+_\d+_q|bitrate|total_size|out_time_us|out_time_ms|out_time|dup_frames|drop_frames|speed|progress)=.*$/gm,"");
+      const line=text.trim();
       if(!line)return;
       if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg: ${line}`);
       else if(/error|failed|cannot|buffer|queue/i.test(line))this.logger.warn(`[compositor:${this.accountId}] ffmpeg: ${line}`);
