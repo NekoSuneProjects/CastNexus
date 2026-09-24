@@ -181,6 +181,8 @@ function probeSourceFor(account, pathName) {
   entry.promise = hardwareProfile.probeStreamInfo(`rtmp://127.0.0.1:1935/${pathName}`).then(info => {
     entry.info = info;
     if (info) console.log(`[dashboard] ${account.twitchLogin} source ${info.width || "?"}x${info.height || "?"} @ ${info.fps || "?"} fps`);
+    // Running programs re-frame to the real source size live (no restart).
+    for (const e of programCompositors.values()) if (e.accountId === account.twitchUserId) e.compositor.updateHybridPlan?.();
     return info;
   }).catch(() => null);
   sourceInfo.set(account.twitchUserId, entry);
@@ -253,7 +255,7 @@ function programEntry(account, orientation, sceneId) {
     video:programVideo(account, orientation),
     browserAudio:sceneModel.libraryNeedsBrowserAudio(account),
     mixer:lib.mixer,
-    hybrid:programHybrid() ? { sourceUrl, getPlan:() => hybridPlanFor(accountId, orientation, sceneId, compositor.video) } : null,
+    hybrid:programHybrid() ? { sourceUrl, getSource:() => sourceInfo.get(accountId)?.info || null, getPlan:() => hybridPlanFor(accountId, orientation, sceneId, compositor.video) } : null,
     diagnostics:{ group:"program", label:`${orientation === "vertical" ? "Vertical" : "Horizontal"} program${sceneId ? ` (${sceneModel.findScene(account, sceneId)?.name || sceneId})` : ""}` },
   });
   entry = { key, accountId, orientation, sceneId:sceneId || null, path:pathName, compositor, refs:new Set(), stopTimer:null, signature:JSON.stringify(programVideo(account, orientation)) };

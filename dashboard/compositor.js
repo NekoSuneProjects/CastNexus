@@ -12,6 +12,7 @@ const { PcmAudioRelay } = require("./audio-relay");
 const { BrowserAudioCapture, layerVolumeScript } = require("./browser-audio");
 const monitor = require("./resource-monitor");
 const FFMPEG_BIN = process.env.FFMPEG_BIN || "ffmpeg";
+const { ZmqCommandClient, bindAddressOption, freePort } = require("./zmq-command");
 
 // Both Desktop and Docker now carry PCM over the independently paced relay.
 // FFmpeg treats audio as the timing master, so the producer must never stall
@@ -158,28 +159,65 @@ function overlayFps(outputFps, value = process.env.COMPOSITOR_OVERLAY_FPS) {
 function evenInt(n) { const v = Math.round(Number(n) || 0); return v - (v % 2); }
 
 // plan = { box:{x,y,w,h} in output pixels, program:{fit,scale,offsetX,offsetY,crop} }
-function hybridVideoGraph({ plan, width, height, fps }) {
+// source = probed { width, height } of the gameplay feed.
+//
+// Everything is resolved to plain numbers for three commandable filters -
+// crop@gc (which part of the source is visible), scale@gs (its size on
+// screen) and overlay@gp (where it goes) - so a new box / framing is applied
+// to a RUNNING encoder through FFmpeg's zmq filter instead of a restart
+// (which dropped every destination). scale@gn first normalises the feed to
+// the probed size, so the numbers stay valid even if the source changes.
+function hybridGeometry({ plan, width, height, source = null }) {
   const W = evenInt(width), H = evenInt(height);
+  const SW0 = Math.max(16, evenInt(source?.width || 1920)), SH0 = Math.max(16, evenInt(source?.height || 1080));
   const box = plan?.box || { x:0, y:0, w:W, h:H };
-  const BW = Math.max(2, evenInt(box.w)), BH = Math.max(2, evenInt(box.h));
+  const BX = Number(box.x) || 0, BY = Number(box.y) || 0, BW = Math.max(2, Number(box.w) || W), BH = Math.max(2, Number(box.h) || H);
   const p = plan?.program || {}, c = p.crop || {};
   const l = +c.left || 0, r = +c.right || 0, t = +c.top || 0, b = +c.bottom || 0;
-  const cw = Math.max(0.05, 1 - l - r), ch = Math.max(0.05, 1 - t - b);
+  const cx = l * SW0, cy = t * SH0;
+  const cw = Math.max(0.05, 1 - l - r) * SW0, ch = Math.max(0.05, 1 - t - b) * SH0;
   const k = Math.max(0.1, Number(p.scale) || 1);
-  const crop = `crop=w='trunc(iw*${cw.toFixed(4)}/2)*2':h='trunc(ih*${ch.toFixed(4)}/2)*2':x='iw*${l.toFixed(4)}':y='ih*${t.toFixed(4)}'`;
-  let scale;
-  if (p.fit === "stretch") scale = `scale=w=${evenInt(BW * k)}:h=${evenInt(BH * k)}`;
-  else {
-    const pick = p.fit === "fit" ? "min" : "max";
-    scale = `scale=w='trunc(${pick}(${BW}/iw,${BH}/ih)*iw*${k.toFixed(4)}/2)*2':h='trunc(${pick}(${BW}/iw,${BH}/ih)*ih*${k.toFixed(4)}/2)*2'`;
-  }
-  const ox = (Number(p.offsetX) || 0).toFixed(4), oy = (Number(p.offsetY) || 0).toFixed(4);
+  let sx, sy;
+  if (p.fit === "stretch") { sx = BW / cw * k; sy = BH / ch * k; }
+  else { const s = (p.fit === "fit" ? Math.min : Math.max)(BW / cw, BH / ch) * k; sx = sy = s; }
+  const iw = cw * sx, ih = ch * sy;
+  const px = BX + (BW - iw) / 2 + (Number(p.offsetX) || 0) * BW;
+  const py = BY + (BH - ih) / 2 + (Number(p.offsetY) || 0) * BH;
+  // Visible part: inside the image, the box and the canvas.
+  const ax0 = Math.max(px, BX, 0), ax1 = Math.min(px + iw, BX + BW, W);
+  const ay0 = Math.max(py, BY, 0), ay1 = Math.min(py + ih, BY + BH, H);
+  const norm = { w:SW0, h:SH0 };
+  if (ax1 - ax0 < 2 || ay1 - ay0 < 2) return { W, H, norm, crop:{ w:2, h:2, x:0, y:0 }, scale:{ w:2, h:2 }, pos:{ x:W + 16, y:0 }, visible:false };
+  const clampEven = (v, max) => Math.max(2, Math.min(evenInt(v), max - (max % 2)));
+  const cropW = clampEven((ax1 - ax0) / sx, SW0), cropH = clampEven((ay1 - ay0) / sy, SH0);
+  const cropX = Math.max(0, Math.min(SW0 - cropW, Math.round(cx + (ax0 - px) / sx)));
+  const cropY = Math.max(0, Math.min(SH0 - cropH, Math.round(cy + (ay0 - py) / sy)));
+  return {
+    W, H, norm,
+    crop:{ w:cropW, h:cropH, x:cropX, y:cropY },
+    scale:{ w:Math.max(2, evenInt(ax1 - ax0)), h:Math.max(2, evenInt(ay1 - ay0)) },
+    pos:{ x:Math.round(ax0), y:Math.round(ay0) },
+    visible:true,
+  };
+}
+
+// [target, command, value] list that moves a running graph to geometry g.
+function hybridLayoutCommands(g) {
   return [
-    `[0:v]fps=${fps},${crop},${scale}[hfg]`,
-    `color=c=black:s=${BW}x${BH}:r=${fps}[hboxbg]`,
-    `[hboxbg][hfg]overlay=x='(main_w-overlay_w)/2+${ox}*main_w':y='(main_h-overlay_h)/2+${oy}*main_h':eof_action=repeat:shortest=0[hbox]`,
-    `color=c=black:s=${W}x${H}:r=${fps}[hcanvas]`,
-    `[hcanvas][hbox]overlay=x=${Math.round(box.x)}:y=${Math.round(box.y)}:eof_action=repeat[hbase]`,
+    ["scale@gn", "w", g.norm.w], ["scale@gn", "h", g.norm.h],
+    ["crop@gc", "w", g.crop.w], ["crop@gc", "h", g.crop.h], ["crop@gc", "x", g.crop.x], ["crop@gc", "y", g.crop.y],
+    ["scale@gs", "w", g.scale.w], ["scale@gs", "h", g.scale.h],
+    ["overlay@gp", "x", g.pos.x], ["overlay@gp", "y", g.pos.y],
+  ];
+}
+
+function hybridVideoGraph({ plan, width, height, fps, source = null, zmqPort = null }) {
+  const g = hybridGeometry({ plan, width, height, source });
+  const zmq = zmqPort ? `zmq=${bindAddressOption(zmqPort)},` : "";
+  return [
+    `[0:v]${zmq}fps=${fps},scale@gn=w=${g.norm.w}:h=${g.norm.h},crop@gc=w=${g.crop.w}:h=${g.crop.h}:x=${g.crop.x}:y=${g.crop.y},scale@gs=w=${g.scale.w}:h=${g.scale.h}[hfg]`,
+    `color=c=black:s=${g.W}x${g.H}:r=${fps}[hcanvas]`,
+    `[hcanvas][hfg]overlay@gp=x=${g.pos.x}:y=${g.pos.y}:eof_action=repeat[hbase]`,
     `[1:v]setpts=PTS-STARTPTS[hov]`,
     `[hbase][hov]overlay=0:0:alpha=premultiplied:eof_action=repeat,fps=${fps},setsar=1[vbase]`,
   ].join(";");
@@ -434,13 +472,41 @@ class Compositor extends EventEmitter {
 
   // Called after scene edits/switches: only a change of the Gameplay box or
   // framing needs an FFmpeg restart; overlay content updates live.
+  _hybridSource(){
+    let info=null;
+    try{info=this.hybrid?.getSource?.()||null;}catch{}
+    return info?.width&&info?.height?{width:info.width,height:info.height}:(this.hybridSourceUsed||null);
+  }
+
+  // Called after scene edits/switches and when the source is probed. Moves
+  // the gameplay in the RUNNING encoder over zmq (no restart, destinations
+  // stay up). Only falls back to a restart when live commands are
+  // unavailable or fail.
   updateHybridPlan(){
     if(!this.isHybrid()||this.state!=="running")return false;
     let next=null;
     try{next=this.hybrid.getPlan?.()||null;}catch{}
-    if(!next||hybridPlanSignature(next)===hybridPlanSignature(this.hybridPlan))return false;
-    this.logger.log(`[compositor:${this.accountId}] gameplay framing changed; restarting encoder`);
-    this._scheduleReconnect(250);
+    const plan=next||this.hybridPlan;
+    const source=this._hybridSource();
+    const sig=hybridPlanSignature(plan)+JSON.stringify(source||null);
+    if(!plan||sig===this.hybridLayoutSig)return false;
+    this.hybridPlan=plan;this.hybridLayoutSig=sig;
+    if(!this.zmq){this.logger.log(`[compositor:${this.accountId}] gameplay framing changed; restarting encoder (live layout unavailable)`);this._scheduleReconnect(250);return true;}
+    const geometry=hybridGeometry({plan,width:this.video.width,height:this.video.height,source});
+    const client=this.zmq,token=(this.layoutToken=(this.layoutToken||0)+1);
+    (async()=>{
+      for(const [target,cmd,value] of hybridLayoutCommands(geometry)){
+        if(token!==this.layoutToken||client!==this.zmq)return;
+        const reply=await client.send(`${target} ${cmd} ${value}`);
+        if(!/^0\b/.test(String(reply)))throw new Error(`${target} ${cmd}: ${reply}`);
+      }
+      this.hybridSourceUsed=source;
+      this.logger.log(`[compositor:${this.accountId}] gameplay layout updated live (${geometry.visible?`${geometry.scale.w}x${geometry.scale.h} at ${geometry.pos.x},${geometry.pos.y}`:"hidden"})`);
+    })().catch(err=>{
+      if(token!==this.layoutToken)return;
+      this.logger.warn(`[compositor:${this.accountId}] live layout update failed (${err.message}); restarting encoder`);
+      this._scheduleReconnect(250);
+    });
     return true;
   }
 
@@ -552,6 +618,9 @@ class Compositor extends EventEmitter {
   setBrowserAudio(enabled){
     const wanted=!!enabled;
     if(wanted===this.browserAudioWanted)return false;
+    // Never relaunch just to turn capture OFF (an idle sink costs ~nothing);
+    // only turning it on needs Chromium restarted without --mute-audio.
+    if(!wanted&&this.state==="running")return false;
     this.browserAudioWanted=wanted;
     if(this.state==="running"){this.logger.log(`[compositor:${this.accountId}] browser audio ${wanted?"enabled":"disabled"}; restarting renderer`);this._scheduleReconnect(250);}
     return true;
@@ -571,6 +640,8 @@ class Compositor extends EventEmitter {
     await this._startMusicAudioTap();
     await this._launchBrowser();
     await this._openScene();
+    // Live layout channel (zmq filter) for moving the gameplay without a restart.
+    this.zmqPort=this.isHybrid()&&String(process.env.COMPOSITOR_LIVE_LAYOUT||"true").toLowerCase()!=="false"?await freePort().catch(()=>null):null;
     this._spawnFfmpeg();
     await this._startScreencast();
     this._startWatchdog();
@@ -1020,13 +1091,19 @@ class Compositor extends EventEmitter {
     // Hybrid inputs: 0 = source video (RTMP), 1 = overlay PNG pipe, 2.. = audio.
     const inlineAudio=this.inlineSourceAudio();
     const audioPlan=inlineAudio?hybridAudioPlan(music,browser,this.mixer.program):audioInputPlan(this.includeLiveAudio,live,music,browser,hybrid?2:1);
-    if(hybrid)this.hybridPlan=this._currentHybridPlan();
+    if(hybrid){
+      this.hybridPlan=this._currentHybridPlan();
+      this.hybridSourceUsed=this._hybridSource();
+      this.hybridLayoutSig=hybridPlanSignature(this.hybridPlan)+JSON.stringify(this.hybridSourceUsed||null);
+      this.zmq?.close();
+      this.zmq=this.zmqPort?new ZmqCommandClient({port:this.zmqPort,timeoutMs:4000}):null;
+    }
     const lowPower=!enc.hardware&&(process.arch==="arm64"||process.arch==="arm");
     const bitrate=this.video.bitrate||process.env.COMPOSITOR_VIDEO_BITRATE||(this.video.width<=1280&&this.video.height<=1280?"4000k":"6000k");
     const maxrate=this.video.maxrate||process.env.COMPOSITOR_VIDEO_MAXRATE||bitrate;
     const bufsize=this.video.bufsize||process.env.COMPOSITOR_VIDEO_BUFSIZE||(this.video.width<=1280&&this.video.height<=1280?"8000k":"12000k");
     const filter=hybrid
-      ? [hybridVideoGraph({plan:this.hybridPlan,width:this.video.width,height:this.video.height,fps:this.video.fps}),encoderFilterSuffix(enc,"vbase","v"),audioPlan.filter].join(";")
+      ? [hybridVideoGraph({plan:this.hybridPlan,width:this.video.width,height:this.video.height,fps:this.video.fps,source:this.hybridSourceUsed,zmqPort:this.zmqPort}),encoderFilterSuffix(enc,"vbase","v"),audioPlan.filter].join(";")
       : compositorFilterGraph({fps:this.video.fps,width:this.video.width,height:this.video.height,encoder:enc,audioPlan,musicOnly:!this.includeLiveAudio});
     const sourceArgs=hybrid?[...(this.hybrid.inputArgs||["-thread_queue_size","1024","-fflags","+genpts+discardcorrupt","-analyzeduration","1000000","-probesize","1000000"]),...(inlineAudio?[]:["-an"]),"-i",resolveUrl(this.hybrid.sourceUrl)]:[];
     const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats","-progress","pipe:2","-stats_period","2",...globalEncoderArgs(enc),...sourceArgs,...videoInputArgs({electronOffscreen:this.electronOffscreen,fps:this.video.fps,inputFps:this.inputFps(),width:this.video.width,height:this.video.height,format:hybrid?"png":"mjpeg"}),...audioPlan.args,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,gop:this.video.fps*(Number(this.video.gopSeconds)||1),bitrate,maxrate,bufsize,x264Preset:this.video.x264Preset||process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",this.video.audioBitrate||process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
@@ -1143,6 +1220,9 @@ class Compositor extends EventEmitter {
   }
 
   async _teardown(){
+    this.layoutToken=(this.layoutToken||0)+1;
+    try{this.zmq?.close();}catch{}
+    this.zmq=null;
     this._stopWatchdog();
     this._stopFramePump();
     this._stopMusicPoll();
@@ -1195,4 +1275,4 @@ class Compositor extends EventEmitter {
   }
 }
 
-module.exports={hybridAudioPlan,hybridEnabled,overlayFps,hybridVideoGraph,hybridPlanSignature,Compositor,defaultVideoConfig,buildChromiumGpuArgs,chromiumSecurityArgs,chromiumLaunchArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan,pcmInputArgs,compositorFilterGraph,videoInputArgs,pumpTimestampMode,framePumpBacklogLimit,cfrBacklogLimit,framesOwed,nextFrameDelay,resyncFrameIndex,electronOffscreenWindowOptions,effectiveMixerGains};
+module.exports={hybridAudioPlan,hybridEnabled,overlayFps,hybridVideoGraph,hybridGeometry,hybridLayoutCommands,hybridPlanSignature,Compositor,defaultVideoConfig,buildChromiumGpuArgs,chromiumSecurityArgs,chromiumLaunchArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan,pcmInputArgs,compositorFilterGraph,videoInputArgs,pumpTimestampMode,framePumpBacklogLimit,cfrBacklogLimit,framesOwed,nextFrameDelay,resyncFrameIndex,electronOffscreenWindowOptions,effectiveMixerGains};

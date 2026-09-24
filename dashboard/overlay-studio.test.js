@@ -412,11 +412,34 @@ test("frame pump timing follows the FFmpeg version (wallclock on 5.1/6, CFR on 7
 });
 
 test("hybrid pipeline graph places the gameplay box and overlays the PNG layer", () => {
-  const g = compositor.hybridVideoGraph({ plan:{ box:{ x:0, y:420, w:720, h:405 }, program:{ fit:"fill" } }, width:720, height:1280, fps:30 });
-  assert.match(g, /color=c=black:s=720x404/);
-  assert.match(g, /overlay=x=0:y=420/);
+  const g = compositor.hybridVideoGraph({ plan:{ box:{ x:0, y:420, w:720, h:405 }, program:{ fit:"fill" } }, width:720, height:1280, fps:30, source:{ width:1920, height:1080 }, zmqPort:5599 });
+  assert.match(g, /zmq=bind_address=tcp/);
+  assert.match(g, /color=c=black:s=720x1280/);
+  assert.match(g, /overlay@gp=x=0:y=420/);
   assert.match(g, /alpha=premultiplied/);
   assert.ok(g.endsWith("[vbase]"));
+});
+
+test("hybrid geometry: fit letterboxes, fill crops, off-canvas boxes are clipped", () => {
+  const fit = compositor.hybridGeometry({ plan:{ box:{ x:0, y:0, w:1280, h:720 }, program:{ fit:"fit" } }, width:1280, height:720, source:{ width:1920, height:1080 } });
+  assert.deepEqual(fit.crop, { w:1920, h:1080, x:0, y:0 });
+  assert.deepEqual(fit.scale, { w:1280, h:720 });
+  assert.deepEqual(fit.pos, { x:0, y:0 });
+  // 16:9 source filling a square box: sides cropped from the source.
+  const fill = compositor.hybridGeometry({ plan:{ box:{ x:100, y:0, w:400, h:400 }, program:{ fit:"fill" } }, width:1280, height:720, source:{ width:1920, height:1080 } });
+  assert.deepEqual(fill.scale, { w:400, h:400 });
+  assert.deepEqual(fill.pos, { x:100, y:0 });
+  assert.equal(fill.crop.h, 1080);
+  assert.equal(fill.crop.w, 1080);
+  assert.equal(fill.crop.x, 420);
+  // Box half off the right edge: only the on-canvas half is drawn.
+  const off = compositor.hybridGeometry({ plan:{ box:{ x:1080, y:0, w:400, h:225 }, program:{ fit:"fit" } }, width:1280, height:720, source:{ width:1920, height:1080 } });
+  assert.equal(off.scale.w, 200);
+  assert.equal(off.crop.x, 0);
+  assert.equal(off.crop.w, 960);
+  const hidden = compositor.hybridGeometry({ plan:{ box:{ x:2000, y:0, w:100, h:100 } }, width:1280, height:720 });
+  assert.equal(hidden.visible, false);
+  assert.equal(compositor.hybridLayoutCommands(fit).length, 10);
 });
 
 // ------------------------------------------------------- idle resources

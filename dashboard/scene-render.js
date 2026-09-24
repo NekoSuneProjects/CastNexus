@@ -279,7 +279,7 @@ function programRuntime({ login, orientation, dataUrl, eventsUrl, whepUrl, hlsUr
       el.querySelectorAll("[data-cn-rw]").forEach(function(f){f.style.transform="scale("+(b.w/Number(f.dataset.cnRw))+","+(b.h/Number(f.dataset.cnRh))+")"});
       if(layer.type==="program"){whepWanted=whepWanted||b.visible;el._cnProgram=layer.program;attachStream(el);layoutProgram(el,layer.program)}});
     Object.keys(keep).forEach(function(id){keep[id].remove()});var style=document.getElementById("cn-layer-css");style.textContent=css.join("\\n");
-    if(HYBRID){var pp=model.programPlan;model.layers.forEach(function(layer){var el=stage.querySelector('[data-layer-id="'+layer.id+'"]');if(!el)return;var b=layer.box;if(pp&&b.z<pp.z){el.style.clipPath='path(evenodd,"M0 0H'+b.w+'V'+b.h+'H0Z M'+(pp.x-b.x)+' '+(pp.y-b.y)+'h'+pp.w+'v'+pp.h+'h'+(-pp.w)+'Z")'}else el.style.clipPath=""});whepWanted=false}
+    if(HYBRID){var pp=model.programPlan;model.layers.forEach(function(layer){var el=stage.querySelector('[data-layer-id="'+layer.id+'"]');if(!el)return;var b=layer.box;if(pp&&b.z<pp.z){el.style.clipPath='path(evenodd,"M0 0H'+b.w+'V'+b.h+'H0Z M'+(pp.x-b.x)+' '+(pp.y-b.y)+'h'+pp.w+'v'+pp.h+'h'+(-pp.w)+'Z")'}else el.style.clipPath=""});whepWanted=false;stage.style.background=pp?"transparent":"#000"}
     if(whepWanted)connectWhep();tickClocks()}
   function attachStream(el){var v=el.querySelector(".cn-program-video");if(!v)return;if(useHls){attachHls(v);return}if(stream&&v.srcObject!==stream){v.srcObject=stream;v.play().catch(function(){})}v.onloadedmetadata=function(){el.querySelector(".cn-program").classList.add("cn-has-video");layoutProgram(el,el._cnProgram)}}
   // WebRTC needs UDP to the media server. Behind Cloudflare or a proxy on
