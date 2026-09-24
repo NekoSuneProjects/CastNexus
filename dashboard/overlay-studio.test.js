@@ -365,3 +365,40 @@ test("monitor attributes CPU to registered components between samples", () => {
     } finally { Date.now = realNow; }
   } finally { off(); }
 });
+
+// ------------------------------------------------ own Starting Soon/BRB/...
+test("Starting Soon / BRB / Ending / Offline become their own 16:9 and 9:16 layered scenes", () => {
+  const account = { twitchLogin:"t", overlays:[], overlayConfig:{ startingSoon:{ title:"Soon!", countdownMinutes:10 } } };
+  const { slot, scenes } = sceneModel.customiseSlot(account, "startingSoon");
+  assert.equal(slot.mode, "scene");
+  assert.deepEqual(scenes.map(s => s.orientation), ["landscape", "vertical"]);
+  assert.equal(scenes[0].layers.find(l => l.name === "Title").config.text, "Soon!");
+  assert.equal(scenes[0].layers.find(l => l.type === "countdown").config.countdownMinutes, 10);
+  const count = account.sceneLibrary.scenes.length;
+  sceneModel.customiseSlot(account, "startingSoon");
+  assert.equal(account.sceneLibrary.scenes.length, count, "idempotent - never overwrites the user's layers");
+  account.currentScene = { kind:"builtin", name:"startingSoon", since:new Date().toISOString() };
+  assert.equal(sceneRender.resolveProgram(account, "landscape").sceneId, scenes[0].id);
+  assert.equal(sceneRender.resolveProgram(account, "vertical").sceneId, scenes[1].id, "vertical has its own layout");
+});
+
+test("a StreamElements slot keeps its URL as a layer and is not squeezed on 9:16", () => {
+  const account = { twitchLogin:"t", overlays:[], overlayConfig:{} };
+  sceneModel.ensure(account);
+  sceneModel.setSlot(account, "brb", { mode:"url", url:"https://streamelements.com/overlay/aaa/bbb" });
+  account.currentScene = { kind:"builtin", name:"brb" };
+  const v = sceneRender.resolveProgram(account, "vertical").layers.find(l => l.type === "browser");
+  assert.equal(v.box.w, 1080);
+  assert.ok(v.box.h < 1920, "rendered as a 16:9 band on the tall canvas");
+  assert.match(v.html, /data-cn-rw="1920" data-cn-rh="1080"/);
+  const { scenes } = sceneModel.customiseSlot(account, "brb");
+  const vLayer = scenes[1].layers.find(l => l.type === "streamelements");
+  assert.equal(vLayer.config.url, "https://streamelements.com/overlay/aaa/bbb");
+  assert.equal(vLayer.config.renderWidth, 1920);
+  assert.equal(vLayer.width, 1080);
+});
+
+test("browser page size is sanitised", () => {
+  assert.equal(sceneModel.sanitiseLayer({ type:"browser", config:{ url:"https://a.b", renderWidth:1920, renderHeight:1080 } }).config.renderWidth, 1920);
+  assert.equal(sceneModel.sanitiseLayer({ type:"browser", config:{ url:"https://a.b", renderWidth:5, renderHeight:5 } }).config.renderWidth, undefined);
+});

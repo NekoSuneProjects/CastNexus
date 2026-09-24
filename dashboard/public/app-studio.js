@@ -181,7 +181,7 @@
     const s = scene();
     root.innerHTML = `
       <section class="studio-shell">
-        <aside class="studio-side">${scenesPanel()}${programPanel()}${slotsPanel()}</aside>
+        <aside class="studio-side">${scenesPanel()}${programPanel()}</aside>
         <div class="studio-center">
           ${toolbar()}
           <div id="studio-canvas-wrap" class="studio-canvas-wrap"><div id="studio-canvas-outer" class="studio-canvas-outer"><div id="studio-canvas" class="studio-canvas ${ST.grid ? "grid-on" : ""}" tabindex="0" style="--grid:${GRID}px"></div></div></div>
@@ -201,15 +201,62 @@
     wireStudio();
   }
 
+  // Scene used by a slot for the current orientation (null = not layered yet).
+  function slotSceneId(name, orientation = ST.orientation) {
+    const slot = ST.lib.slots?.[name];
+    if (slot?.mode !== "scene") return null;
+    const id = slot.sceneIds?.[orientation] || slot.sceneId;
+    const s = scenes().find(x => x.id === id);
+    return s && s.orientation === orientation ? s.id : null;
+  }
+
+  function slotStatus(name) {
+    const slot = ST.lib.slots?.[name] || { mode:"builtin" };
+    if (slot.mode === "scene") return slotSceneId(name) ? "Your layers" : `Your layers (no ${ST.orientation === "vertical" ? "9:16" : "16:9"} version yet)`;
+    if (slot.mode === "url") return `Browser URL · ${safeHost(slot.url)}`;
+    if (slot.mode === "html") return "Custom HTML";
+    if (slot.mode === "media") return slot.mediaType === "video" ? "Video background" : "Image background";
+    return "CastNexus default";
+  }
+
   function scenesPanel() {
-    const list = scenes().filter(s => s.orientation === ST.orientation);
-    const live = ST.lib.live?.[ST.orientation];
+    const o = ST.orientation;
+    const live = ST.lib.live?.[o];
+    const slotIds = new Set(Object.keys(SLOT_LABELS).flatMap(n => ["landscape", "vertical"].map(x => slotSceneId(n, x))).filter(Boolean));
+    const others = scenes().filter(s => s.orientation === o && !slotIds.has(s.id));
+    const cs = ST.meta?.currentScene;
+    const onAirKey = !cs || cs.kind === "none" ? "none" : cs.kind === "builtin" ? cs.name : "custom";
+    const row = (key, label, status, active, actions) => `<div class="scene-item ${active ? "active" : ""}" data-onair-edit="${key}"><span class="scene-name">${esc(label)}<small style="display:block;font-weight:500;color:var(--muted);font-size:.62rem">${esc(status)}</small></span>${onAirKey === key ? `<span class="badge green">ON AIR</span>` : ""}<span class="scene-item-actions">${actions}</span></div>`;
+    const liveScene = scenes().find(s => s.id === live);
     return `<div class="card-panel">
-      <div class="studio-tabs"><button class="studio-tab ${ST.orientation === "landscape" ? "active" : ""}" data-orient="landscape">16:9 Horizontal</button><button class="studio-tab ${ST.orientation === "vertical" ? "active" : ""}" data-orient="vertical">9:16 Vertical</button></div>
-      <h3>Scenes</h3>
-      <div class="scene-list">${list.map(s => `<div class="scene-item ${s.id === ST.sceneId ? "active" : ""}" data-scene-select="${esc(s.id)}"><span class="scene-name">${esc(s.name)}</span>${s.id === live ? `<span class="badge green">LIVE</span>` : ""}<span class="scene-item-actions"><button title="Switch live" data-scene-live="${esc(s.id)}">●</button><button title="Rename" data-scene-rename="${esc(s.id)}">✎</button><button title="Duplicate" data-scene-dup="${esc(s.id)}">⧉</button><button title="Delete" data-scene-del="${esc(s.id)}">×</button></span></div>`).join("")}</div>
-      <p style="margin:10px 0 0">● switches what the <strong>${ST.orientation === "vertical" ? "vertical" : "horizontal"}</strong> gameplay program shows. No restart.</p>
+      <div class="studio-tabs"><button class="studio-tab ${o === "landscape" ? "active" : ""}" data-orient="landscape">16:9 Horizontal</button><button class="studio-tab ${o === "vertical" ? "active" : ""}" data-orient="vertical">9:16 Vertical</button></div>
+      <h3>On-air scenes</h3>
+      <div class="scene-list">
+        ${row("none", "Live / None (gameplay)", liveScene ? liveScene.name : "—", ST.sceneId === live, "")}
+        ${Object.entries(SLOT_LABELS).map(([name, label]) => row(name, label, slotStatus(name), !!slotSceneId(name) && ST.sceneId === slotSceneId(name), `<button title="Use a StreamElements / browser URL, HTML or video instead" data-slot-edit="${name}">⚙</button>${(ST.lib.slots?.[name]?.mode || "builtin") !== "builtin" ? `<button title="Back to the CastNexus default" data-slot-reset="${name}">↺</button>` : ""}`)).join("")}
+      </div>
+      <p style="margin:8px 0 0">Click a scene to edit its own layers - add StreamElements, images, videos, text or HTML to <em>that</em> scene only. ⚙ uses a URL/HTML/video instead, ↺ restores the default.</p>
+      <h3 style="margin-top:14px">Other scenes</h3>
+      <div class="scene-list">${others.length ? others.map(s => `<div class="scene-item ${s.id === ST.sceneId ? "active" : ""}" data-scene-select="${esc(s.id)}"><span class="scene-name">${esc(s.name)}</span>${s.id === live ? `<span class="badge green">LIVE</span>` : ""}<span class="scene-item-actions"><button title="Use as the live / gameplay scene" data-scene-live="${esc(s.id)}">●</button><button title="Rename" data-scene-rename="${esc(s.id)}">✎</button><button title="Duplicate" data-scene-dup="${esc(s.id)}">⧉</button><button title="Delete" data-scene-del="${esc(s.id)}">×</button></span></div>`).join("") : `<p>None yet. ＋ New scene adds one.</p>`}</div>
     </div>`;
+  }
+
+  // Open a slot's own layered scene for editing, creating it from the
+  // current built-in text the first time.
+  async function editOnAir(key) {
+    if (key === "none") {
+      ST.sceneId = ST.lib.live?.[ST.orientation];
+    } else {
+      const mode = ST.lib.slots?.[key]?.mode || "builtin";
+      if (mode !== "builtin" && mode !== "scene" && !(await confirmAction(`Edit ${SLOT_LABELS[key]} as layers`, `${SLOT_LABELS[key]} currently shows a ${SLOT_MODE_LABELS[mode]}. Switch it to your own layered scene? (You can add that URL as a layer.)`, "Switch to layers"))) return;
+      if (!slotSceneId(key)) {
+        try { applyServer(await api(`/api/scenes/library/slots/${key}/customise`, { method:"POST" })); toast(`${SLOT_LABELS[key]} is now your own layered scene`, "success"); }
+        catch (error) { return toast(error.message, "error"); }
+      }
+      ST.sceneId = slotSceneId(key);
+    }
+    ST.selectedId = null; ST.zoom = null; ST.history = []; ST.future = [];
+    renderStudioInto();
   }
 
   function programPanel() {
@@ -278,7 +325,7 @@
         if (BROWSER.includes(layer.type)) {
           if (!c.url) return ph("No URL set");
           if (!ST.live) return ph(safeHost(c.url) + (layer.audio?.enabled && !layer.audio?.muted ? " · 🔊" : ""));
-          return `<iframe src="${esc(c.url)}" sandbox="allow-scripts allow-same-origin" allow="autoplay" style="background:${c.transparent === false ? esc(c.background || "#05060a") : "transparent"}"></iframe>`;
+          return `<iframe src="${esc(c.url)}" sandbox="allow-scripts allow-same-origin" allow="autoplay" style="background:${c.transparent === false ? esc(c.background || "#05060a") : "transparent"}${c.renderWidth ? `;width:${c.renderWidth}px;height:${c.renderHeight}px;transform-origin:0 0;transform:scale(${layer.width / c.renderWidth},${layer.height / c.renderHeight})` : ""}"></iframe>`;
         }
         if (layer.type === "html" && ST.live) return `<iframe sandbox="allow-scripts" srcdoc="${esc(`<!doctype html><style>html,body{margin:0;background:transparent}${c.css || ""}</style>${c.html || ""}`)}"></iframe>`;
         return ph(meta.desc);
@@ -574,6 +621,9 @@
     if (BROWSER.includes(layer.type)) {
       html += `<div class="props-section full">Source</div>${field(layer.type === "streamelements" ? "StreamElements overlay URL" : "URL", cfgInput("url", c.url, "url", 'placeholder="https://streamelements.com/overlay/…"'), true)}
         <label class="check-inline full"><input type="checkbox" data-cfg-bool="transparent" ${c.transparent !== false ? "checked" : ""}> Transparent background</label>
+        ${field("Page size (like OBS browser source)", `<select data-page-size><option value="" ${c.renderWidth ? "" : "selected"}>Same as the layer box</option>${[[1920, 1080], [1280, 720], [1080, 1920], [800, 600]].map(([w, h]) => `<option value="${w}x${h}" ${c.renderWidth === w && c.renderHeight === h ? "selected" : ""}>${w}×${h}${w === 1920 ? " (StreamElements default)" : ""}</option>`).join("")}</select>`, true)}
+        <div class="full"><button class="btn btn-ghost btn-sm" data-fit-page>Fit box to page shape</button></div>
+        <div class="full callout" style="margin:0">The page renders at this size and is scaled into the box, so a 1920×1080 StreamElements overlay can be shrunk and moved on a 9:16 scene without being squashed.</div>
         <div class="full callout" style="margin:0">No StreamElements API key is needed - CastNexus renders the overlay URL like an OBS browser source.</div>`;
     }
     if (["image", "gif", "background"].includes(layer.type)) html += `<div class="props-section full">Image</div>${field("Image URL", cfgInput("src", c.src, "url", 'placeholder="https://…"'), true)}${field("Fit", `<select data-cfg="fit">${["cover", "contain", "fill"].map(v => `<option ${c.fit === v ? "selected" : ""}>${v}</option>`).join("")}</select>`)}${layer.type === "background" ? field("Colour", cfgInput("color", c.color || "#05060a", "color")) : ""}`;
@@ -742,6 +792,10 @@
       input.oninput = input.type === "url" || input.tagName === "TEXTAREA" ? null : handler;
       input.onchange = handler;
     });
+    const pageSize = $("[data-page-size]", root);
+    if (pageSize) pageSize.onchange = () => { pushHistory(); const [w, h] = pageSize.value ? pageSize.value.split("x").map(Number) : [0, 0]; layer.config = { ...(layer.config || {}), renderWidth:w || undefined, renderHeight:h || undefined }; if (!w) { delete layer.config.renderWidth; delete layer.config.renderHeight; } commit(true); };
+    const fitPage = $("[data-fit-page]", root);
+    if (fitPage) fitPage.onclick = () => { const c = layer.config || {}; if (!c.renderWidth) return toast("Choose a page size first", "error"); pushHistory(); layer.height = Math.round(layer.width * c.renderHeight / c.renderWidth); refreshSelection(); queueSave(200); };
     $$("[data-cfg-bool]", root).forEach(input => input.onchange = () => { pushHistory(); layer.config = { ...(layer.config || {}), [input.dataset.cfgBool]:input.checked }; commit(true); });
     $$("[data-audio]", root).forEach(input => input.oninput = () => { layer.audio = { ...(layer.audio || {}), [input.dataset.audio]:Number(input.value) }; input.parentElement.querySelector("output").textContent = `${Math.round(input.value * 100)}%`; queueSave(300); });
     $$("[data-audio-bool]", root).forEach(input => input.onchange = () => { pushHistory(); layer.audio = { ...(layer.audio || {}), [input.dataset.audioBool]:input.checked }; commit(true); });
@@ -824,7 +878,9 @@
     $$("[data-scene-dup]", root).forEach(b => b.onclick = async () => { const data = await write("/api/scenes/library/scenes", "POST", { duplicateOf:b.dataset.sceneDup }, "Scene duplicated"); if (data?.scene) { ST.sceneId = data.scene.id; renderStudioInto(); } });
     $$("[data-scene-del]", root).forEach(b => b.onclick = async () => { const s = scenes().find(x => x.id === b.dataset.sceneDel); if (!s || !(await confirmAction("Delete scene", `Delete ${s.name}? Destinations pinned to it will follow the live scene instead.`))) return; await write(`/api/scenes/library/scenes/${encodeURIComponent(s.id)}`, "DELETE", undefined, "Scene deleted"); });
     $$("[data-program-switch]", root).forEach(b => b.onclick = async () => { const k = b.dataset.programSwitch; await setScene(k === "none" ? { kind:"none" } : { kind:"builtin", name:k }); });
-    $$("[data-slot-edit]", root).forEach(b => b.onclick = () => openSlotModal(b.dataset.slotEdit));
+    $$("[data-slot-edit]", root).forEach(b => b.onclick = e => { e.stopPropagation(); openSlotModal(b.dataset.slotEdit); });
+    $$("[data-slot-reset]", root).forEach(b => b.onclick = async e => { e.stopPropagation(); const name = b.dataset.slotReset; if (!(await confirmAction(`Reset ${SLOT_LABELS[name]}`, `Show the CastNexus default ${SLOT_LABELS[name]} again? Your layered scene is kept under Other scenes.`, "Use default"))) return; await write(`/api/scenes/library/slots/${name}`, "PUT", { ...(ST.lib.slots?.[name] || {}), mode:"builtin" }, `${SLOT_LABELS[name]} uses the default again`); });
+    $$("[data-onair-edit]", root).forEach(row => row.onclick = event => { if (event.target.closest("button")) return; editOnAir(row.dataset.onairEdit); });
     const sizeSel = $$("[data-program-size]", root);
     sizeSel.forEach(sel => sel.onchange = () => { if (sel.value === "custom" || sel.value === "auto") return; const [w, h] = sel.value.split("x"); $(`[data-program-w="${sel.dataset.programSize}"]`, root).value = w; $(`[data-program-h="${sel.dataset.programSize}"]`, root).value = h; });
     const saveProgram = $("[data-program-save]", root);
@@ -846,12 +902,16 @@
     const W = s.canvas.width, H = s.canvas.height;
     const full = ["program", "background", "css", "streamelements", "alertbox"].includes(type) || (type === "music");
     const sizes = { text:[W * .5, H * .12], clock:[W * .2, H * .08], countdown:[W * .3, H * .12], chat:[W * .28, H * .5], webcam:[W * .3, W * .3 * 9 / 16], nowplaying:[W * .22, W * .22 * .24], color:[W * .25, H * .25], gradient:[W * .3, H * .3], image:[W * .25, H * .25], gif:[W * .2, W * .2], video:[W * .4, W * .4 * 9 / 16], browser:[W * .4, H * .4], streamlabs:[W, H], webpage:[W * .5, H * .5], iframe:[W * .5, H * .5], html:[W * .4, H * .3] };
-    const [w, h] = full ? [W, H] : (sizes[type] || [W * .3, H * .3]);
+    let [w, h] = full ? [W, H] : (sizes[type] || [W * .3, H * .3]);
+    // StreamElements / Streamlabs / alert overlays are designed at 1920x1080:
+    // render them at that size; on a 9:16 canvas start as a scaled band.
+    const overlayPage = ["streamelements", "streamlabs", "alertbox"].includes(type);
+    if (overlayPage && s.orientation === "vertical") [w, h] = [W, W * 9 / 16];
     return {
       id:newId(), type, name:LAYER_META[type]?.label || type,
       x:Math.round((W - w) / 2), y:Math.round((H - h) / 2), width:Math.round(w), height:Math.round(h),
       rotation:0, opacity:1, visible:true, locked:false,
-      config:{ text:type === "text" ? "Your text" : "", color:type === "color" ? "#7c5cff" : type === "text" || type === "clock" || type === "countdown" ? "#ffffff" : undefined, transparent:true, fit:"cover", effects:"reduced", countdownMinutes:type === "countdown" ? 5 : undefined },
+      config:{ ...(overlayPage ? { renderWidth:1920, renderHeight:1080 } : {}), text:type === "text" ? "Your text" : "", color:type === "color" ? "#7c5cff" : type === "text" || type === "clock" || type === "countdown" ? "#ffffff" : undefined, transparent:true, fit:"cover", effects:"reduced", countdownMinutes:type === "countdown" ? 5 : undefined },
       audio:{ enabled:AUDIO.includes(type) && type !== "html", volume:1, muted:false, monitor:"output" },
       ...(type === "program" ? { program:{ fit:s.orientation === "vertical" ? "fill" : "fit", scale:1, offsetX:0, offsetY:0, crop:{ left:0, right:0, top:0, bottom:0 } } } : {}),
     };

@@ -121,6 +121,13 @@ function resolveSceneFragment(scene, account) {
   const cfg = account.overlayConfig || {};
   if (!scene || scene.kind === "none") return "";
   if (scene.kind === "builtin") {
+    // A slot the user replaced (own layered scene, StreamElements URL, HTML,
+    // media) shows the same Overlay Studio program in OBS browser sources.
+    const slot = account.sceneLibrary?.slots?.[scene.name];
+    if (slot && slot.mode && slot.mode !== "builtin") {
+      const src = `/overlay/${encodeURIComponent(account.twitchLogin)}/program/landscape`;
+      return `<iframe src="${escapeHtml(src)}" allow="autoplay" style="position:fixed;inset:0;width:100vw;height:100vh;border:0;background:transparent"></iframe>`;
+    }
     let fragment = "";
     if (scene.name === "startingSoon") fragment = startingSoonFragment(cfg.startingSoon || {}, scene.countdownAt ? { at: scene.countdownAt } : {}, account);
     else if (scene.name === "brb") fragment = brbFragment(cfg.brb || {}, {}, account);

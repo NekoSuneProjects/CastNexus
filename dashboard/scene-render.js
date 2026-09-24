@@ -72,7 +72,7 @@ function layerContent(layer, ctx) {
       if (!c.url) return preview ? `<div class="cn-placeholder">${attr(layer.name)}<small>No URL set</small></div>` : "";
       if (!liveContent) return `<div class="cn-placeholder">${attr(layer.name)}<small>${attr(new URL(c.url).hostname)}</small></div>`;
       const bg = c.transparent === false ? attr(c.background || "#05060a") : "transparent";
-      return `<iframe class="cn-frame" src="${attr(c.url)}" title="${attr(layer.name)}" sandbox="${sandboxFor(c.url)}" allow="autoplay; encrypted-media" referrerpolicy="no-referrer-when-downgrade" loading="eager" style="background:${bg}"${audioAttrs(layer)}></iframe>`;
+      return `<iframe class="cn-frame" src="${attr(c.url)}" title="${attr(layer.name)}" sandbox="${sandboxFor(c.url)}" allow="autoplay; encrypted-media" referrerpolicy="no-referrer-when-downgrade" loading="eager" style="background:${bg}${c.renderWidth ? `;width:${Number(c.renderWidth)}px;height:${Number(c.renderHeight)}px;transform-origin:0 0` : ""}"${c.renderWidth ? ` data-cn-rw="${Number(c.renderWidth)}" data-cn-rh="${Number(c.renderHeight)}"` : ""}${audioAttrs(layer)}></iframe>`;
     }
     case "image": case "gif":
       return c.src ? `<img class="cn-media" src="${attr(c.src)}" alt="" style="object-fit:${attr(c.fit || "cover")}">` : (preview ? `<div class="cn-placeholder">${attr(layer.name)}<small>No image URL</small></div>` : "");
@@ -85,7 +85,10 @@ function layerContent(layer, ctx) {
     case "clock":
       return `<div class="cn-text" data-cn-clock="${attr(c.format || "24h")}" data-cn-tz="${attr(c.timeZone || "")}" style="${textStyle(c)}">${escapeHtml(c.text || "")}<span class="cn-clock-value">--:--</span></div>`;
     case "countdown": {
-      const target = c.countdownAt || (c.countdownMinutes > 0 ? new Date(Date.now() + c.countdownMinutes * 60000).toISOString() : "");
+      // "Minutes" count from when the scene went on air, so reloading the page
+      // or restarting the renderer does not restart the countdown.
+      const since = Date.parse(ctx.onAirSince || "") || Date.now();
+      const target = c.countdownAt || (c.countdownMinutes > 0 ? new Date(since + c.countdownMinutes * 60000).toISOString() : "");
       return `<div class="cn-text" data-cn-countdown="${attr(target)}" data-cn-done="${attr(c.doneText || "")}" style="${textStyle(c)}">${escapeHtml(c.text || "")}<span class="cn-countdown-value">00:00</span></div>`;
     }
     case "color":
@@ -161,12 +164,20 @@ function resolveProgram(account, orientation = "landscape", { sceneId = null, pr
     const slot = lib.slots[slotName] || { mode:"builtin" };
     canvas = sceneModel.canvasFor(o);
     source = `slot:${slotName}:${slot.mode}`;
-    if (slot.mode === "scene" && sceneModel.findScene(account, slot.sceneId)) {
-      sceneRef = sceneModel.findScene(account, slot.sceneId);
+    const slotScene = slot.mode === "scene" ? (sceneModel.findScene(account, slot.sceneIds?.[o]) || sceneModel.findScene(account, slot.sceneId)) : null;
+    if (slotScene) {
+      sceneRef = slotScene;
       canvas = sceneRef.canvas;
       layers = sceneRef.layers;
     } else if (slot.mode === "url" && slot.url) {
-      layers = [fullLayer(canvas, { id:`slot_${slotName}_url`, type:"browser", name:"Scene browser source", config:{ url:slot.url, transparent:false, background:"#05060a" }, audio:slot.audio })];
+      // Browser scenes are designed at 1920x1080: render them at that size.
+      // On 9:16 the page is scaled into a centred band instead of reflowing
+      // (squeezed) into a tall window. Edit the slot as layers to lay it out.
+      const band = o === "vertical" ? { x:0, y:Math.round((canvas.height - canvas.width * 9 / 16) / 2), width:canvas.width, height:Math.round(canvas.width * 9 / 16) } : {};
+      layers = [
+        ...(o === "vertical" ? [fullLayer(canvas, { id:`slot_${slotName}_bg`, type:"color", name:"Background", config:{ color:"#05060a" } })] : []),
+        fullLayer(canvas, { id:`slot_${slotName}_url`, type:"browser", name:"Scene browser source", ...band, config:{ url:slot.url, transparent:false, background:"#05060a", renderWidth:1920, renderHeight:1080 }, audio:slot.audio }),
+      ];
     } else if (slot.mode === "html") {
       layers = [fullLayer(canvas, { id:`slot_${slotName}_html`, type:"html", name:"Scene HTML", config:{ html:slot.html, css:slot.css }, audio:slot.audio })];
     } else if (slot.mode === "media" && slot.mediaUrl) {
@@ -203,7 +214,7 @@ function resolveProgram(account, orientation = "landscape", { sceneId = null, pr
     layers.push({ id:"legacy_nowplaying", type:"nowplaying", name:"Now Playing", x:corner.x ? canvas.width - w - m : m, y:corner.y ? canvas.height - h - m : m, width:w, height:h, rotation:0, opacity:1, visible:true, config:{}, audio:{ enabled:false } });
   }
 
-  const ctx = { login, preview, effects:fx, musicUrl, orientation:o, liveContent };
+  const ctx = { login, preview, effects:fx, musicUrl, orientation:o, liveContent, onAirSince:slotName ? cs?.since : null };
   const rendered = layers.map((layer, index) => renderLayer(layer, index, ctx));
   return {
     orientation:o,
@@ -257,6 +268,7 @@ function programRuntime({ login, orientation, dataUrl, eventsUrl, whepUrl, previ
   function apply(model){MODEL=model;fit();var keep={};Array.prototype.forEach.call(stage.querySelectorAll(":scope>.cn-layer"),function(el){keep[el.dataset.layerId]=el});var css=[];whepWanted=false;
     model.layers.forEach(function(layer){if(layer.css)css.push(layer.css);var el=keep[layer.id];delete keep[layer.id];if(!el||el.dataset.hash!==layer.hash){var next=document.createElement("div");next.className="cn-layer cn-type-"+layer.type;next.dataset.layerId=layer.id;next.dataset.hash=layer.hash;next.innerHTML=layer.html;if(el)stage.replaceChild(next,el);else stage.appendChild(next);el=next}
       var b=layer.box;el.style.left=b.x+"px";el.style.top=b.y+"px";el.style.width=b.w+"px";el.style.height=b.h+"px";el.style.zIndex=String(b.z);el.style.opacity=String(b.opacity);el.style.transform=b.rotation?"rotate("+b.rotation+"deg)":"";el.style.display=b.visible?"":"none";applyAudio(el,layer.audio);
+      el.querySelectorAll("[data-cn-rw]").forEach(function(f){f.style.transform="scale("+(b.w/Number(f.dataset.cnRw))+","+(b.h/Number(f.dataset.cnRh))+")"});
       if(layer.type==="program"){whepWanted=whepWanted||b.visible;el._cnProgram=layer.program;attachStream(el);layoutProgram(el,layer.program)}});
     Object.keys(keep).forEach(function(id){keep[id].remove()});var style=document.getElementById("cn-layer-css");style.textContent=css.join("\\n");
     if(whepWanted)connectWhep();tickClocks()}

@@ -143,6 +143,11 @@ function sanitiseConfig(type, raw = {}) {
     out.transparent = bool(c.transparent, true);
     out.background = safeColor(c.background, "#05060a");
     out.interactive = false;
+    // Page size the browser source is rendered at (like OBS's browser-source
+    // width/height), then scaled into the layer box. A 1920x1080 StreamElements
+    // overlay can therefore be shrunk/moved on a 9:16 canvas without reflowing.
+    const rw = Math.round(num(c.renderWidth, 0, 0, 3840)), rh = Math.round(num(c.renderHeight, 0, 0, 3840));
+    if (rw >= 100 && rh >= 100) { out.renderWidth = rw; out.renderHeight = rh; }
   }
   if (["image", "gif", "background"].includes(type)) {
     out.src = safeUrl(c.src);
@@ -277,9 +282,14 @@ function defaultSlot() {
 function sanitiseSlot(raw = {}) {
   const s = raw && typeof raw === "object" ? raw : {};
   const mediaUrl = safeUrl(s.mediaUrl);
+  const id = value => (/^[A-Za-z0-9_-]{1,64}$/.test(String(value || "")) ? String(value) : null);
+  const ids = s.sceneIds && typeof s.sceneIds === "object" ? s.sceneIds : {};
   return {
     mode:SLOT_MODES.includes(s.mode) ? s.mode : "builtin",
-    sceneId:/^[A-Za-z0-9_-]{1,64}$/.test(String(s.sceneId || "")) ? String(s.sceneId) : null,
+    sceneId:id(s.sceneId),
+    // Optional separate scene per orientation (the 9:16 program uses
+    // sceneIds.vertical); falls back to sceneId for both.
+    sceneIds:{ landscape:id(ids.landscape), vertical:id(ids.vertical) },
     url:safeUrl(s.url),
     html:str(s.html, "", 100000),
     css:str(s.css, "", 50000),
@@ -441,7 +451,14 @@ function deleteScene(account, sceneId) {
   }
   lib.scenes = lib.scenes.filter(s => s.id !== scene.id);
   for (const o of ORIENTATIONS) if (lib.live[o] === scene.id) lib.live[o] = lib.scenes.find(s => s.orientation === o)?.id || null;
-  for (const name of SLOT_NAMES) if (lib.slots[name]?.sceneId === scene.id) lib.slots[name] = { ...lib.slots[name], mode:"builtin", sceneId:null };
+  for (const name of SLOT_NAMES) {
+    const slot = lib.slots[name];
+    if (!slot) continue;
+    const ids = { ...(slot.sceneIds || {}) };
+    for (const o of ORIENTATIONS) if (ids[o] === scene.id) ids[o] = null;
+    const sceneId = slot.sceneId === scene.id ? (ids.landscape || ids.vertical || null) : slot.sceneId;
+    lib.slots[name] = { ...slot, sceneIds:ids, sceneId, ...(slot.mode === "scene" && !sceneId ? { mode:"builtin" } : {}) };
+  }
   return true;
 }
 
@@ -458,11 +475,96 @@ function setLive(account, orientation, sceneId) {
 function setSlot(account, name, raw) {
   if (!SLOT_NAMES.includes(name)) throw Object.assign(new Error(`slot must be one of ${SLOT_NAMES.join(", ")}`), { status:400 });
   const slot = sanitiseSlot(raw);
-  if (slot.mode === "scene" && !findScene(account, slot.sceneId)) throw Object.assign(new Error("unknown scene for slot"), { status:404 });
+  if (slot.mode === "scene") {
+    for (const o of ORIENTATIONS) if (slot.sceneIds[o] && !findScene(account, slot.sceneIds[o])) slot.sceneIds[o] = null;
+    if (slot.sceneId && !findScene(account, slot.sceneId)) slot.sceneId = null;
+    if (!slot.sceneId) slot.sceneId = slot.sceneIds.landscape || slot.sceneIds.vertical || null;
+    if (!slot.sceneId) throw Object.assign(new Error("unknown scene for slot"), { status:404 });
+  }
   if (slot.mode === "url" && !slot.url) throw Object.assign(new Error("a valid http(s) URL is required"), { status:400 });
   if (slot.mode === "media" && !slot.mediaUrl) throw Object.assign(new Error("a valid http(s) image or video URL is required"), { status:400 });
   library(account).slots[name] = slot;
   return slot;
+}
+
+// Editable layered versions of Starting Soon / BRB / Ending / Offline. Built
+// from the text the user already configured for the built-in scene, split
+// into separate layers (background, title, subtitle, countdown, socials,
+// clock, Now Playing) so every part can be moved, restyled or deleted.
+const SLOT_TITLES = { startingSoon:"Starting Soon", brb:"BRB", ending:"Ending", offline:"Offline" };
+const SLOT_DEFAULTS = {
+  startingSoon:{ title:"Starting Soon", subtitle:"Stream begins shortly · stand by", accent:"#00f0ff" },
+  brb:{ title:"BRB", subtitle:"Be right back", accent:"#8a2bff" },
+  ending:{ title:"Thanks for watching", subtitle:"Stream over · see you next time", accent:"#ff2bd6" },
+  offline:{ title:"OFFLINE", subtitle:"Channel is not live right now", accent:"#4ade80" },
+};
+
+function slotTemplateLayers(name, orientation, overlayConfig = {}) {
+  const canvas = canvasFor(orientation);
+  const W = canvas.width, H = canvas.height, v = orientation === "vertical";
+  const cfg = { ...SLOT_DEFAULTS[name], ...Object.fromEntries(Object.entries(overlayConfig?.[name] || {}).filter(([, val]) => val !== "" && val != null)) };
+  const accent = safeColor(cfg.accent, SLOT_DEFAULTS[name].accent);
+  const text = (id, label, textValue, y, h, size, extra = {}) => ({ id, type:"text", name:label, x:Math.round(W * 0.05), y:Math.round(y), width:Math.round(W * 0.9), height:Math.round(h), config:{ text:textValue, fontSize:size, fontWeight:extra.weight || 800, color:extra.color || "#ffffff", align:"center", shadow:true } });
+  const layers = [
+    { id:`${name}_bg`, type:"gradient", name:"Background", x:0, y:0, width:W, height:H, config:{ from:"#05060a", to:accent, angle:v ? 180 : 135 } },
+  ];
+  if (cfg.backgroundUrl) layers.push({ id:`${name}_image`, type:"image", name:"Background image", x:0, y:0, width:W, height:H, opacity:0.55, config:{ src:cfg.backgroundUrl, fit:"cover" } });
+  layers.push(
+    text(`${name}_title`, "Title", cfg.title, H * (v ? 0.30 : 0.30), H * (v ? 0.12 : 0.2), v ? 120 : 140),
+    text(`${name}_subtitle`, "Subtitle", cfg.subtitle || "", H * (v ? 0.43 : 0.52), H * 0.08, v ? 46 : 48, { weight:500, color:"#e6f7ff" }),
+  );
+  if (name === "startingSoon") {
+    layers.push({ ...text(`${name}_countdown`, "Countdown", `${cfg.countdownLabel || "Live in"} `, H * (v ? 0.52 : 0.64), H * (v ? 0.07 : 0.12), v ? 72 : 80, { color:accent }), type:"countdown", config:{ text:`${cfg.countdownLabel || "Live in"} `, fontSize:v ? 72 : 80, fontWeight:800, color:accent, align:"center", shadow:true, countdownMinutes:Number(cfg.countdownMinutes) || 5, doneText:"Starting now" } });
+  }
+  if (name === "ending") {
+    const socials = [["Twitch", cfg.twitch], ["YouTube", cfg.youtube], ["X", cfg.twitter], ["Discord", cfg.discord]].filter(([, val]) => val).map(([k, val]) => `${k}: ${val}`).join(v ? "\n" : "   ·   ");
+    if (socials) layers.push(text(`${name}_socials`, "Socials", socials, H * (v ? 0.55 : 0.66), H * (v ? 0.16 : 0.08), v ? 40 : 38, { weight:600 }));
+  }
+  if (name !== "offline") layers.push({ id:`${name}_nowplaying`, type:"nowplaying", name:"Now Playing", x:Math.round(v ? W * 0.1 : W * 0.72), y:Math.round(v ? H * 0.8 : H * 0.84), width:Math.round(v ? W * 0.8 : W * 0.25), height:Math.round(v ? W * 0.8 * 0.24 : W * 0.25 * 0.24), config:{} });
+  layers.push({ id:`${name}_clock`, type:"clock", name:"Clock", x:Math.round(W * 0.03), y:Math.round(H * 0.03), width:Math.round(W * (v ? 0.4 : 0.15)), height:Math.round(H * 0.06), config:{ text:"", fontSize:v ? 44 : 36, fontWeight:700, color:"#ffffff", align:"left", format:"24h" } });
+  return layers;
+}
+
+// Layers for a slot that is being turned into its own scene. A slot that used
+// a StreamElements/browser URL, HTML or media keeps it as a layer: full canvas
+// on 16:9, and on 9:16 rendered at 1920x1080 and scaled to the canvas width in
+// the middle (then freely movable), instead of squeezing the 16:9 page.
+function slotConversionLayers(name, orientation, slot, overlayConfig) {
+  const canvas = canvasFor(orientation);
+  const W = canvas.width, H = canvas.height, v = orientation === "vertical";
+  const band = v ? { x:0, y:Math.round((H - W * 9 / 16) / 2), width:W, height:Math.round(W * 9 / 16) } : { x:0, y:0, width:W, height:H };
+  const bg = { id:`${name}_bg`, type:"gradient", name:"Background", x:0, y:0, width:W, height:H, config:{ from:"#05060a", to:SLOT_DEFAULTS[name].accent, angle:180 } };
+  if (slot?.mode === "url" && slot.url) {
+    return [...(v ? [bg] : []), { id:`${name}_browser`, type:BROWSER_TYPES.includes("streamelements") && /streamelements\./i.test(slot.url) ? "streamelements" : "browser", name:/streamelements\./i.test(slot.url) ? "StreamElements scene" : "Browser scene", ...band, config:{ url:slot.url, transparent:false, background:"#05060a", renderWidth:1920, renderHeight:1080 }, audio:slot.audio }];
+  }
+  if (slot?.mode === "media" && slot.mediaUrl) {
+    return [...(v ? [bg] : []), slot.mediaType === "video"
+      ? { id:`${name}_video`, type:"video", name:"Scene video", ...band, config:{ src:slot.mediaUrl, fit:"cover", loop:true }, audio:slot.audio }
+      : { id:`${name}_image`, type:"image", name:"Scene image", ...band, config:{ src:slot.mediaUrl, fit:"cover" } }];
+  }
+  if (slot?.mode === "html") {
+    return [{ id:`${name}_html`, type:"html", name:"Scene HTML", x:0, y:0, width:W, height:H, config:{ html:slot.html, css:slot.css }, audio:slot.audio }];
+  }
+  return slotTemplateLayers(name, orientation, overlayConfig);
+}
+
+// Create (once) the layered 16:9 and 9:16 scenes for a slot, switch the slot
+// to them and return them. Existing custom scenes are kept, not overwritten.
+function customiseSlot(account, name, overlayConfig = account?.overlayConfig) {
+  if (!SLOT_NAMES.includes(name)) throw Object.assign(new Error(`slot must be one of ${SLOT_NAMES.join(", ")}`), { status:400 });
+  const lib = library(account);
+  const slot = lib.slots[name] || defaultSlot();
+  const ids = { ...(slot.sceneIds || {}) };
+  for (const o of ORIENTATIONS) {
+    if (ids[o] && findScene(account, ids[o])?.orientation === o) continue;
+    const legacy = slot.sceneId && findScene(account, slot.sceneId);
+    if (legacy && legacy.orientation === o) { ids[o] = legacy.id; continue; }
+    const scene = sanitiseScene({ name:`${SLOT_TITLES[name]}${o === "vertical" ? " (9:16)" : ""}`, kind:"intermission", orientation:o, layers:slotConversionLayers(name, o, slot, overlayConfig) }, { keepId:false });
+    lib.scenes.push(scene);
+    ids[o] = scene.id;
+  }
+  lib.slots[name] = { ...slot, mode:"scene", sceneIds:ids, sceneId:ids.landscape };
+  return { slot:lib.slots[name], scenes:ORIENTATIONS.map(o => findScene(account, ids[o])) };
 }
 
 function setMixer(account, raw) {
@@ -523,6 +625,8 @@ module.exports = {
   deleteScene,
   setLive,
   setSlot,
+  customiseSlot,
+  slotTemplateLayers,
   setMixer,
   setPrograms,
   libraryNeedsBrowserAudio,
