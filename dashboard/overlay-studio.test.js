@@ -402,3 +402,19 @@ test("browser page size is sanitised", () => {
   assert.equal(sceneModel.sanitiseLayer({ type:"browser", config:{ url:"https://a.b", renderWidth:1920, renderHeight:1080 } }).config.renderWidth, 1920);
   assert.equal(sceneModel.sanitiseLayer({ type:"browser", config:{ url:"https://a.b", renderWidth:5, renderHeight:5 } }).config.renderWidth, undefined);
 });
+
+test("frame pump timing follows the FFmpeg version (wallclock on 5.1/6, CFR on 7+)", () => {
+  assert.equal(compositor.pumpTimestampMode("auto", 5), "wallclock");
+  assert.equal(compositor.pumpTimestampMode("auto", 6), "wallclock");
+  assert.equal(compositor.pumpTimestampMode("auto", 7), "cfr");
+  assert.equal(compositor.pumpTimestampMode("cfr", 5), "cfr", "explicit setting wins");
+  assert.equal(compositor.pumpTimestampMode("wallclock", 8), "wallclock");
+});
+
+test("hybrid pipeline graph places the gameplay box and overlays the PNG layer", () => {
+  const g = compositor.hybridVideoGraph({ plan:{ box:{ x:0, y:420, w:720, h:405 }, program:{ fit:"fill" } }, width:720, height:1280, fps:30 });
+  assert.match(g, /color=c=black:s=720x404/);
+  assert.match(g, /overlay=x=0:y=420/);
+  assert.match(g, /alpha=premultiplied/);
+  assert.ok(g.endsWith("[vbase]"));
+});
