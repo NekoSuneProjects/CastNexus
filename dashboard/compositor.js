@@ -1036,7 +1036,7 @@ class Compositor extends EventEmitter {
     // Live-latency guard: when the encoder falls behind real time (busy host),
     // input piles up in the queues and that delay never shrinks again. Track
     // wall clock vs FFmpeg's output clock and restart to drop the backlog.
-    const maxLag=Number(process.env.COMPOSITOR_MAX_LAG_S??3);
+    const maxLag=Number(process.env.COMPOSITOR_MAX_LAG_S||0);
     let lagBase=null;
     this.encoderLagS=null;
     this.ffmpeg.stderr.on("data",chunk=>{
@@ -1046,7 +1046,11 @@ class Compositor extends EventEmitter {
         const lag=(Date.now()-started)/1000-Number(outTimes.at(-1)[1])/1e6;
         if(lagBase==null||lag<lagBase)lagBase=lag;
         this.encoderLagS=Math.round((lag-lagBase)*10)/10;
-        if(this.encoderLagS>maxLag&&this.state==="running"){
+        // Off by default: on an overloaded host every restart drops the
+        // destination and relaunches Chromium, which made things worse.
+        // When enabled, restart at most once every 5 minutes.
+        if(this.encoderLagS>maxLag&&this.state==="running"&&Date.now()-(this.lastLagRestartAt||0)>300000){
+          this.lastLagRestartAt=Date.now();
           this.logger.warn(`[compositor:${this.accountId}] encoder is ${this.encoderLagS}s behind real time; restarting to drop the backlog`);
           lagBase=Infinity;
           this._scheduleReconnect(250);

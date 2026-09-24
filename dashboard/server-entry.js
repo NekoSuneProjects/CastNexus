@@ -1,5 +1,9 @@
 "use strict";
 
+// Pick the FFmpeg build (bundled 8 / system 5.1 / benchmark) before any
+// module captures FFMPEG_BIN or spawns ffmpeg.
+require("./ffmpeg-select").apply();
+
 const { installPublicRepublishSpawnPolicy } = require("./public-republish-runtime");
 
 // Install before server.js captures child_process.spawn. This upgrades the

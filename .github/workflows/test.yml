@@ -25,6 +25,7 @@ jobs:
           set -euo pipefail
           node --check dashboard/server.js
           node --check dashboard/server-entry.js
+          node --check dashboard/ffmpeg-select.js
           node --check dashboard/overlays.js
           node --check dashboard/scenes.js
           node --check dashboard/music-scene.js

@@ -939,6 +939,7 @@ function hardwareSummary(account) {
     program:h.recommendations.program,
     programs:{ landscape:program("landscape"), vertical:program("vertical") },
     sourceStream:sourceInfo.get(account.twitchUserId)?.info || null,
+    ffmpeg:require("./ffmpeg-select").status(),
     tooHeavy:h.tooHeavy || {},
   };
 }
@@ -946,6 +947,8 @@ app.get("/api/system/hardware", requireAuth, (req, res) => res.json(hardwareSumm
 app.post("/api/system/hardware/probe", requireAuth, async (req, res) => {
   try {
     await hardwareProfile.ensureHostProfile({ force:true });
+    // The FFmpeg build is chosen at startup; re-benchmark on the next restart.
+    require("./ffmpeg-select").clearCache();
     // Running auto workers/programs pick the new recommendation up: Music via
     // its signature on the next reconcile, programs via a renderer restart.
     refreshPrograms(req.account);

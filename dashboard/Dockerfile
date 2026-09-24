@@ -13,7 +13,7 @@ RUN apt-get update \
       pulseaudio-utils \
       dumb-init \
       python3 python3-venv \
-      curl unzip bash \
+      curl unzip bash xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # yt-dlp nightly is its recommended regular-use channel. Deno is the
@@ -26,6 +26,24 @@ RUN python3 -m venv /opt/yt-dlp \
     && curl -fsSL https://deno.land/install.sh | sh \
     && yt-dlp --version \
     && deno --version
+
+# Static FFmpeg 8 next to Debian's FFmpeg 5.1 (/usr/bin/ffmpeg). The runtime
+# picks one at start (CASTNEXUS_FFMPEG=auto benchmarks both once; bundled /
+# system force one), see ffmpeg-select.js. Set the build arg
+# CASTNEXUS_BUNDLE_FFMPEG=false to build an image with only the system FFmpeg.
+ARG TARGETARCH
+ARG CASTNEXUS_BUNDLE_FFMPEG=true
+ARG FFMPEG_BUILD=n8.1-latest
+ARG FFMPEG_BUILD_BRANCH=8.1
+RUN if [ "$CASTNEXUS_BUNDLE_FFMPEG" = "true" ]; then \
+      case "$TARGETARCH" in arm64) arch=linuxarm64 ;; *) arch=linux64 ;; esac; \
+      mkdir -p /opt/ffmpeg \
+      && curl -fsSL -o /tmp/ffmpeg.tar.xz "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-${FFMPEG_BUILD}-${arch}-gpl-${FFMPEG_BUILD_BRANCH}.tar.xz" \
+      && tar -xJf /tmp/ffmpeg.tar.xz -C /opt/ffmpeg --strip-components=1 \
+      && rm -rf /tmp/ffmpeg.tar.xz /opt/ffmpeg/doc /opt/ffmpeg/man \
+      && /opt/ffmpeg/bin/ffmpeg -hide_banner -version | head -1; \
+    fi
+ENV CASTNEXUS_FFMPEG=auto
 
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium

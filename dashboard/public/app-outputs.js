@@ -250,6 +250,7 @@
     const hardwareHtml = hw ? `<div class="card-title-row" style="margin-top:14px"><div><h3>Hardware test</h3><p>${hw.probed ? `Tested ${esc(new Date(hw.probedAt).toLocaleString())} in ${(hw.probeMs / 1000).toFixed(1)} s.` : "Estimate - the first hardware test is still running."} Auto quality below is chosen from these results before any stream starts, and steps down automatically if a stream cannot keep up.</p></div><button class="btn btn-ghost btn-sm" id="hw-retest">Re-test hardware</button></div>
       <table class="perf-table">
         <tr><th>Host</th><td>${esc(hw.hostType?.label || "—")} · ${hw.cores} cores · ${esc(hw.cpuModel || "")}</td></tr>
+        ${hw.ffmpeg ? `<tr><th>FFmpeg</th><td>${esc(hw.ffmpeg.id || "")} · ${esc(hw.ffmpeg.version || "?")} <small class="muted">(${esc(hw.ffmpeg.reason || "")}${hw.ffmpeg.candidates?.length > 1 ? " · Re-test re-benchmarks on next restart" : ""})</small></td></tr>` : ""}
         <tr><th>Video encoder</th><td>${esc(hw.encoder)}${hw.hardwareEncoder ? " (GPU)" : " (CPU)"}</td></tr>
         <tr><th>Browser rendering</th><td>${hw.chromiumGpu ? `GPU · ${esc(hw.chromiumRenderer || "")}` : `Software (CPU)${hw.chromiumRenderer ? ` · ${esc(hw.chromiumRenderer)}` : ""}${hw.chromiumReason ? ` · ${esc(hw.chromiumReason)}` : ""}`}</td></tr>
         <tr><th>CPU speed</th><td>${hw.x264MsPerFrame1080p} ms per 1080p x264 frame (${hw.cpuSpeedVsReference}× an i7-6700K core) · CastNexus budget ${hw.budget ? `${Math.round(hw.budget.share * 100)}% = ${hw.budget.cores.toFixed(1)} cores` : "—"}</td></tr>
