@@ -4,27 +4,70 @@ name: Publish Docker Image
 #   normal commit           -> stable image: :latest + main/VERSION
 #   commit containing [beta] -> beta image only: :beta + <BETA_VERSION>-beta.<run>
 #                              (:latest and the other images are not touched)
+# Manual run (Actions -> Publish Docker Image -> Run workflow): choose channel
+# beta/stable and runner auto/self-hosted/github.
 
 on:
   push:
     branches: [dashboard]
   workflow_dispatch:
+    inputs:
+      runner:
+        description: Where to build (auto = self-hosted when idle, else GitHub-hosted)
+        type: choice
+        options: [auto, self-hosted, github]
+        default: auto
+      channel:
+        description: beta = dashboard :beta image only (leaves :latest alone)
+        type: choice
+        options: [beta, stable]
+        default: beta
 
 permissions:
   contents: write
   packages: write
 
 jobs:
+  # Pick the build machine. The self-hosted runner is shared with other
+  # repositories; when it is busy or offline, a queued job would wait (and was
+  # being cancelled), so build on a GitHub-hosted runner instead.
+  #
+  # Needs the repository/org secret RUNNER_STATUS_TOKEN: a fine-grained token
+  # with "Self-hosted runners: Read" on the NekoSuneProjects organisation.
+  # Without it the self-hosted runner is used, as before.
+  pick-runner:
+    runs-on: ubuntu-latest
+    outputs:
+      runs-on: ${{ steps.pick.outputs.runs-on }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+          CHOICE: ${{ github.event.inputs.runner || 'auto' }}
+          ORG: ${{ github.repository_owner }}
+        run: |
+          SELF='["self-hosted","Linux","docker","buildx"]'
+          HOSTED='"ubuntu-latest"'
+          pick() { echo "runs-on=$1" >> "$GITHUB_OUTPUT"; echo "Building on: $1 ($2)"; }
+          if [ "$CHOICE" = "github" ]; then pick "$HOSTED" "requested"; exit 0; fi
+          if [ "$CHOICE" = "self-hosted" ]; then pick "$SELF" "requested"; exit 0; fi
+          if [ -z "$GH_TOKEN" ]; then pick "$SELF" "no RUNNER_STATUS_TOKEN secret - cannot check runner status"; exit 0; fi
+          RUNNERS=$(gh api "orgs/$ORG/actions/runners" --paginate 2>/dev/null || gh api "repos/${{ github.repository }}/actions/runners" --paginate 2>/dev/null || echo '{}')
+          IDLE=$(echo "$RUNNERS" | jq '[.runners[]? | select(.status=="online" and .busy==false) | select([.labels[].name] as $l | ($l|index("self-hosted")) and ($l|index("docker")) and ($l|index("buildx")))] | length')
+          if [ "${IDLE:-0}" -gt 0 ]; then pick "$SELF" "$IDLE idle self-hosted runner(s)"; else pick "$HOSTED" "self-hosted runner busy or offline"; fi
+
   docker-publish:
-    runs-on: [self-hosted, Linux, docker, buildx]
+    needs: pick-runner
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runs-on) }}
     steps:
       - uses: actions/checkout@v4
       - name: Resolve version and channel
         id: version
         env:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          CHANNEL_INPUT: ${{ github.event.inputs.channel }}
         run: |
-          if [[ "$COMMIT_MESSAGE" == *"[beta]"* ]]; then
+          if [[ "$COMMIT_MESSAGE" == *"[beta]"* || "$CHANNEL_INPUT" == "beta" ]]; then
             BASE=$(tr -d '[:space:]' < BETA_VERSION 2>/dev/null || true)
             [ -n "$BASE" ] || BASE=$(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/VERSION | tr -d '[:space:]')
             VALUE="${BASE%%-*}-beta.${{ github.run_number }}"
