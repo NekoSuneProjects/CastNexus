@@ -156,6 +156,22 @@ function overlayFps(outputFps, value = process.env.COMPOSITOR_OVERLAY_FPS) {
   return Math.max(1, Math.min(Number(outputFps) || 30, n));
 }
 
+// How the transparent overlay layer travels from Chromium to FFmpeg:
+//   png  exact alpha, but ~300 KB/frame to encode, send and decode - on a
+//        CPU-only host that capped alert animations at a few fps.
+//   key  overlay drawn on pure green, sent as ~20 KB JPEG and keyed out in
+//        FFmpeg (colorkey). ~15x less data from Chromium, but FFmpeg
+//        pays ~0.8 core at 720p30 for the key on EVERY frame (PNG decode
+//        ~0.5 core) and pure-green overlay pixels are keyed out too.
+//   auto (default) = png. key is opt-in for hosts where Chromium, not
+//        FFmpeg, is the bottleneck.
+const OVERLAY_KEY = { r:0, g:255, b:0 };
+function overlayFormat({ gpuEnabled = false } = {}, value = process.env.COMPOSITOR_OVERLAY_FORMAT) {
+  const v = String(value || "auto").toLowerCase();
+  if (v === "key") return "key";
+  return "png";
+}
+
 function evenInt(n) { const v = Math.round(Number(n) || 0); return v - (v % 2); }
 
 // plan = { box:{x,y,w,h} in output pixels, program:{fit,scale,offsetX,offsetY,crop} }
@@ -211,15 +227,17 @@ function hybridLayoutCommands(g) {
   ];
 }
 
-function hybridVideoGraph({ plan, width, height, fps, source = null, zmqPort = null }) {
+function hybridVideoGraph({ plan, width, height, fps, source = null, zmqPort = null, overlay = "png" }) {
   const g = hybridGeometry({ plan, width, height, source });
   const zmq = zmqPort ? `zmq=${bindAddressOption(zmqPort)},` : "";
   return [
     `[0:v]${zmq}fps=${fps},scale@gn=w=${g.norm.w}:h=${g.norm.h},crop@gc=w=${g.crop.w}:h=${g.crop.h}:x=${g.crop.x}:y=${g.crop.y},scale@gs=w=${g.scale.w}:h=${g.scale.h}[hfg]`,
     `color=c=black:s=${g.W}x${g.H}:r=${fps}[hcanvas]`,
     `[hcanvas][hfg]overlay@gp=x=${g.pos.x}:y=${g.pos.y}:eof_action=repeat[hbase]`,
-    `[1:v]setpts=PTS-STARTPTS[hov]`,
-    `[hbase][hov]overlay=0:0:alpha=premultiplied:eof_action=repeat,fps=${fps},setsar=1[vbase]`,
+    overlay === "key"
+      ? `[1:v]setpts=PTS-STARTPTS,format=rgb24,colorkey=0x00FF00:0.22:0.10[hov]`
+      : `[1:v]setpts=PTS-STARTPTS[hov]`,
+    `[hbase][hov]overlay=0:0:${overlay === "key" ? "" : "alpha=premultiplied:"}eof_action=repeat,fps=${fps},setsar=1[vbase]`,
   ].join(";");
 }
 
@@ -472,6 +490,10 @@ class Compositor extends EventEmitter {
 
   // Called after scene edits/switches: only a change of the Gameplay box or
   // framing needs an FFmpeg restart; overlay content updates live.
+  _overlayFormat(){
+    return overlayFormat({gpuEnabled:!!this.video.gpuEnabled});
+  }
+
   _hybridSource(){
     let info=null;
     try{info=this.hybrid?.getSource?.()||null;}catch{}
@@ -497,7 +519,13 @@ class Compositor extends EventEmitter {
     (async()=>{
       for(const [target,cmd,value] of hybridLayoutCommands(geometry)){
         if(token!==this.layoutToken||client!==this.zmq)return;
-        const reply=await client.send(`${target} ${cmd} ${value}`);
+        let reply=null;
+        // FFmpeg binds the command port a moment after it starts: retry
+        // instead of restarting (a restart here re-triggered itself).
+        for(let attempt=0;;attempt++){
+          try{reply=await client.send(`${target} ${cmd} ${value}`);break;}
+          catch(err){if(attempt>=8||token!==this.layoutToken||client!==this.zmq)throw err;await new Promise(r=>setTimeout(r,1000));}
+        }
         if(!/^0\b/.test(String(reply)))throw new Error(`${target} ${cmd}: ${reply}`);
       }
       this.hybridSourceUsed=source;
@@ -607,7 +635,7 @@ class Compositor extends EventEmitter {
     // Inline source audio has its gain baked into the FFmpeg graph.
     if(this.inlineSourceAudio()&&previousLive!==this.mixer.program&&this.state==="running"){this.logger.log(`[compositor:${this.accountId}] program volume changed; restarting encoder`);this._scheduleReconnect(250);}
     this.relayByBus.live?.setGain(this.mixer.program);
-    this.relayByBus.music?.setGain(this.mixer.music);
+    this.relayByBus.music?.setGain(this._musicGain());
     this.relayByBus.browser?.setGain(this.mixer.browser);
     return this.mixer;
   }
@@ -649,7 +677,7 @@ class Compositor extends EventEmitter {
     this._registerDiagnostics();
     const enc=this.activeEncoder();
     const renderer=this.electronOffscreen?"electron-offscreen":"chromium-cdp";
-    this.logger.log(`[compositor:${this.accountId}] running (${this.video.width}x${this.video.height}@${this.video.fps}, render=${this.inputFps()}fps, encoder=${enc.label}, renderer=${renderer}, chromiumGpu=${this.video.gpuEnabled}, browserAudio=${!!this.browserAudio?.available})`);
+    this.logger.log(`[compositor:${this.accountId}] running (${this.video.width}x${this.video.height}@${this.video.fps}, render=${this.inputFps()}fps, encoder=${enc.label}, renderer=${renderer}, chromiumGpu=${this.video.gpuEnabled}, browserAudio=${!!this.browserAudio?.available}${this.isHybrid()?`, overlay=${this._overlayFormat()}`:""})`);
   }
 
   _prepareBrowserAudio(){
@@ -698,6 +726,10 @@ class Compositor extends EventEmitter {
         defaultViewport:{width:this.video.width,height:this.video.height,deviceScaleFactor:1},
         env:{...process.env,...(this.browserAudio?.chromiumEnv()||{})},
         args:chromiumLaunchArgs({width:this.video.width,height:this.video.height,gpuEnabled:this.video.gpuEnabled,browserAudio}),
+        // Puppeteer adds --mute-audio to every headless launch by default,
+        // which silenced StreamElements alerts even with capture running.
+        // chromiumLaunchArgs adds it back itself when there is no capture.
+        ignoreDefaultArgs:["--mute-audio"],
       });
     }catch(err){
       this._cleanupBrowserProfile();
@@ -721,7 +753,7 @@ class Compositor extends EventEmitter {
     await this.page.setViewport({width:this.video.width,height:this.video.height,deviceScaleFactor:1});
     if(this.isHybrid()){
       this.client=await this.page.target().createCDPSession();
-      await this.client.send("Emulation.setDefaultBackgroundColorOverride",{color:{r:0,g:0,b:0,a:0}});
+      await this.client.send("Emulation.setDefaultBackgroundColorOverride",{color:this._overlayFormat()==="key"?{...OVERLAY_KEY,a:1}:{r:0,g:0,b:0,a:0}});
     }
     if(this.browserAudio?.available)this._watchLayerVolumes();
     await this.page.goto(this.pageUrl,{waitUntil:"domcontentloaded",timeout:30000});
@@ -836,7 +868,7 @@ class Compositor extends EventEmitter {
     // Chromium stops JPEG-encoding frames above the capture rate; pages that
     // already change only at their own low rate must keep every frame.
     const everyNth=Math.max(1,Math.round(Number(this.video.screencastEveryNth)||1));
-    await this.client.send("Page.startScreencast",this.isHybrid()?{format:"png",maxWidth:this.video.width,maxHeight:this.video.height,everyNthFrame:everyNth}:{format:"jpeg",quality:this.video.screencastQuality,maxWidth:this.video.width,maxHeight:this.video.height,everyNthFrame:everyNth});
+    await this.client.send("Page.startScreencast",this.isHybrid()&&this._overlayFormat()==="png"?{format:"png",maxWidth:this.video.width,maxHeight:this.video.height,everyNthFrame:everyNth}:this.isHybrid()?{format:"jpeg",quality:Number(process.env.COMPOSITOR_OVERLAY_JPEG_QUALITY||90),maxWidth:this.video.width,maxHeight:this.video.height,everyNthFrame:everyNth}:{format:"jpeg",quality:this.video.screencastQuality,maxWidth:this.video.width,maxHeight:this.video.height,everyNthFrame:everyNth});
 
     const firstFrameTimeout=Math.max(1000,Number(process.env.COMPOSITOR_FIRST_FRAME_TIMEOUT_MS||10000));
     const deadline=Date.now()+firstFrameTimeout;
@@ -948,7 +980,8 @@ class Compositor extends EventEmitter {
 
   async _startAudioRelays(){
     if(!this.audioTransport.paced||this.audioRelays.length)return;
-    const buses=[...(this.inlineSourceAudio()?[]:[["live",this.audioTransport.live,this.mixer.program]]),["music",this.audioTransport.music,this.mixer.music]];
+    try{const v=Number(this.getMusicNow()?.volume);if(Number.isFinite(v))this.musicVolume=v;}catch{}
+    const buses=[...(this.inlineSourceAudio()?[]:[["live",this.audioTransport.live,this.mixer.program]]),["music",this.audioTransport.music,this._musicGain()]];
     if(this.browserAudio?.available)buses.push(["browser",this.audioTransport.browser,this.mixer.browser]);
     for(const [bus,endpoint,gain] of buses){
       const relay=new PcmAudioRelay({inputPort:endpoint.inputPort,outputPort:endpoint.outputPort,logger:this.logger,gain});
@@ -1043,9 +1076,18 @@ class Compositor extends EventEmitter {
   // of waiting for the next 1 s check.
   syncMusic(){this._syncMusicTap();}
 
+  // Stream music level = Music page volume x Overlay Studio "Scene music"
+  // bus, applied in the PCM relay so it changes live without a restart.
+  _musicGain(){
+    const v=Number(this.musicVolume);
+    return this.mixer.music*(Number.isFinite(v)?Math.max(0,Math.min(1,v)):1);
+  }
+
   _syncMusicTap(){
     let now;
     try{now=this.getMusicNow();}catch{now=null;}
+    const volume=Number(now?.volume);
+    if(Number.isFinite(volume)&&volume!==this.musicVolume){this.musicVolume=volume;this.relayByBus.music?.setGain(this._musicGain());}
     const trackId=now?.mode==="playing"?now.track?.id:null;
     const sourceId=trackId||"__silence__";
     if(sourceId===this.currentMusicTrackId&&this.musicAudioTap)return;
@@ -1103,16 +1145,17 @@ class Compositor extends EventEmitter {
     const maxrate=this.video.maxrate||process.env.COMPOSITOR_VIDEO_MAXRATE||bitrate;
     const bufsize=this.video.bufsize||process.env.COMPOSITOR_VIDEO_BUFSIZE||(this.video.width<=1280&&this.video.height<=1280?"8000k":"12000k");
     const filter=hybrid
-      ? [hybridVideoGraph({plan:this.hybridPlan,width:this.video.width,height:this.video.height,fps:this.video.fps,source:this.hybridSourceUsed,zmqPort:this.zmqPort}),encoderFilterSuffix(enc,"vbase","v"),audioPlan.filter].join(";")
+      ? [hybridVideoGraph({plan:this.hybridPlan,width:this.video.width,height:this.video.height,fps:this.video.fps,source:this.hybridSourceUsed,zmqPort:this.zmqPort,overlay:this._overlayFormat()}),encoderFilterSuffix(enc,"vbase","v"),audioPlan.filter].join(";")
       : compositorFilterGraph({fps:this.video.fps,width:this.video.width,height:this.video.height,encoder:enc,audioPlan,musicOnly:!this.includeLiveAudio});
     const sourceArgs=hybrid?[...(this.hybrid.inputArgs||["-thread_queue_size","1024","-fflags","+genpts+discardcorrupt","-analyzeduration","1000000","-probesize","1000000"]),...(inlineAudio?[]:["-an"]),"-i",resolveUrl(this.hybrid.sourceUrl)]:[];
-    const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats","-progress","pipe:2","-stats_period","2",...globalEncoderArgs(enc),...sourceArgs,...videoInputArgs({electronOffscreen:this.electronOffscreen,fps:this.video.fps,inputFps:this.inputFps(),width:this.video.width,height:this.video.height,format:hybrid?"png":"mjpeg"}),...audioPlan.args,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,gop:this.video.fps*(Number(this.video.gopSeconds)||1),bitrate,maxrate,bufsize,x264Preset:this.video.x264Preset||process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",this.video.audioBitrate||process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
+    const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats","-progress","pipe:2","-stats_period","2",...globalEncoderArgs(enc),...sourceArgs,...videoInputArgs({electronOffscreen:this.electronOffscreen,fps:this.video.fps,inputFps:this.inputFps(),width:this.video.width,height:this.video.height,format:hybrid&&this._overlayFormat()==="png"?"png":"mjpeg"}),...audioPlan.args,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,gop:this.video.fps*(Number(this.video.gopSeconds)||1),bitrate,maxrate,bufsize,x264Preset:this.video.x264Preset||process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",this.video.audioBitrate||process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
     if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg command: ffmpeg ${args.join(" ")}`);
     const started=Date.now();
     this.ffmpeg=spawn(FFMPEG_BIN,args,{stdio:["pipe","ignore","pipe"]});
     this.ffmpeg.on("spawn",()=>{if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg spawned pid=${this.ffmpeg?.pid}`);});
     this.ffmpeg.on("error",err=>{this.logger.warn(`[compositor:${this.accountId}] ffmpeg process error: ${err.message}`);});
     this.encodedFrames=null;
+    this.lastOutTimeUs=-1;this.lastProgressAt=null;
     // Live-latency guard: when the encoder falls behind real time (busy host),
     // input piles up in the queues and that delay never shrinks again. Track
     // wall clock vs FFmpeg's output clock and restart to drop the backlog.
@@ -1121,7 +1164,12 @@ class Compositor extends EventEmitter {
     this.encoderLagS=null;
     this.ffmpeg.stderr.on("data",chunk=>{
       let text=chunk.toString();
-      const outTimes=[...text.matchAll(/^out_time_us=(d+)$/gm)];
+      const outTimes=[...text.matchAll(/^out_time_us=(\d+)$/gm)];
+      if(outTimes.length&&this.ffmpeg===proc){
+        const outUs=Number(outTimes.at(-1)[1]);
+        if(!(outUs<=this.lastOutTimeUs))this.lastProgressAt=Date.now();
+        this.lastOutTimeUs=outUs;
+      }
       if(outTimes.length&&maxLag>0&&this.ffmpeg===proc){
         const lag=(Date.now()-started)/1000-Number(outTimes.at(-1)[1])/1e6;
         if(lagBase==null||lag<lagBase)lagBase=lag;
@@ -1177,14 +1225,17 @@ class Compositor extends EventEmitter {
     this.watchdogTimer=setInterval(()=>{
       if(this.state!=="running")return;
       const timeout=Number(process.env.COMPOSITOR_WATCHDOG_MS||15000);
-      const activityAt=watchdogActivityAt(this.electronOffscreen,this.lastPaintAt,this.lastFrameAt);
+      // Hybrid: the overlay pipe only moves as fast as the gameplay, so a
+      // backed-up pipe is not a dead renderer. Restart only when FFmpeg's own
+      // output clock (-progress) has stopped too.
+      const activityAt=this.isHybrid()?Math.max(this.lastFrameAt||0,this.lastProgressAt||0)||null:watchdogActivityAt(this.electronOffscreen,this.lastPaintAt,this.lastFrameAt);
       if(!activityAt){
         if(this.frameCount===0)this.logger.warn(`[compositor:${this.accountId}] watchdog: waiting for first frame`);
         return;
       }
       const idle=Date.now()-activityAt;
       if(idle>timeout){
-        const source=this.electronOffscreen?"Electron paint loop":"frame pump";
+        const source=this.electronOffscreen?"Electron paint loop":this.isHybrid()?"encoder (no output progress and no overlay frames)":"frame pump";
         this.logger.warn(`[compositor:${this.accountId}] watchdog: ${source} stalled for ${idle}ms, forcing reconnect`);
         this._stopWatchdog();
         this._scheduleReconnect();
@@ -1275,4 +1326,4 @@ class Compositor extends EventEmitter {
   }
 }
 
-module.exports={hybridAudioPlan,hybridEnabled,overlayFps,hybridVideoGraph,hybridGeometry,hybridLayoutCommands,hybridPlanSignature,Compositor,defaultVideoConfig,buildChromiumGpuArgs,chromiumSecurityArgs,chromiumLaunchArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan,pcmInputArgs,compositorFilterGraph,videoInputArgs,pumpTimestampMode,framePumpBacklogLimit,cfrBacklogLimit,framesOwed,nextFrameDelay,resyncFrameIndex,electronOffscreenWindowOptions,effectiveMixerGains};
+module.exports={overlayFormat,hybridAudioPlan,hybridEnabled,overlayFps,hybridVideoGraph,hybridGeometry,hybridLayoutCommands,hybridPlanSignature,Compositor,defaultVideoConfig,buildChromiumGpuArgs,chromiumSecurityArgs,chromiumLaunchArgs,audioTransportFor,useElectronOffscreen,watchdogActivityAt,audioInputPlan,pcmInputArgs,compositorFilterGraph,videoInputArgs,pumpTimestampMode,framePumpBacklogLimit,cfrBacklogLimit,framesOwed,nextFrameDelay,resyncFrameIndex,electronOffscreenWindowOptions,effectiveMixerGains};
