@@ -23,7 +23,7 @@ webrtcAddress: :8889
 # your public domain and/or IP, not a LAN placeholder. WebRTC needs this to
 # match reality or ICE negotiation fails even though HLS/RTSP still work.
 webrtcAdditionalHosts:
-  - ps4stream.nekosunevr.co.uk
+  - castnexus.nekosunevr.co.uk
 # A STUN server plus a single fixed UDP port (instead of a random ephemeral
 # one per connection) makes this firewall/NAT-forwarding friendly - open
 # only this one UDP port rather than a whole range.
