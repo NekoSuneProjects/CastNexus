@@ -151,8 +151,10 @@ function hybridEnabled(value = process.env.COMPOSITOR_HYBRID) {
 // Overlay capture rate in hybrid mode. Defaults to the output fps: frames are
 // only captured while something on the overlay changes, so a static overlay
 // costs nothing, and alert animations stay smooth. Lower it on weak hosts.
-function overlayFps(outputFps, value = process.env.COMPOSITOR_OVERLAY_FPS) {
-  const n = Math.round(Number(value) || Number(outputFps) || 30);
+function overlayFps(outputFps, value = process.env.COMPOSITOR_OVERLAY_FPS, { gpuEnabled = true } = {}) {
+  // Without a GPU every animated overlay frame is software-rasterised and
+  // PNG-encoded: 30 fps cost ~1.2 cores on a 6-core VPS, so default to 15.
+  const n = Math.round(Number(value) || (gpuEnabled ? Number(outputFps) || 30 : 15));
   return Math.max(1, Math.min(Number(outputFps) || 30, n));
 }
 
@@ -479,7 +481,7 @@ class Compositor extends EventEmitter {
 
   activeEncoder(){return this.forceCpu?CPU_PROFILE:this.encoder;}
   isHybrid(){return !!this.hybrid&&!this.electronOffscreen;}
-  inputFps(){if(this.isHybrid())return overlayFps(this.video.fps);return Math.max(1,Math.min(Number(this.video.fps)||30,Number(this.video.renderFps||this.video.fps)||30));}
+  inputFps(){if(this.isHybrid())return overlayFps(this.video.fps,undefined,{gpuEnabled:!!this.video.gpuEnabled});return Math.max(1,Math.min(Number(this.video.fps)||30,Number(this.video.renderFps||this.video.fps)||30));}
 
   _currentHybridPlan(){
     let plan=null;

@@ -21,6 +21,8 @@ services:
   mediamtx:
     image: bluenviron/mediamtx:1.19.2
     container_name: castnexus-mediamtx
+    # Live video first when the host is busy (default weight is 1024).
+    cpu_shares: ${CASTNEXUS_CPU_SHARES:-2048}
     network_mode: host
     restart: unless-stopped
     volumes:
@@ -61,6 +63,7 @@ services:
   dashboard:
     image: ghcr.io/nekosuneprojects/castnexus-dashboard:${CASTNEXUS_IMAGE_TAG:-latest}
     container_name: castnexus-dashboard
+    cpu_shares: ${CASTNEXUS_CPU_SHARES:-2048}
     network_mode: host
     restart: unless-stopped
     depends_on:
