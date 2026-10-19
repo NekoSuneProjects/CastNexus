@@ -119,6 +119,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: electron-${{ matrix.target }}
+          retention-days: 1
           path: |
             electron/dist/*.exe
             electron/dist/*.AppImage
@@ -157,6 +158,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cli-${{ matrix.target }}
+          retention-days: 1
           path: |
             cli/dist/castnexus-cli*
 
