@@ -68,7 +68,14 @@ PS5 ──RTMP──> CastNexus (VPS console gateway) ──> Twitch / YouTube /
    - Studio → Settings → Discord Activity shows the exact target to copy.
    - One mapping is enough, because everything the Activity needs is served
      under `/activity`.
-5. Open **Installation**.
+5. On **General Information**, set:
+   - **Privacy Policy URL**: `https://castnexus.example.com/privacy`
+   - **Terms of Service URL**: `https://castnexus.example.com/terms`
+
+   Every install serves both pages. Studio → **Admin → Privacy Policy & Terms**
+   shows the exact URLs and lets you add your operator name and contact. See the
+   [Admin dashboard guide](https://github.com/NekoSuneProjects/CastNexus/blob/dashboard/docs/ADMIN-DASHBOARD.md).
+6. Open **Installation**.
    - Enable **Guild Install** and use the install link to add the app to your
      Discord server.
    - Optionally, enable **User Install** so you can launch it anywhere.

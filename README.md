@@ -52,8 +52,9 @@ Turn parts of CastNexus on or off in `.env`, then run `docker compose up -d`:
 
 ```dotenv
 CASTNEXUS_MUSIC24=true            # Music 24/7 radio
-CASTNEXUS_PC_STREAMING=true       # PC / OBS ingest + VOD reruns
+CASTNEXUS_PC_STREAMING=true       # PC / OBS ingest
 CASTNEXUS_CONSOLE_STREAMING=true  # PS5 / Xbox / Switch capture
+CASTNEXUS_VOD=true                # VOD Reruns profiles (uploads, Twitch/YouTube VODs, HLS relay)
 CASTNEXUS_DISCORD_ACTIVITY=false  # watch your stream inside Discord voice channels
 ```
 
