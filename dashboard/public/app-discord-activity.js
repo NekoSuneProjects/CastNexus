@@ -61,7 +61,8 @@
       ${warn}
       ${control}
       ${data.isOwner ? autoHint : ""}
-      <p class="muted" style="margin-top:12px">Host owner: ${ownerName}. Discord URL mapping target: <code>${esc(String(data.pageUrl || "").replace(/^https?:\/\//, "").replace(/\/$/, ""))}</code></p>
+      <p class="muted" style="margin-top:12px">Host owner: ${ownerName}.</p>
+      ${(() => { const host = String(data.pageUrl || "").replace(/^https?:\/\//, "").replace(/\/activity\/?$/, "").replace(/\/$/, ""); return `<div class="callout" style="margin-top:8px"><strong>Discord URL Mappings</strong> (Developer Portal → Activities → URL Mappings):<br><code>/</code> → <code>${esc(host)}/activity</code><br><code>/hls</code> → <code>${esc(host)}/hls</code><br><code>/vrchat-hls</code> → <code>${esc(host)}/vrchat-hls</code></div>`; })()}
       <div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-ghost btn-sm" href="${esc(data.pageUrl)}" target="_blank" rel="noopener">Open the Activity page</a><a class="btn btn-ghost btn-sm" href="${DOCS}" target="_blank" rel="noopener">Setup guide</a></div>
       <div id="da-error" class="form-error"></div>`;
     const save = panel.querySelector("#da-save");

@@ -104,9 +104,14 @@ test("classic TS HLS fallback is guarded like the other stream routes; viewer lo
   const base = `http://127.0.0.1:${server.address().port}/activity`;
   try {
     assert.equal(await (await fetch(`${base}/tshls/public/neko/index.m3u8`)).text(), "ts:/public/neko/index.m3u8");
-    assert.equal((await fetch(`${base}/tshls/public/other/index.m3u8`)).status, 404);
+    const proxied = await fetch(`${base}/tshls/public/neko/index.m3u8`);
+    assert.equal(proxied.headers.get("x-castnexus-activity"), "proxied");
+    const refused = await fetch(`${base}/tshls/public/other/index.m3u8`);
+    assert.equal(refused.status, 404);
+    assert.equal(refused.headers.get("x-castnexus-activity"), "refused", "404s from the guard are identifiable");
+    assert.match(logs.find(l => l.includes("refused")), /other is not the selected channel \(neko\)/);
     const r = await fetch(`${base}/api/log`, { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ message:"ll failed\ninjected line \u00e9", ua:"UA" }) });
     assert.equal(r.status, 204);
-    assert.deepEqual(logs, ["[discord-activity] viewer: ll failed injected line ? | UA"]);
+    assert.deepEqual(logs.filter(l => l.includes("viewer:")), ["[discord-activity] viewer: ll failed injected line ? | UA"]);
   } finally { server.close(); upstream.close(); }
 });

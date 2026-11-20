@@ -68,6 +68,13 @@
   }
 
   function streamPath(login) { return "public/" + encodeURIComponent(login); }
+  // Streams use the SAME URLs as CastNexus' public playback links
+  // (/hls/public/<login>/index.m3u8 and /vrchat-hls/...), root-absolute.
+  // Inside Discord, add URL Mappings  /hls -> <domain>/hls  and
+  // /vrchat-hls -> <domain>/vrchat-hls  so they reach exactly those routes.
+  // Without them, Discord's root mapping sends them to <domain>/activity/hls
+  // and /activity/vrchat-hls, the Activity's own guarded copies.
+  function streamUrl(route, login) { return "/" + route + "/" + streamPath(login) + "/index.m3u8"; }
 
   function updateUnmute() {
     var video = $("video");
@@ -124,7 +131,7 @@
   // The transmux worker is off: Discord's CSP may refuse blob: workers.
   function startHlsJs(login, mine, variant) {
     var video = $("video");
-    var src = url((variant === "ts" ? "tshls/" : "hls/") + streamPath(login) + "/index.m3u8");
+    var src = streamUrl(variant === "ts" ? "vrchat-hls" : "hls", login);
     video.srcObject = null;
     if (!(window.MediaSource || window.ManagedMediaSource)) return Promise.reject(new Error(variant + "-hls: no Media Source Extensions"));
     if (mseBlocked) return Promise.reject(new Error(variant + "-hls: skipped, blob: media is blocked by this client's security policy"));
@@ -167,7 +174,7 @@
     var video = $("video");
     if (!video.canPlayType("application/vnd.apple.mpegurl")) return Promise.reject(new Error("native-hls: not supported"));
     video.srcObject = null;
-    video.src = url("tshls/" + streamPath(login) + "/index.m3u8");
+    video.src = streamUrl("vrchat-hls", login);
     video.onerror = function () { if (mine === session && transportOk === "native") midStreamFailure("native", "native-hls: media error " + (video.error && video.error.code)); };
     playVideo();
     return waitForProgress(mine, "native-hls", 15000);
@@ -236,9 +243,16 @@
       var name = queue.shift();
       if (!name) {
         var detail = lastErrors.join(" | ");
-        report("all transports failed for " + login + ": " + detail);
-        overlay("Can't play the stream in Discord right now - retrying…", detail);
-        return reconnectSoon(null, 8000, detail);
+        // Fetch the playlist ourselves to see WHO answered: the CastNexus
+        // guard ("refused"), MediaMTX ("proxied"), or - header missing -
+        // something in front of CastNexus (reverse proxy / CDN / Discord).
+        return probe(streamUrl("hls", login)).then(function (p) {
+          if (mine !== session) return;
+          report("all transports failed for " + login + ": probe: " + p + " | " + detail);
+          detail = "probe: " + p + " | " + detail;
+          overlay("Can't play the stream in Discord right now - retrying…", detail);
+          reconnectSoon(null, 8000, detail);
+        });
       }
       overlay("Connecting… (" + (TRANSPORT_LABELS[name] || name) + ")");
       startTransport(name, login, mine).then(function () {
@@ -257,6 +271,15 @@
         next();
       });
     })();
+  }
+
+  function probe(target) {
+    return fetch(target, { cache:"no-store" }).then(function (r) {
+      var who = r.headers.get("x-castnexus-activity") || "header missing - answered by something in front of CastNexus";
+      return r.text().then(function (body) {
+        return "GET " + target + " -> HTTP " + r.status + " (" + who + ")" + (r.ok ? "" : " body: " + body.replace(/\s+/g, " ").slice(0, 80));
+      });
+    }).catch(function (err) { return "GET " + target + " failed: " + (err && err.message); });
   }
 
   // Tear down the media of a failed attempt without bumping the session.

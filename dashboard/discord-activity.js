@@ -220,21 +220,45 @@ function createDiscordActivityRouter({
   });
 
   // --- stream proxy -----------------------------------------------------------
+  // Every stream response carries X-CastNexus-Activity so a 404 can be traced:
+  //   refused = this guard said no, proxied = MediaMTX answered,
+  //   header missing = something in front of CastNexus (reverse proxy / CDN)
+  //   answered and the request never reached it.
   const allowed = login => {
     if (typeof streamAllowed === "function") return streamAllowed(login);
     const channel = getChannel();
     return !!channel?.login && normaliseLogin(channel.login) === login;
+  };
+  const diag = { at:0, count:0 };
+  const diagLog = message => {
+    const now = Date.now();
+    if (now - diag.at > 60000) { diag.at = now; diag.count = 0; }
+    if (++diag.count <= 20) log(`[discord-activity] ${message}`);
   };
   const guard = (req, res, next) => {
     const match = String(req.path || "").match(/^\/public\/([^/]+)(?:\/|$)/);
     let login = null;
     if (match) { try { login = decodeURIComponent(match[1]).toLowerCase(); } catch {} }
     if (login && streamPathAllowed(req.path, login) && allowed(login)) return next();
-    res.status(404).type("text/plain").send("not found");
+    const selected = getChannel()?.login || "none";
+    diagLog(`stream request refused: ${req.baseUrl}${req.path} (${login ? `${login} is not the selected channel (${selected}) or a live, linked, opted-in streamer` : "not a public/<login> path"})`);
+    res.setHeader("X-CastNexus-Activity", "refused");
+    res.status(404).type("text/plain").send("not found (refused by the CastNexus Activity stream guard)");
   };
-  router.use("/hls", guard, createProxyMiddleware({ target:hlsTarget, changeOrigin:true, pathRewrite:{ "^/activity/hls":"" }, logLevel:"warn" }));
-  router.use("/tshls", guard, createProxyMiddleware({ target:tsHlsTarget, changeOrigin:true, pathRewrite:{ "^/activity/tshls":"" }, logLevel:"warn" }));
-
+  const proxyFor = (prefix, target) => createProxyMiddleware({
+    target, changeOrigin:true, pathRewrite:{ [`^(/activity)?/${prefix}`]:"" }, logLevel:"warn",
+    onProxyRes:(proxyRes, req) => {
+      proxyRes.headers["x-castnexus-activity"] = "proxied";
+      if (proxyRes.statusCode >= 400) diagLog(`MediaMTX (${target}) answered ${proxyRes.statusCode} for ${String(req.originalUrl || req.url).replace(new RegExp(`^(/activity)?/${prefix}`), "").split("?")[0]} - is that path live and is the ${prefix === "hls" ? "castnexus-mediamtx" : "castnexus-mediamtx-vrchat"} container running?`);
+    },
+    onError:(err, req, res) => {
+      diagLog(`MediaMTX (${target}) unreachable for ${req.originalUrl}: ${err.code || err.message}`);
+      if (!res.headersSent) { res.setHeader("X-CastNexus-Activity", "upstream-error"); res.status(502).type("text/plain").send("stream server unreachable"); }
+    },
+  });
+  router.use("/hls", guard, proxyFor("hls", hlsTarget));
+  router.use("/tshls", guard, proxyFor("tshls", tsHlsTarget));
+  router.use("/vrchat-hls", guard, proxyFor("vrchat-hls", tsHlsTarget)); // same, under the public route's name
   router.use((_req, res) => res.status(404).type("text/plain").send("not found"));
   return router;
 }
