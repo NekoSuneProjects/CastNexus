@@ -122,6 +122,7 @@
       u.activeProfile ? `<span class="badge">${esc(u.activeProfile.name || "Profile")} · ${esc(MODE_LABELS[u.activeProfile.mode] || u.activeProfile.mode || "")}</span>` : "",
       u.streamKey.set ? `<span class="badge cyan">STREAM KEY · ${u.streamKey.source === "oauth" ? "TWITCH" : "MANUAL"}</span>` : "",
       `<span class="badge">${u.destinations.enabled}/${u.destinations.total} OUTPUTS</span>`,
+      u.discord ? `<span class="badge purple" title="${u.discord.visible ? "Shown in the Discord Activity when live" : "Hidden from the Discord Activity"}">DISCORD · ${esc(u.discord.username)}${u.discord.visible ? "" : " · HIDDEN"}</span>` : "",
     ].join("");
     const actions = [
       u.live ? `<button class="btn btn-ghost btn-sm" data-adm="stop" data-id="${esc(u.id)}">Stop stream</button>` : "",

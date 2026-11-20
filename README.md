@@ -447,10 +447,17 @@ Watch your stream (console, PC, Music 24/7 or rerun) together inside a Discord
 voice channel, with no screen sharing. This is useful for PS5 players, because a
 console can't screen-share to Discord.
 
-The Activity plays **one** channel and never lists other people's streams. The
-**host owner** chooses that channel in Studio → Settings → Discord Activity, or
-locks it with `DISCORD_ACTIVITY_CHANNEL`. The host owner is
+**Auto mode** works once `DISCORD_CLIENT_SECRET` is set. Streamers link their
+Discord account once (Settings → Your Discord account). After that, the Activity
+plays whoever in the voice channel is linked and live on CastNexus. If several
+people are live, viewers can switch between them.
+
+When nobody in the voice channel is live, or in **Fixed mode**, it plays the
+channel the **host owner** picks in Settings → Discord Activity. You can lock
+that channel with `DISCORD_ACTIVITY_CHANNEL`. The host owner is
 `CASTNEXUS_OWNER_LOGIN`, or the first account that signed in.
+
+It never lists the install's other accounts.
 
 Set `CASTNEXUS_DISCORD_ACTIVITY=true` and `DISCORD_CLIENT_ID`, then follow
 [docs/DISCORD-ACTIVITY.md](https://github.com/NekoSuneProjects/CastNexus/blob/docker/docs/DISCORD-ACTIVITY.md).

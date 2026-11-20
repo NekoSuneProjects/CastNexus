@@ -80,6 +80,7 @@ function createAdminRouter({
       profileCount:store ? store.config.profiles.length : 0,
       streamKey:{ set:!!account.streamKey, source:account.streamKey ? (account.streamKeySource || "manual") : null },
       destinations:{ total:(account.destinations || []).length, enabled:(account.destinations || []).filter(d => d.enabled).length },
+      discord:account.discord?.id ? { username:account.discord.globalName || account.discord.username || account.discord.id, visible:account.discordActivityVisible !== false } : null,
     };
   }
 

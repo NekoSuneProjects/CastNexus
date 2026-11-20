@@ -34,6 +34,7 @@ const registration = require("./registration");
 const featureFlags = require("./features");
 const { createDiscordActivityRouter, activityConfig, selectedChannelLogin } = require("./discord-activity");
 const { pickOwner } = require("./owner");
+const { discordOauthConfig, createDiscordApi, publicDiscordLink, linkDiscord, liveLinkedChannels } = require("./discord-link");
 const { createAdminRouter } = require("./admin");
 
 const PORT = Number(process.env.DASHBOARD_PORT || 8090);
@@ -767,15 +768,42 @@ function discordActivityLogin() {
     logins:Object.values(state.accounts).map(a => a.twitchLogin),
   });
 }
-function discordActivityChannel() {
-  const login = discordActivityLogin();
-  const raw = login ? Object.values(state.accounts).find(a => String(a.twitchLogin || "").toLowerCase() === login) : null;
-  const account = raw ? getAccount(raw.twitchUserId) : null;
-  if (!account) return null;
+function accountByLogin(login) {
+  const raw = login ? Object.values(state.accounts).find(a => String(a.twitchLogin || "").toLowerCase() === String(login).toLowerCase()) : null;
+  return raw ? getAccount(raw.twitchUserId) : null;
+}
+function activityRow(account) {
   return { login:account.twitchLogin, displayName:account.displayName || account.twitchLogin, profileImageUrl:account.profileImageUrl || null, source:activeSourceFor(account.twitchUserId) };
 }
+function discordActivityChannel() {
+  const account = accountByLogin(discordActivityLogin());
+  return account ? activityRow(account) : null;
+}
+// Voice-channel auto-detect: with DISCORD_CLIENT_SECRET set and mode "auto"
+// (default), the Activity plays whoever in the voice channel has linked their
+// Discord account and is live; otherwise the channel above.
+const discordOauth = discordOauthConfig();
+const discordApi = discordOauth.enabled ? createDiscordApi({ config:discordOauth }) : null;
+function discordActivityMode() { return discordActivityConfig.lockedChannel ? "fixed" : (state.discordActivity?.mode === "fixed" ? "fixed" : "auto"); }
+function discordLiveLinked(discordIds) {
+  return liveLinkedChannels(state, discordIds, { isLive:account => !!activeSourceFor(account.twitchUserId), row:activityRow });
+}
 if (featureFlags.features.discordActivity) {
-  const activityRouter = createDiscordActivityRouter({ getChannel:discordActivityChannel });
+  const activityRouter = createDiscordActivityRouter({
+    getChannel:discordActivityChannel,
+    getMode:discordActivityMode,
+    discordApi,
+    liveLinked:discordLiveLinked,
+    // Selected channel, plus (auto mode) any opted-in, Discord-linked account
+    // that is live right now.
+    streamAllowed:login => {
+      if (login === discordActivityLogin()) return true;
+      if (!discordApi || discordActivityMode() !== "auto") return false;
+      const account = accountByLogin(login);
+      return !!account?.discord?.id && account.discordActivityVisible !== false && !account.blocked && !!activeSourceFor(account.twitchUserId);
+    },
+    avatarUrlFor:login => accountByLogin(login)?.profileImageUrl || null,
+  });
   app.use("/activity", activityRouter);
   // "/activity" without a trailing slash resolves the page's relative assets
   // against "/", so serve them there too.
@@ -956,6 +984,10 @@ function discordActivityStatus(req){
     live:!!channel?.source,
     source:channel?.source||null,
     lockedByEnv:!!discordActivityConfig.lockedChannel,
+    mode:discordActivityMode(),
+    autoDetectAvailable:!!discordApi,
+    linkedAccounts:Object.values(state.accounts).filter(a=>a?.discord?.id&&a.discordActivityVisible!==false).length,
+    discordRedirectUri:discordRedirectUri(req),
     pageUrl:`${publicPlaybackBase(req)}/activity/`,
     choices:isOwner?Object.values(state.accounts).filter(a=>a.twitchLogin).map(a=>({login:String(a.twitchLogin).toLowerCase(),displayName:a.displayName||a.twitchLogin})).sort((a,b)=>a.displayName.localeCompare(b.displayName)):[],
   };
@@ -974,13 +1006,53 @@ app.post("/api/discord-activity",requireAuth,(req,res)=>{
   const owner=hostOwner();
   if(!owner||String(owner.twitchUserId)!==String(req.account.twitchUserId))return res.status(403).json({error:`Only the host owner${owner?` (${owner.twitchLogin})`:""} can choose what the Discord Activity plays`,code:"OWNER_ONLY"});
   if(discordActivityConfig.lockedChannel)return res.status(409).json({error:"DISCORD_ACTIVITY_CHANNEL is set in .env, which locks the Discord Activity channel",code:"LOCKED_BY_ENV"});
-  const login=String(req.body?.channel||"").trim().toLowerCase();
-  if(login&&!Object.values(state.accounts).some(a=>String(a.twitchLogin||"").toLowerCase()===login))return res.status(400).json({error:`${login} has no CastNexus account on this install - they must sign in once first`});
-  state.discordActivity={...(state.discordActivity||{}),channel:login||null,updatedAt:new Date().toISOString(),updatedBy:req.account.twitchLogin};
+  const next={...(state.discordActivity||{})};
+  if(req.body?.channel!==undefined){
+    const login=String(req.body.channel||"").trim().toLowerCase();
+    if(login&&!Object.values(state.accounts).some(a=>String(a.twitchLogin||"").toLowerCase()===login))return res.status(400).json({error:`${login} has no CastNexus account on this install - they must sign in once first`});
+    next.channel=login||null;
+  }
+  if(req.body?.mode!==undefined){
+    if(!["auto","fixed"].includes(req.body.mode))return res.status(400).json({error:"mode must be auto or fixed"});
+    next.mode=req.body.mode;
+  }
+  state.discordActivity={...next,updatedAt:new Date().toISOString(),updatedBy:req.account.twitchLogin};
   saveState(state);
-  console.log(`[discord-activity] ${req.account.twitchLogin} set the Activity channel to ${login||"(owner default)"}`);
+  console.log(`[discord-activity] ${req.account.twitchLogin} set the Activity to ${state.discordActivity.mode||"auto"} mode, channel ${state.discordActivity.channel||"(owner default)"}`);
   res.json({ok:true,...discordActivityStatus(req)});
 });
+
+// Link a Discord account to this CastNexus account (OAuth2, identify scope),
+// so the Discord Activity can find you in a voice channel while you're live.
+function discordRedirectUri(req){return discordOauth.redirectUri||`${publicPlaybackBase(req)}/auth/discord/callback`;}
+app.get("/auth/discord",(req,res)=>{
+  if(!sessionAccount(req))return res.redirect("/login");
+  if(!discordApi)return res.status(503).send("Discord linking is not configured on this install (DISCORD_CLIENT_ID + DISCORD_CLIENT_SECRET).");
+  const stateToken=crypto.randomBytes(18).toString("base64url");
+  req.session.discordLinkState=stateToken;
+  const url=new URL("https://discord.com/oauth2/authorize");
+  url.search=new URLSearchParams({client_id:discordOauth.clientId,response_type:"code",scope:"identify",redirect_uri:discordRedirectUri(req),state:stateToken,prompt:"consent"}).toString();
+  res.redirect(url.toString());
+});
+app.get("/auth/discord/callback",async(req,res)=>{
+  const account=sessionAccount(req);
+  if(!account)return res.redirect("/login");
+  const expected=req.session.discordLinkState;delete req.session.discordLinkState;
+  if(!expected||String(req.query.state||"")!==expected)return res.redirect("/dashboard?discord=error&reason=state");
+  if(req.query.error||!req.query.code)return res.redirect("/dashboard?discord=cancelled");
+  try{
+    const token=await discordApi.exchangeCode(String(req.query.code),discordRedirectUri(req));
+    const user=await discordApi.me(token.access_token);
+    discordApi.revoke(token.access_token);
+    linkDiscord(state,account,user);
+    saveState(state);
+    console.log(`[discord] ${account.twitchLogin} linked Discord account ${user.username||user.id}`);
+    res.redirect("/dashboard?discord=linked");
+  }catch(err){console.warn(`[discord] link failed for ${account.twitchLogin}: ${err.message}`);res.redirect("/dashboard?discord=error");}
+});
+app.get("/api/discord/link",requireAuth,(req,res)=>res.json({available:!!discordApi&&featureFlags.features.discordActivity,link:publicDiscordLink(req.account)}));
+app.post("/api/discord/unlink",requireAuth,(req,res)=>{delete req.account.discord;saveState(state);res.json({ok:true,link:null});});
+app.post("/api/discord/visibility",requireAuth,(req,res)=>{if(!req.account.discord?.id)return res.status(400).json({error:"Link a Discord account first"});req.account.discordActivityVisible=req.body?.visible!==false;saveState(state);res.json({ok:true,link:publicDiscordLink(req.account)});});
 app.post("/api/relay-push",requireAuth,requireOnboarded,(req,res)=>{const{enabled,mode}=req.body||{};if(enabled&&!relayPush.relaystreamBaseUrl())return res.status(503).json({error:"RELAYSTREAM_URL is not configured on this install"});if(mode!==undefined){if(!["rtmp","whip"].includes(mode))return res.status(400).json({error:"mode must be rtmp or whip"});req.account.relayPushMode=mode;}const wasEnabled=req.account.relayPushEnabled;if(enabled!==undefined)req.account.relayPushEnabled=Boolean(enabled);saveState(state);const source=destinationSourcePathFor(req.account);if(req.account.relayPushEnabled){if(source){if(wasEnabled)stopDestination(req.account.twitchUserId,relayPush.RELAY_DESTINATION_ID);startRelayPushFor(req.account,source);}}else{stopDestination(req.account.twitchUserId,relayPush.RELAY_DESTINATION_ID);}res.json({ok:true,enabled:req.account.relayPushEnabled,mode:req.account.relayPushMode});});
 // `output` is the per-destination layout (mode/scene/size/fps/encoder/bitrate/
 // audio/captions). `layout` is still accepted for older clients and scripts;

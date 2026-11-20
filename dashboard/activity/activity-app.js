@@ -205,7 +205,7 @@
     $("now-meta").className = ch.live ? "live" : "muted";
     [["now-avatar"], ["offline-avatar"]].forEach(function (pair) {
       var img = $(pair[0]);
-      if (ch.profileImageUrl) { img.src = ch.profileImageUrl; img.referrerPolicy = "no-referrer"; img.hidden = false; } else img.hidden = true;
+      if (ch.profileImageUrl) { img.src = /^https?:/.test(ch.profileImageUrl) ? ch.profileImageUrl : url(ch.profileImageUrl); img.referrerPolicy = "no-referrer"; img.hidden = false; } else img.hidden = true;
     });
     $("offline-name").textContent = ch.displayName;
     $("offline").classList.toggle("hidden", ch.live);
@@ -213,7 +213,7 @@
     document.title = ch.displayName + " · " + config.title;
   }
 
-  function applyChannel(next) {
+  function applyChannel(next, note) {
     if (!next) {
       stopPlayback();
       channel = null;
@@ -222,15 +222,76 @@
     }
     var changed = !channel || channel.login !== next.login;
     channel = next;
+    $("offline-note").textContent = note || "";
     show("player");
     render();
     if (!next.live) { if (playingLogin) stopPlayback(); overlay(""); return; }
     if (changed || !playingLogin) connect(next.login);
   }
 
+  // --- Voice-channel auto-detect ------------------------------------------------
+  // The viewer authorizes once (identify + guilds). The Activity then reads who
+  // is in this voice channel and asks CastNexus which of them have linked their
+  // Discord account and are live. One live: play it. Several: switcher chips.
+  // Nobody: the owner's fallback channel.
+  var discord = null, accessToken = null, autoActive = false, picked = null, voiceLive = [];
+
+  function startAutoDetect(sdk) {
+    if (!sdk || !config.autoDetect || !config.clientId || !sdk.channelId) return Promise.resolve(false);
+    $("loading-text").textContent = "Checking who is live in this voice channel…";
+    return sdk.commands.authorize({ client_id:config.clientId, response_type:"code", state:"", prompt:"none", scope:["identify", "guilds"] })
+      .then(function (auth) {
+        return fetch(url("api/token"), { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ code:auth.code }) });
+      })
+      .then(function (r) { if (!r.ok) throw new Error("token " + r.status); return r.json(); })
+      .then(function (token) { accessToken = token.access_token; return sdk.commands.authenticate({ access_token:accessToken }); })
+      .then(function () { autoActive = true; return true; })
+      .catch(function () { autoActive = false; return false; }); // declined or failed: fixed channel
+  }
+
+  function voiceMemberIds() {
+    return discord.commands.getChannel({ channel_id:discord.channelId }).then(function (ch) {
+      return (ch.voice_states || []).map(function (v) { return v.user && v.user.id; }).filter(Boolean);
+    });
+  }
+
+  function fetchVoiceLive() {
+    return voiceMemberIds().then(function (ids) {
+      return fetch(url("api/voice-live"), { method:"POST", headers:{ "Content-Type":"application/json", Authorization:"Bearer " + accessToken }, body:JSON.stringify({ userIds:ids }) });
+    }).then(function (r) { return r.ok ? r.json() : { channels:[] }; }).then(function (d) { return d.channels || []; });
+  }
+
+  function renderSwitcher() {
+    var box = $("switcher");
+    box.textContent = "";
+    box.classList.toggle("hidden", voiceLive.length < 2);
+    voiceLive.forEach(function (ch) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip" + (channel && channel.login === ch.login ? " active" : "");
+      b.textContent = ch.displayName;
+      b.addEventListener("click", function () { picked = ch.login; applyChannel(ch); renderSwitcher(); });
+      box.appendChild(b);
+    });
+  }
+
   function refresh() {
-    return getJSON("api/channel").then(function (data) { applyChannel(data.channel || null); })
-      .catch(function () { /* keep the current state on a transient error */ });
+    var auto = autoActive ? fetchVoiceLive().catch(function () { return null; }) : Promise.resolve(null);
+    return auto.then(function (live) {
+      if (live && live.length) {
+        voiceLive = live;
+        var keep = live.filter(function (c) { return c.login === picked || (channel && c.login === channel.login); })[0];
+        var next = keep || live[0];
+        applyChannel(next, "");
+        renderSwitcher();
+        return;
+      }
+      voiceLive = [];
+      renderSwitcher();
+      return getJSON("api/channel").then(function (data) {
+        applyChannel(data.channel || null, autoActive ? "Nobody in this voice channel is live on CastNexus right now - showing " + ((data.channel && data.channel.displayName) || "the host's channel") + "." : "");
+      });
+    }).catch(function () { /* keep the current state on a transient error */ });
   }
 
   $("unmute").addEventListener("click", function () {
@@ -247,11 +308,13 @@
     config = cfg;
     document.title = cfg.title;
     return connectDiscord();
+  }).then(function (sdk) {
+    discord = sdk;
+    return startAutoDetect(sdk);
   }).then(function () {
-    return getJSON("api/channel");
-  }).then(function (data) {
-    applyChannel(data.channel || null);
-    pollTimer = setInterval(refresh, POLL_MS);
+    return refresh();
+  }).then(function () {
+    pollTimer = setInterval(refresh, autoActive ? 6000 : POLL_MS);
   }).catch(function (err) {
     fail(err && err.message ? err.message : String(err));
   });

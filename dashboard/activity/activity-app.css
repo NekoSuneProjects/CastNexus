@@ -39,3 +39,10 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .btn { border: 1px solid var(--line); background: rgba(21, 21, 38, 0.85); color: var(--text); border-radius: 999px; padding: 7px 14px; font: inherit; cursor: pointer; flex: none; }
 .btn.primary { background: var(--accent); border-color: var(--accent); }
 @media (hover: none) { .player-bar { opacity: 1; } }
+.offline .note { margin-top: 10px; font-size: 13px; color: var(--muted); max-width: 460px; }
+.offline .note:empty { display: none; }
+.switcher { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.chip { border: 1px solid var(--line); background: rgba(21, 21, 38, 0.85); color: var(--text); border-radius: 999px; padding: 5px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+.chip::before { content: "● "; color: var(--live); }
+.chip.active { border-color: var(--accent); background: rgba(124, 92, 255, 0.35); }
+.player-bar:has(.switcher:not(.hidden)) { opacity: 1; }
