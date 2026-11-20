@@ -108,6 +108,9 @@ function createDiscordActivityRouter({
   env = process.env,
   hlsTarget = process.env.MEDIAMTX_HLS_ORIGIN || "http://127.0.0.1:8888",
   webrtcTarget = process.env.MEDIAMTX_WEBRTC_ORIGIN || "http://127.0.0.1:8889",
+  // Classic MPEG-TS HLS from the VRChat remuxer: the most compatible fallback.
+  tsHlsTarget = process.env.MEDIAMTX_VRCHAT_HLS_ORIGIN || "http://127.0.0.1:8898",
+  log = (...args) => console.warn(...args),
 } = {}) {
   if (typeof getChannel !== "function") throw new Error("getChannel is required");
   const config = activityConfig(env);
@@ -177,6 +180,20 @@ function createDiscordActivityRouter({
     } catch (err) { res.status(err.status || 400).json({ error:err.message, channels:[] }); }
   });
 
+  // --- viewer diagnostics -------------------------------------------------------
+  // The page reports playback failures here so they show up in `docker logs`.
+  // Rate limited (the Discord proxy makes every viewer share a few IPs).
+  let logWindow = { at:0, count:0 };
+  router.post("/api/log", json, (req, res) => {
+    const now = Date.now();
+    if (now - logWindow.at > 60000) logWindow = { at:now, count:0 };
+    if (++logWindow.count <= 30) {
+      const clean = value => String(value || "").replace(/[\r\n\t]+/g, " ").replace(/[^\x20-\x7e]/g, "?").slice(0, 400);
+      log(`[discord-activity] viewer: ${clean(req.body?.message)}${req.body?.ua ? ` | ${clean(req.body.ua).slice(0, 160)}` : ""}`);
+    }
+    res.status(204).end();
+  });
+
   // --- avatars ------------------------------------------------------------------
   const avatarCache = new Map();
   router.get("/api/avatar/:login", async (req, res) => {
@@ -215,6 +232,7 @@ function createDiscordActivityRouter({
   };
   router.use("/hls", guard, createProxyMiddleware({ target:hlsTarget, changeOrigin:true, pathRewrite:{ "^/activity/hls":"" }, logLevel:"warn" }));
   router.use("/webrtc", guard, createProxyMiddleware({ target:webrtcTarget, changeOrigin:true, pathRewrite:{ "^/activity/webrtc":"" }, logLevel:"warn" }));
+  router.use("/tshls", guard, createProxyMiddleware({ target:tsHlsTarget, changeOrigin:true, pathRewrite:{ "^/activity/tshls":"" }, logLevel:"warn" }));
 
   router.use((_req, res) => res.status(404).type("text/plain").send("not found"));
   return router;

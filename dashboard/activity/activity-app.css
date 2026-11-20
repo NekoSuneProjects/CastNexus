@@ -46,3 +46,5 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .chip::before { content: "● "; color: var(--live); }
 .chip.active { border-color: var(--accent); background: rgba(124, 92, 255, 0.35); }
 .player-bar:has(.switcher:not(.hidden)) { opacity: 1; }
+.player-overlay .detail { margin: 0; max-width: 680px; font-size: 12px; color: var(--muted); word-break: break-word; }
+.player-overlay .detail:empty { display: none; }

@@ -33,9 +33,10 @@
   function sourceLabel(source) {
     return { console:"Console", pc:"PC", music:"24/7 Music", rerun:"Rerun" }[source] || "Live";
   }
-  function overlay(text) {
+  function overlay(text, detail) {
     $("player-overlay").classList.toggle("hidden", !text);
     if (text) $("overlay-text").textContent = text;
+    $("overlay-detail").textContent = (text && detail) || "";
   }
 
   // --- Discord handshake ------------------------------------------------------
@@ -114,7 +115,7 @@
         if (s === "connected" || s === "completed") { done(); if (mine === session) overlay(""); }
         else if (s === "failed" || s === "disconnected") {
           if (!settled) done(new Error("ice " + s));
-          else if (mine === session) reconnectSoon();
+          else if (mine === session) reconnectSoon("webrtc " + s);
         }
       };
       conn.createOffer().then(function (offer) { return conn.setLocalDescription(offer); }).then(function () {
@@ -145,58 +146,132 @@
     });
   }
 
-  function startHls(login, mine) {
+  // HLS playback. Resolves only once video is actually playing, so a broken
+  // feed falls through to the next transport instead of looping.
+  //   variant "ll" = MediaMTX Low-Latency HLS (fMP4)          -> /activity/hls/...
+  //   variant "ts" = classic MPEG-TS HLS (the VRChat remuxer) -> /activity/tshls/...
+  function startHls(login, mine, variant) {
     var video = $("video");
-    var src = url("hls/" + streamPath(login) + "/index.m3u8");
+    var src = url((variant === "ts" ? "tshls/" : "hls/") + streamPath(login) + "/index.m3u8");
     video.srcObject = null;
-    if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = src;
-      video.onplaying = function () { if (mine === session) overlay(""); };
-      video.onerror = function () { if (mine === session) reconnectSoon(); };
-      playVideo();
-      return Promise.resolve();
-    }
-    return loadHlsLib().then(function (Hls) {
-      if (mine !== session) return;
-      if (!Hls.isSupported()) throw new Error("This Discord client cannot play HLS video.");
-      hls = new Hls({ lowLatencyMode:true, liveSyncDurationCount:2, backBufferLength:10 });
-      hls.on(Hls.Events.MANIFEST_PARSED, function () { playVideo(); });
-      hls.on(Hls.Events.FRAG_BUFFERED, function () { if (mine === session) overlay(""); });
-      hls.on(Hls.Events.ERROR, function (_e, data) {
-        if (!data || !data.fatal || mine !== session) return;
-        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
-        reconnectSoon();
-      });
-      hls.loadSource(src);
-      hls.attachMedia(video);
+    return new Promise(function (resolve, reject) {
+      var settled = false;
+      var timer = setTimeout(function () { finish(new Error(variant + "-hls: no video after 15 s")); }, 15000);
+      function finish(err) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        video.removeEventListener("playing", onPlaying);
+        if (err) {
+          if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
+          reject(err);
+        } else resolve();
+      }
+      function onPlaying() { if (mine === session) { overlay(""); finish(); } }
+      video.addEventListener("playing", onPlaying);
+
+      // Prefer hls.js whenever Media Source Extensions exist. Recent Chromium
+      // (and so Discord desktop) also claims native HLS support, but its
+      // native player can't play MediaMTX's low-latency fMP4 feed. Native HLS
+      // is only for browsers without MSE (iOS).
+      var hasMse = !!(window.MediaSource || window.ManagedMediaSource);
+      if (!hasMse && video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = src;
+        video.onerror = function () {
+          if (mine !== session) return;
+          if (!settled) finish(new Error(variant + "-hls native: media error " + (video.error && video.error.code)));
+          else reconnectSoon(variant + "-hls native playback stopped");
+        };
+        playVideo();
+        return;
+      }
+      loadHlsLib().then(function (Hls) {
+        if (mine !== session) return finish(new Error("superseded"));
+        if (!Hls.isSupported()) return finish(new Error("this Discord client cannot play HLS video"));
+        hls = new Hls(variant === "ll"
+          ? { lowLatencyMode:true, liveSyncDurationCount:2, backBufferLength:10, manifestLoadingMaxRetry:4, levelLoadingMaxRetry:4, fragLoadingMaxRetry:4 }
+          : { lowLatencyMode:false, liveSyncDurationCount:3, backBufferLength:10, manifestLoadingMaxRetry:4, levelLoadingMaxRetry:4, fragLoadingMaxRetry:4 });
+        var mediaRecoveries = 0;
+        hls.on(Hls.Events.MANIFEST_PARSED, function () { playVideo(); });
+        hls.on(Hls.Events.ERROR, function (_e, data) {
+          if (!data || !data.fatal || mine !== session) return;
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries++ < 2) { hls.recoverMediaError(); return; }
+          var why = variant + "-hls: " + data.type + "/" + data.details + (data.response && data.response.code ? " (HTTP " + data.response.code + ")" : "");
+          if (!settled) finish(new Error(why));
+          else reconnectSoon(why);
+        });
+        hls.loadSource(src);
+        hls.attachMedia(video);
+      }).catch(function (err) { finish(err); });
     });
+  }
+
+  // Transports in order of latency. The one that worked is remembered so a
+  // reconnect starts there; WebRTC is skipped for the rest of the session once
+  // it fails (Discord / a CDN proxy in front of the server often blocks UDP).
+  var transportOk = null, webrtcBroken = false, lastErrors = [];
+  function transportsFor() {
+    var all = [];
+    if (config.webrtc && !webrtcBroken && typeof RTCPeerConnection === "function") all.push("webrtc");
+    all.push("ll", "ts");
+    if (transportOk && all.indexOf(transportOk) > 0) { all.splice(all.indexOf(transportOk), 1); all.unshift(transportOk); }
+    return all;
+  }
+  function startTransport(name, login, mine) {
+    return name === "webrtc" ? startWebRtc(login, mine) : startHls(login, mine, name);
   }
 
   function connect(login) {
     stopPlayback();
     playingLogin = login;
     var mine = session;
+    var queue = transportsFor();
+    lastErrors = [];
     overlay("Connecting…");
-    startWebRtc(login, mine).catch(function () {
+    (function next() {
       if (mine !== session) return;
-      return startHls(login, mine);
-    }).catch(function (err) {
-      if (mine !== session) return;
-      overlay((err && err.message) || "Playback failed - retrying…");
-      reconnectSoon();
-    });
+      var name = queue.shift();
+      if (!name) {
+        var detail = lastErrors.join(" | ");
+        report("all transports failed for " + login + ": " + detail);
+        overlay("Can't play the stream right now - retrying…", detail);
+        return reconnectSoon(null, 6000);
+      }
+      startTransport(name, login, mine).then(function () {
+        if (mine !== session) return;
+        if (transportOk !== name) report("playing " + login + " via " + name);
+        transportOk = name;
+      }, function (err) {
+        if (mine !== session) return;
+        var msg = (err && err.message) || String(err);
+        lastErrors.push(name + ": " + msg);
+        if (name === "webrtc") webrtcBroken = true;
+        if (transportOk === name) transportOk = null;
+        next();
+      });
+    })();
   }
 
-  function reconnectSoon() {
+  function reconnectSoon(reason, delay) {
     if (reconnectTimer || !playingLogin) return;
     var login = playingLogin;
+    if (reason) report("reconnecting " + login + ": " + reason);
     overlay("Reconnecting…");
     reconnectTimer = setTimeout(function () {
       reconnectTimer = null;
       if (channel && channel.live && channel.login === login) connect(login);
-    }, 3000);
+    }, delay || 3000);
   }
 
+  // Sends playback problems to the CastNexus server log
+  // ([discord-activity] viewer: ...), rate limited on both sides.
+  var reportsSent = 0;
+  function report(message) {
+    if (reportsSent++ > 20) return;
+    try {
+      fetch(url("api/log"), { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ message:String(message).slice(0, 400), ua:navigator.userAgent.slice(0, 160) }) }).catch(function () {});
+    } catch (e) {}
+  }
   // --- Channel state ----------------------------------------------------------
   function render() {
     var ch = channel;

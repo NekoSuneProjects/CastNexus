@@ -87,3 +87,24 @@ test("router serves the page, SDK and only the selected channel's stream", async
     assert.equal((await (await fetch(base + "/activity/api/channel")).json()).channel, null);
   });
 });
+
+test("classic TS HLS fallback is guarded like the other stream routes; viewer logs are sanitised", async () => {
+  const upstream = http.createServer((req, res) => { res.end(`ts:${req.url}`); });
+  await new Promise(r => upstream.listen(0, "127.0.0.1", r));
+  const logs = [];
+  const app = express();
+  app.use("/activity", createDiscordActivityRouter({
+    getChannel:() => ({ login:"neko", displayName:"Neko", source:"console" }),
+    env:{}, tsHlsTarget:`http://127.0.0.1:${upstream.address().port}`, log:line => logs.push(line),
+  }));
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise(r => server.once("listening", r));
+  const base = `http://127.0.0.1:${server.address().port}/activity`;
+  try {
+    assert.equal(await (await fetch(`${base}/tshls/public/neko/index.m3u8`)).text(), "ts:/public/neko/index.m3u8");
+    assert.equal((await fetch(`${base}/tshls/public/other/index.m3u8`)).status, 404);
+    const r = await fetch(`${base}/api/log`, { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ message:"ll failed\ninjected line \u00e9", ua:"UA" }) });
+    assert.equal(r.status, 204);
+    assert.deepEqual(logs, ["[discord-activity] viewer: ll failed injected line ? | UA"]);
+  } finally { server.close(); upstream.close(); }
+});

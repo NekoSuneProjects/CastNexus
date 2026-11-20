@@ -730,7 +730,7 @@ app.set("trust proxy", 1);
 const SLOW_REQUEST_MS=Number(process.env.CASTNEXUS_SLOW_REQUEST_MS||3000);
 app.use((req,res,next)=>{
   const url=String(req.originalUrl||req.url||"").split("?")[0];
-  if(/\/events$|^\/(activity\/)?(hls|vrchat-hls|webrtc)\/|\/music\/.*\/file\/|^\/api\/recordings\/play/.test(url))return next();
+  if(/\/events$|^\/(activity\/)?(hls|tshls|vrchat-hls|webrtc)\/|\/music\/.*\/file\/|^\/api\/recordings\/play/.test(url))return next();
   const started=Date.now();
   const pending=setTimeout(()=>console.warn(`[http] still pending after 15s: ${req.method} ${url}`),15000);
   pending.unref?.();
