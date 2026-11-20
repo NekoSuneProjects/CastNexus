@@ -16,9 +16,14 @@ PS5 ──RTMP──> CastNexus (VPS console gateway) ──> Twitch / YouTube /
                                                    in any voice channel
 ```
 
-- **One channel only.** The Activity never lists, browses or plays anyone
-  else's stream. It plays exactly one CastNexus channel, chosen by the host
-  owner.
+- **Plays the right person automatically.** In **Auto** mode (the default
+  once `DISCORD_CLIENT_SECRET` is set), the Activity looks at who is in the
+  voice channel and plays whoever has **linked their Discord account** in
+  CastNexus and is **live** right now. If nobody is, it shows the host owner's
+  chosen channel. **Fixed** mode always plays that one channel.
+- **No browsing other people.** The Activity never lists the install's
+  accounts. It only ever shows people who are in the voice channel, linked and
+  opted in, or the owner's channel.
 - **Any source.** Console, PC/OBS, Music 24/7 and VOD reruns all work. The
   Activity plays the same `public/<login>` program as your other playback
   links, so overlays and scenes baked in by the compositor show up in Discord
@@ -32,11 +37,12 @@ PS5 ──RTMP──> CastNexus (VPS console gateway) ──> Twitch / YouTube /
 2. [Create the Discord application](#2-create-the-discord-application)
 3. [Configure CastNexus](#3-configure-castnexus-env)
 4. [Choose the channel (host owner)](#4-choose-the-channel-host-owner)
-5. [Watch in Discord](#5-watch-in-discord)
-6. [Console-only setup example](#6-console-only-setup-example-ps5--vps)
-7. [Security and privacy](#7-security-and-privacy)
-8. [Reference](#8-reference)
-9. [Troubleshooting](#9-troubleshooting)
+5. [Auto-detect: link Discord accounts](#5-auto-detect-link-discord-accounts)
+6. [Watch in Discord](#6-watch-in-discord)
+7. [Console-only setup example](#7-console-only-setup-example-ps5--vps)
+8. [Security and privacy](#8-security-and-privacy)
+9. [Reference](#9-reference)
+10. [Troubleshooting](#10-troubleshooting)
 
 ---
 
@@ -75,7 +81,12 @@ PS5 ──RTMP──> CastNexus (VPS console gateway) ──> Twitch / YouTube /
    Every install serves both pages. Studio → **Admin → Privacy Policy & Terms**
    shows the exact URLs and lets you add your operator name and contact. See the
    [Admin dashboard guide](https://github.com/NekoSuneProjects/CastNexus/blob/dashboard/docs/ADMIN-DASHBOARD.md).
-6. Open **Installation**.
+6. For **auto-detect** (recommended), open **OAuth2**:
+   - Copy the **Client Secret**. This is `DISCORD_CLIENT_SECRET`. Keep it
+     private: it goes only in `.env` on the server.
+   - Under **Redirects**, add `https://castnexus.example.com/auth/discord/callback`.
+     Studio → Settings → Discord Activity shows the exact URL.
+7. Open **Installation**.
    - Enable **Guild Install** and use the install link to add the app to your
      Discord server.
    - Optionally, enable **User Install** so you can launch it anywhere.
@@ -89,9 +100,11 @@ Activities documentation when you want to open it to everyone.
 ```dotenv
 CASTNEXUS_DISCORD_ACTIVITY=true
 DISCORD_CLIENT_ID=123456789012345678
+DISCORD_CLIENT_SECRET=...             # enables auto-detect + "Link Discord" (keep private)
 
 # Optional
 CASTNEXUS_OWNER_LOGIN=nekosunevr      # who controls the Activity (default: first sign-in)
+DISCORD_REDIRECT_URI=                 # only if the auto-built https://<domain>/auth/discord/callback is wrong
 DISCORD_ACTIVITY_CHANNEL=             # lock the channel here instead of choosing it in Studio
 DISCORD_ACTIVITY_TITLE=CastNexus Live
 DISCORD_ACTIVITY_WEBRTC=true          # false = always use LL-HLS
@@ -104,7 +117,9 @@ docker compose -f docker-compose.yml -f docker-compose.vps.yml --profile vps-con
 ```
 
 The dashboard log should show
-`[discord-activity] watch page enabled at /activity (channel chosen by the host owner in Settings)`.
+`[discord-activity] watch page enabled at /activity (auto-detects live linked streamers in the voice channel, else the owner's channel)`.
+Without `DISCORD_CLIENT_SECRET`, the log says *channel chosen by the host owner
+in Settings*, and the Activity works in Fixed mode only.
 
 ## 4. Choose the channel (host owner)
 
@@ -117,16 +132,20 @@ the owner in this order:
 2. Otherwise, the first name in `ALLOWED_TWITCH_LOGINS` that has signed in.
 3. Otherwise, the **first Twitch account that ever signed in** to this install.
 
-To choose the channel:
+To choose what it plays:
 
 1. Sign in to CastNexus Studio as the owner.
-2. Open **Settings → Discord Activity**.
-3. Under **Channel the Activity plays**, pick the Twitch channel. The default
-   is your own.
+2. Open **Settings → Discord Activity** (also on the **Admin** page).
+3. **What the Activity plays**:
+   - **Auto**: live, linked streamers in the voice channel. This is the
+     default when `DISCORD_CLIENT_SECRET` is set.
+   - **Fixed**: always the channel below.
+4. **Fallback / fixed channel**: pick a Twitch channel. The default is your
+   own. Auto mode shows this channel when nobody in the voice channel is live.
    - Only Twitch accounts that have signed in to this CastNexus are offered.
    - There is no free-text field, so the Activity can never play a random
      Twitch channel.
-4. Click **Save**.
+5. Click **Save**.
    - Anyone already watching switches over within a few seconds. They don't
      need to restart the Activity.
 
@@ -142,20 +161,58 @@ To lock the channel so nobody can change it in Studio, set
 `DISCORD_ACTIVITY_CHANNEL=<twitch login>` in `.env` and restart. The Settings
 card then shows *Locked by DISCORD_ACTIVITY_CHANNEL*.
 
-## 5. Watch in Discord
+## 5. Auto-detect: link Discord accounts
+
+Twitch and Discord accounts aren't connected, so each streamer links theirs
+**once**:
+
+1. Sign in to CastNexus Studio with your Twitch account.
+2. **Settings → Your Discord account → Link Discord**.
+3. Approve on Discord. CastNexus asks only for `identify` (your user ID,
+   username and avatar). It keeps your Discord ID with your CastNexus account
+   and revokes the access token straight away.
+4. Leave **Show me in the Discord Activity when I'm live** on. Switch it off any
+   time to stay hidden, or **Unlink**.
+
+Rules:
+- One Discord account links to one CastNexus account. Linking it somewhere
+  else moves it.
+- The **Admin** accounts list shows who has linked Discord, and who is hidden.
+
+What happens in a voice channel:
+
+1. A viewer opens the Activity. The first time, Discord asks them once to
+   allow **identify** and **guilds**. With `guilds`, the Activity can see who
+   is in the current voice channel.
+2. The Activity sends the voice channel's member IDs to CastNexus. CastNexus
+   answers with the members who are **linked + opted in + live**.
+3. It updates every 6 seconds:
+   - **One person live:** it plays straight away.
+   - **Several live:** switcher chips appear in the player bar.
+   - **Nobody live:** it shows the owner's fallback channel, with *"Nobody in
+     this voice channel is live on CastNexus right now"*.
+4. If a viewer declines the Discord prompt, their Activity behaves like Fixed
+   mode.
+
+The streamer doesn't need to open the Activity themselves; they only need to
+be **in the voice channel**. This also works for a PS5 player who joined voice
+from the Discord app on their phone or console.
+
+## 6. Watch in Discord
 
 1. Start streaming as usual. For a PS5 on the VPS gateway, see
    [VPS-CONSOLE-GATEWAY.md](VPS-CONSOLE-GATEWAY.md) and the
    [stream key guide](CONSOLE-STREAM-KEY.md).
 2. In Discord, join a voice channel, select **Activities** (🚀) and pick your app.
-3. The stream opens straight away. There is no list to choose from.
+3. The stream opens straight away: the live streamer in this voice channel
+   (Auto), or the owner's channel.
    - **Offline:** viewers see the channel's name and avatar, and *"is offline
      right now"*. Playback starts on its own when the stream goes live.
    - **Drops:** if the stream drops, the Activity reconnects automatically.
 4. Everyone starts **muted**, because browsers block autoplay with sound. Tap
    **Tap to unmute**.
 
-## 6. Console-only setup example (PS5 + VPS)
+## 7. Console-only setup example (PS5 + VPS)
 
 A VPS that only relays a PS5, with background music on console scenes, plus
 the Discord Activity:
@@ -174,9 +231,10 @@ CASTNEXUS_OWNER_LOGIN=nekosunevr
 PUBLIC_IP=203.0.113.55
 VPS_ALLOWED_CLIENTS=198.51.100.27/32
 
-# Discord Activity
+# Discord Activity (auto-detects you in the voice channel once you link Discord)
 CASTNEXUS_DISCORD_ACTIVITY=true
 DISCORD_CLIENT_ID=123456789012345678
+DISCORD_CLIENT_SECRET=...
 ```
 
 With these settings:
@@ -185,29 +243,42 @@ With these settings:
 - **Gone:** the Music 24/7 radio and PC/OBS options disappear from the Studio,
   and any PC/OBS or radio stream that arrives is ignored.
 
-## 7. Security and privacy
+## 8. Security and privacy
 
-- **One channel.** `/activity/api/channel` returns only the selected channel:
-  login, display name, avatar, and whether it is live. Nothing about other
-  accounts on the install is exposed.
+- **No account list.** `/activity/api/channel` returns only the owner's
+  channel. `/activity/api/voice-live` answers only for the Discord IDs it's
+  given, and only with accounts that are **linked, opted in, not blocked and
+  live**. Nothing else about the install's accounts is exposed.
+- **Viewer must be real.** `voice-live` requires the viewer's own Discord
+  access token. CastNexus checks it with Discord, caching the result for about
+  5 minutes, and never stores it.
 - **Proxy is limited.** The Activity's stream proxy (`/activity/hls`,
-  `/activity/webrtc`) serves only `public/<selected login>`.
-  - Other channels, ingest paths (`app/...`, `live/...`) and stream keys return `404`.
-  - When the owner switches channels, the previous channel stops being reachable
-    through the Activity immediately.
-- **No login needed for viewers.** Viewers don't sign in to CastNexus, and the
-  Activity doesn't request any Discord OAuth scopes. It only performs the
-  Embedded App SDK handshake.
+  `/activity/webrtc`) serves only:
+  - `public/<owner's channel>`, and
+  - in Auto mode, `public/<login>` of linked, opted-in accounts that are live
+    right now.
+
+  Ingest paths (`app/...`, `live/...`) and stream keys always return `404`.
+- **Secret stays server-side.** `DISCORD_CLIENT_SECRET` never reaches the
+  browser. Code exchange happens on the server.
+- **Avatars come from your server.** They are fetched only from Twitch's
+  image CDN (`static-cdn.jtvnw.net`), because Discord's sandbox blocks outside
+  images.
+- **Viewers don't sign in to CastNexus.** In Fixed mode the Activity requests
+  no Discord scopes. In Auto mode it requests `identify` + `guilds`, and never
+  messages, voice or video.
 - **Only the owner can change it.** Changing the channel requires a signed-in
   Studio session belonging to the host owner. Each change is logged as
   `[discord-activity] <login> set the Activity channel to <channel>`.
 
-## 8. Reference
+## 9. Reference
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `CASTNEXUS_DISCORD_ACTIVITY` | `false` | Turns the Activity page (`/activity`) on. |
 | `DISCORD_CLIENT_ID` | — | Discord Application ID (numbers only). |
+| `DISCORD_CLIENT_SECRET` | — | Discord OAuth2 client secret. Enables Auto mode and "Link Discord". Server-side only. |
+| `DISCORD_REDIRECT_URI` | `https://<domain>/auth/discord/callback` | Override the Link Discord callback URL. Must match the Discord portal. |
 | `CASTNEXUS_OWNER_LOGIN` | first sign-in | Twitch login of the host owner. |
 | `DISCORD_ACTIVITY_CHANNEL` | — | Locks the played channel. Leave blank to let the owner choose in Studio. |
 | `DISCORD_ACTIVITY_TITLE` | `CastNexus Live` | Page title. |
@@ -216,11 +287,16 @@ With these settings:
 | Endpoint | Who | Purpose |
 | --- | --- | --- |
 | `GET /activity/` | public | The Activity page |
-| `GET /activity/api/channel` | public | The selected channel and its live state |
+| `GET /activity/api/channel` | public | The owner's channel and its live state |
+| `POST /activity/api/token` `{ "code" }` | Activity | Exchanges the SDK authorize code (Auto mode) |
+| `POST /activity/api/voice-live` `{ "userIds": [...] }` + `Authorization: Bearer <discord token>` | Activity | Live, linked, opted-in streamers among those Discord users |
+| `GET /activity/api/avatar/<login>` | public | Avatar served through your server |
+| `GET /auth/discord` → `/auth/discord/callback` | signed in | Link your Discord account |
+| `GET /api/discord/link`, `POST /api/discord/unlink`, `POST /api/discord/visibility` `{ "visible" }` | signed in | Your Discord link |
 | `GET /api/discord-activity` | signed in | Status; the owner also gets the list of accounts to choose from |
-| `POST /api/discord-activity` `{ "channel": "<login>" }` | host owner | Choose the channel (`""` = owner's own) |
+| `POST /api/discord-activity` `{ "channel": "<login>", "mode": "auto" \| "fixed" }` | host owner | Choose the mode and the fallback / fixed channel (`""` = owner's own) |
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
@@ -231,3 +307,6 @@ With these settings:
 | Settings card says only the owner can change it | You aren't the host owner. Set `CASTNEXUS_OWNER_LOGIN` to your login, or sign in as the owner. |
 | 2-5 s delay | That's LL-HLS. Open `8189/udp` and set `webrtcAdditionalHosts` for WebRTC. |
 | No sound | Tap **Tap to unmute**. Every viewer starts muted. |
+| Auto mode doesn't find me | Link Discord in Settings, and keep *Show me in the Discord Activity* on. You must be live on CastNexus and **in that voice channel** with the Discord account you linked. |
+| "Link Discord" fails / Discord says *Invalid OAuth2 redirect_uri* | Add the exact URL from Settings → Discord Activity under OAuth2 → Redirects in the Discord portal. Set `DISCORD_REDIRECT_URI` if your public domain differs. |
+| Avatars are broken | Update CastNexus. Avatars are now served by your server, because Discord blocks outside images. |

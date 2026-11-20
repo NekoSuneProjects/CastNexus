@@ -108,6 +108,8 @@ services:
 
       # Discord Activity watch page (docs/DISCORD-ACTIVITY.md).
       DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
+      DISCORD_REDIRECT_URI: ${DISCORD_REDIRECT_URI:-}
       DISCORD_ACTIVITY_CHANNEL: ${DISCORD_ACTIVITY_CHANNEL:-}
       # Host owner (full control of install-wide settings). Blank = first sign-in.
       CASTNEXUS_OWNER_LOGIN: ${CASTNEXUS_OWNER_LOGIN:-}
