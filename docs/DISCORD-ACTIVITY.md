@@ -64,24 +64,23 @@ PS5 ──RTMP──> CastNexus (VPS console gateway) ──> Twitch / YouTube /
    - It is public, not a secret.
    - CastNexus does **not** need the client secret or a bot token.
 3. Open **Activities → Settings** and turn on **Enable Activities**.
-4. Open **Activities → URL Mappings** and add these three mappings:
+4. Open **Activities → URL Mappings** and add these two mappings:
 
    | Prefix | Target |
    | --- | --- |
    | `/` | `castnexus.example.com/activity` |
    | `/hls` | `castnexus.example.com/hls` |
-   | `/vrchat-hls` | `castnexus.example.com/vrchat-hls` |
 
    - Use your own domain, without `https://`.
    - Studio → Settings → Discord Activity shows the exact targets to copy.
    - `/` loads the Activity page.
-   - `/hls` and `/vrchat-hls` carry the video. They use the **same URLs as your
-     public playback links**, for example
+   - `/hls` carries the video: **LL-HLS only**, on the **same URL as your
+     public playback link**, for example
      `https://castnexus.example.com/hls/public/<login>/index.m3u8`, so if those
      play in a browser, they play in Discord.
-   - Without the two stream mappings, Discord sends video requests to
-     `/activity/hls` and `/activity/vrchat-hls`. Those also exist, but some
-     reverse-proxy setups answer them with 404.
+   - Without the `/hls` mapping, Discord sends video requests to
+     `/activity/hls`. That route also exists, but some reverse-proxy setups
+     answer it with 404.
 5. On **General Information**, set:
    - **Privacy Policy URL**: `https://castnexus.example.com/privacy`
    - **Terms of Service URL**: `https://castnexus.example.com/terms`
@@ -260,7 +259,7 @@ With these settings:
   access token. CastNexus checks it with Discord, caching the result for about
   5 minutes, and never stores it.
 - **Proxy is limited.** The Activity's stream proxy (`/activity/hls`,
-  `/activity/tshls`) serves only:
+  `/activity/hls`) serves only:
   - `public/<owner's channel>`, and
   - in Auto mode, `public/<login>` of linked, opted-in accounts that are live
     right now.
@@ -316,6 +315,6 @@ With these settings:
 | Auto mode doesn't find me | Link Discord in Settings, and keep *Show me in the Discord Activity* on. You must be live on CastNexus and **in that voice channel** with the Discord account you linked. |
 | "Link Discord" fails / Discord says *Invalid OAuth2 redirect_uri* | Add the exact URL from Settings → Discord Activity under OAuth2 → Redirects in the Discord portal. Set `DISCORD_REDIRECT_URI` if your public domain differs. |
 | Avatars are broken | Update CastNexus. Avatars are now served by your server, because Discord blocks outside images. |
-| Stuck on *Reconnecting…* | Run `docker logs castnexus-dashboard \| grep "discord-activity] viewer"`. The Activity reports which transport it used, or why each one failed, and also shows the reason under the spinner. It tries **low-latency HLS → classic HLS** (the VRChat remuxer on `:8898`) **→ the browser's native HLS player**. It counts a method as working only once the video is actually moving, demotes any method that stalls for 12 s, and shows the method in use in the player bar (e.g. *LIVE · Console · HLS*). |
-| Video errors with HTTP 404 inside Discord, but `https://<domain>/hls/public/<login>/index.m3u8` plays in a browser | Add the `/hls` and `/vrchat-hls` URL Mappings (section 2, step 4). The text under the spinner includes a `probe:` result. `(proxied)` means MediaMTX answered, `(refused)` means the CastNexus guard refused the channel, and `header missing` means your reverse proxy or CDN answered before CastNexus. |
-| Works in a browser but not in Discord | Check the `viewer:` lines in `docker logs`. Classic HLS needs the `castnexus-mediamtx-vrchat` container running (it is in the default compose file). The native-HLS fallback avoids `blob:` URLs entirely, for Discord clients with a strict sandbox. |
+| Stuck on *Reconnecting…* | Run `docker logs castnexus-dashboard \| grep "discord-activity] viewer"`. The Activity reports which transport it used, or why each one failed, and also shows the reason under the spinner. The Activity plays **LL-HLS only**: hls.js first, then the browser's native player on the same LL-HLS URL (Discord on iPhone, or clients whose sandbox blocks `blob:`). It counts playback as working only once the video is actually moving, retries after a 12 s stall, and shows the method in use in the player bar (e.g. *LIVE · Console · LL-HLS*). |
+| Video errors with HTTP 404 inside Discord, but `https://<domain>/hls/public/<login>/index.m3u8` plays in a browser | Add the `/hls` URL Mapping (section 2, step 4). The text under the spinner includes a `probe:` result. `(proxied)` means MediaMTX answered, `(refused)` means the CastNexus guard refused the channel, and `header missing` means your reverse proxy or CDN answered before CastNexus. |
+| Works in a browser but not in Discord | Check the `viewer:` lines in `docker logs`. If the sandbox blocks `blob:`, the log says *security policy blocks media-src blob - using native HLS*, and playback continues on the native player. |
