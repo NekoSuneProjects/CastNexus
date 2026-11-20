@@ -114,7 +114,7 @@ async function setupMode(mode) {
     S.status=await api("/api/status");
     S.overlays=(await api("/api/overlays")).overlays||[];
     await ensureProfileStore(mode);
-    const p=activeProfile(); if(p){p.mode=mode;p.name=mode==="pc"?"PC Gaming":mode==="console"?"Console Gaming":"24/7 Music";p.color=PROFILE_COLORS[mode];p.musicAutostart=mode==="music";p.sceneMusicEnabled=mode==="music";p.compositorEnabled=mode!=="music";await saveProfileStore();}
+    const p=activeProfile(); if(p){p.mode=mode;p.name=mode==="pc"?"PC Gaming":mode==="console"?"Console Gaming":mode==="vod"?"VOD Reruns":"24/7 Music";p.color=PROFILE_COLORS[mode];p.musicAutostart=mode==="music";p.sceneMusicEnabled=mode==="music";p.compositorEnabled=mode!=="music";await saveProfileStore();}
     if(S.status.needsStreamKey){setView("streamkey-view");return;}
     await enterApp();
   }catch(e){error.textContent=e.message;}

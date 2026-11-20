@@ -104,10 +104,11 @@ function trackRow(t) {
 function renderProfiles() {
   return `
     ${pageHead("WORKSPACES", "Profiles", "Each profile has its own music library, canvas, destinations, scene and compositor state.", `<button class="btn btn-ghost" data-action="save-profile">Save active state</button>`)}
-    <section class="grid grid-3">
+    <section class="grid grid-4">
       <button class="mode-card" data-add-profile-mode="pc"><span class="mode-icon">◫</span><strong>New PC profile</strong><small>OBS / encoder input with its own scenes and BRB music.</small><span class="mode-chip">CREATE PROFILE</span></button>
       <button class="mode-card" data-add-profile-mode="console"><span class="mode-icon">⌁</span><strong>New Console profile</strong><small>Console capture with independent outputs, scene music and canvas.</small><span class="mode-chip">CREATE PROFILE</span></button>
       <button class="mode-card music-card" data-add-profile-mode="music"><span class="mode-icon">♫</span><strong>New Music profile</strong><small>Always-on Docker radio with its own files, spectrum and layout.</small><span class="mode-chip">CREATE PROFILE</span></button>
+      <button class="mode-card" data-add-profile-mode="vod"><span class="mode-icon">▶</span><strong>New VOD profile</strong><small>Reruns of uploaded / Twitch / YouTube videos and the Twitch HLS relay, with their own library and outputs.</small><span class="mode-chip">CREATE PROFILE</span></button>
     </section>
     <div class="section-title">Saved profiles</div>
     <section class="grid grid-2">${S.profiles.map(profileCard).join("")}</section>`;
@@ -115,5 +116,5 @@ function renderProfiles() {
 
 function profileCard(p) {
   const active = p.id === S.activeProfileId;
-  return `<div class="card-panel profile-card ${active ? "active-profile" : ""}"><div class="profile-icon" style="color:${esc(p.color || PROFILE_COLORS[p.mode])}">${p.mode === "music" ? "♫" : p.mode === "console" ? "⌁" : "◫"}</div><div class="item-main"><strong>${esc(p.name)}</strong><span>${esc(MODE_LABELS[p.mode] || p.mode)} · ${p.canvasMode === "vertical" ? "9:16 Vertical" : "16:9 Landscape"}</span><div class="profile-meta">${currentProfileBadge(p)}<span class="badge">${(p.destinationEnabledIds || []).length} outputs</span><span class="badge">ISOLATED MUSIC</span><span class="badge">${p.mode === "music" ? "AUTO 24/7" : p.sceneMusicEnabled ? "SCENE MUSIC" : p.compositorEnabled ? "COMPOSITOR" : "BROWSER OVERLAYS"}</span></div></div><div class="item-actions">${!active ? `<button class="btn btn-primary btn-sm" data-activate-profile="${esc(p.id)}">Switch</button>` : `<span class="badge green">ACTIVE</span>`}<button class="icon-button" data-edit-profile="${esc(p.id)}">✎</button>${S.profiles.length > 1 ? `<button class="icon-button" data-delete-profile="${esc(p.id)}">×</button>` : ""}</div></div>`;
+  return `<div class="card-panel profile-card ${active ? "active-profile" : ""}"><div class="profile-icon" style="color:${esc(p.color || PROFILE_COLORS[p.mode])}">${p.mode === "music" ? "♫" : p.mode === "console" ? "⌁" : p.mode === "vod" ? "▶" : "◫"}</div><div class="item-main"><strong>${esc(p.name)}</strong><span>${esc(MODE_LABELS[p.mode] || p.mode)} · ${p.canvasMode === "vertical" ? "9:16 Vertical" : "16:9 Landscape"}</span><div class="profile-meta">${currentProfileBadge(p)}<span class="badge">${(p.destinationEnabledIds || []).length} outputs</span><span class="badge">ISOLATED MUSIC</span><span class="badge">${p.mode === "music" ? "AUTO 24/7" : p.sceneMusicEnabled ? "SCENE MUSIC" : p.compositorEnabled ? "COMPOSITOR" : "BROWSER OVERLAYS"}</span></div></div><div class="item-actions">${!active ? `<button class="btn btn-primary btn-sm" data-activate-profile="${esc(p.id)}">Switch</button>` : `<span class="badge green">ACTIVE</span>`}<button class="icon-button" data-edit-profile="${esc(p.id)}">✎</button>${S.profiles.length > 1 ? `<button class="icon-button" data-delete-profile="${esc(p.id)}">×</button>` : ""}</div></div>`;
 }

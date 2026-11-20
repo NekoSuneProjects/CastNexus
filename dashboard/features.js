@@ -3,7 +3,8 @@
 // Install-wide feature switches, set from the environment (Docker .env).
 //
 //   CASTNEXUS_MUSIC24=true|false             Music 24/7 radio worker + Music profiles
-//   CASTNEXUS_PC_STREAMING=true|false        PC / OBS RTMP ingest + PC profiles (and VOD reruns)
+//   CASTNEXUS_PC_STREAMING=true|false        PC / OBS RTMP ingest + PC profiles
+//   CASTNEXUS_VOD=true|false                 VOD rerun profiles (uploads, Twitch/YouTube VODs, Twitch HLS relay)
 //   CASTNEXUS_CONSOLE_STREAMING=true|false   Console capture ingest + Console profiles
 //   CASTNEXUS_DISCORD_ACTIVITY=true|false    Discord Activity watch page (/activity)
 //
@@ -27,14 +28,14 @@ function readFeatures(env = process.env) {
     music24:envBool(env, "CASTNEXUS_MUSIC24", true),
     pcStreaming:envBool(env, "CASTNEXUS_PC_STREAMING", true),
     consoleStreaming:envBool(env, "CASTNEXUS_CONSOLE_STREAMING", true),
+    vodReruns:envBool(env, "CASTNEXUS_VOD", true),
     discordActivity:envBool(env, "CASTNEXUS_DISCORD_ACTIVITY", false),
   });
 }
 
-// Profile mode -> feature flag. VOD reruns are a PC-profile source, so they
-// follow the PC switch.
-const MODE_FEATURE = Object.freeze({ pc:"pcStreaming", console:"consoleStreaming", music:"music24" });
-const SOURCE_FEATURE = Object.freeze({ ...MODE_FEATURE, rerun:"pcStreaming" });
+// Profile mode -> feature flag. VOD profiles produce the "rerun" source.
+const MODE_FEATURE = Object.freeze({ pc:"pcStreaming", console:"consoleStreaming", music:"music24", vod:"vodReruns" });
+const SOURCE_FEATURE = Object.freeze({ pc:"pcStreaming", console:"consoleStreaming", music:"music24", rerun:"vodReruns" });
 
 function profileModeAllowed(mode, features) {
   const key = MODE_FEATURE[mode];
@@ -56,7 +57,7 @@ function publicFeatures(features) {
 
 function describe(features) {
   const on = name => features[name] ? "on" : "off";
-  return `music24=${on("music24")} pc=${on("pcStreaming")} console=${on("consoleStreaming")} discordActivity=${on("discordActivity")}`;
+  return `music24=${on("music24")} pc=${on("pcStreaming")} console=${on("consoleStreaming")} vod=${on("vodReruns")} discordActivity=${on("discordActivity")}`;
 }
 
 const features = readFeatures();

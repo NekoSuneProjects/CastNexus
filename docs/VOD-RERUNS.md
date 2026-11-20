@@ -1,8 +1,64 @@
 # CastNexus Reruns / VOD
 
-CastNexus can use a PC Streaming profile to relay an authorized Twitch live broadcast or rerun video content through the same destination fan-out used by OBS.
+CastNexus can relay an authorized Twitch live broadcast, or rerun video
+content, through the same destination fan-out used by OBS. This runs in its own
+**VOD Reruns** profile type.
 
 This feature is intended for content you own or are authorized to relay/rerun.
+
+## VOD Reruns profiles
+
+Reruns have their own profile type, alongside PC Streaming, Console Streaming
+and 24/7 Music. A VOD profile has its own:
+- rerun library
+- scenes and overlays
+- destinations
+- canvas
+
+Your PC profile stays ready for OBS while the VOD profile runs reruns.
+
+1. **Profiles → New VOD profile**. On a fresh install you can also pick
+   *VOD Reruns* as the first profile.
+2. Switch to it, then open **Reruns / VOD**.
+3. Add uploads or Twitch / YouTube URLs, start a Twitch VOD from your catalog,
+   or start the Twitch HLS relay.
+
+The server enforces this. Starting a rerun, uploading, adding a remote VOD or
+starting the HLS relay on any other profile type returns `409
+VOD_PROFILE_REQUIRED`. A VOD profile's stream is routed as the `rerun` source.
+
+MediaMTX **recordings** and **YouTube upload** live on the same page, but they
+work for every profile type.
+
+### Moving an older library
+
+Rerun videos saved on a PC profile before VOD profiles existed are not lost.
+Open **Reruns / VOD** while a VOD profile is active. A **Move older rerun
+libraries here** card lists every other profile that still has rerun videos.
+**Move** transfers the entries and their uploaded files into the VOD profile.
+
+The API behind it:
+- `GET /api/vod/libraries`
+- `POST /api/vod/move` with `{ "fromProfileId", "toProfileId" }`
+
+The target must be a VOD profile, and a library can't be moved while its rerun
+is playing.
+
+### Turning it on or off
+
+```dotenv
+CASTNEXUS_VOD=true    # default
+CASTNEXUS_VOD=false   # no VOD profiles, rerun controls hidden, rerun streams not routed
+```
+
+With `CASTNEXUS_VOD=false`:
+- the VOD profile type disappears from the Studio
+- rerun write requests are refused (`403 FEATURE_DISABLED`)
+- rerun streams are not routed
+
+Recordings and YouTube upload keep working. Existing VOD profiles show a
+warning until you switch to another profile or turn the feature back on. Like
+the other feature switches, it is shown read-only in **Admin**.
 
 ## Supported rerun inputs
 

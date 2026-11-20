@@ -374,9 +374,11 @@ For upgrade compatibility, CastNexus continues using the older `.nekosune-ps5-st
 
 The generated PC ingest key is separate from the real Twitch stream key and can be rotated from CastNexus.
 
-## PC Twitch relay / VOD rerun
+## VOD Reruns profile (Twitch relay / VOD rerun)
 
-Instead of OBS, a PC profile can open **Reruns / VOD** and start:
+Reruns have their own **VOD Reruns** profile type, with its own library, scenes
+and destinations. Create one under Profiles, switch to it, then open
+**Reruns / VOD** to start:
 
 - an authorized Twitch live HLS relay
 - a Twitch VOD
@@ -427,8 +429,9 @@ Set these in the `.env` of your [docker branch](https://github.com/NekoSuneProje
 
 ```dotenv
 CASTNEXUS_MUSIC24=true            # Music 24/7 radio worker + Music profiles
-CASTNEXUS_PC_STREAMING=true       # PC / OBS RTMP ingest, PC profiles, VOD reruns
+CASTNEXUS_PC_STREAMING=true       # PC / OBS RTMP ingest, PC profiles
 CASTNEXUS_CONSOLE_STREAMING=true  # PS5 / Xbox / Switch capture, Console profiles
+CASTNEXUS_VOD=true                # VOD Reruns profiles (uploads, Twitch/YouTube VODs, Twitch HLS relay)
 CASTNEXUS_DISCORD_ACTIVITY=false  # Discord Activity watch page (see below)
 ```
 
@@ -451,6 +454,16 @@ locks it with `DISCORD_ACTIVITY_CHANNEL`. The host owner is
 
 Set `CASTNEXUS_DISCORD_ACTIVITY=true` and `DISCORD_CLIENT_ID`, then follow
 [docs/DISCORD-ACTIVITY.md](https://github.com/NekoSuneProjects/CastNexus/blob/docker/docs/DISCORD-ACTIVITY.md).
+
+# Admin dashboard, Privacy and Terms
+
+The host owner gets **Studio → Admin**: install health, sign-in rules, feature
+switches, every account (block, sign out, stop stream, remove), Discord
+Activity, and an admin log.
+
+Every install serves `/privacy` and `/terms`. These are the URLs to give the
+Discord Developer Portal. The operator name and contact on them are set in
+Admin. See [docs/ADMIN-DASHBOARD.md](docs/ADMIN-DASHBOARD.md).
 
 # Console stream key
 

@@ -1,8 +1,8 @@
 "use strict";
 
 const PROFILE_STORE_SYSTEM = "restreamnode-profile-store-v1";
-const PROFILE_COLORS = { pc: "#7c5cff", console: "#ff4fd8", music: "#38e8ff" };
-const MODE_LABELS = { pc: "PC Streaming", console: "Console Streaming", music: "24/7 Music" };
+const PROFILE_COLORS = { pc: "#7c5cff", console: "#ff4fd8", music: "#38e8ff", vod: "#f7c948" };
+const MODE_LABELS = { pc: "PC Streaming", console: "Console Streaming", music: "24/7 Music", vod: "VOD Reruns" };
 const LAYOUT_LABELS = { landscape: "16:9 Landscape", vertical: "9:16 Vertical" };
 const PAGE_TITLES = {
   overview: "Overview", sources: "Sources", destinations: "Destinations",
@@ -169,7 +169,7 @@ async function ensureProfileStore(initialMode) {
   }
 
   const mode = initialMode || (S.status?.sourceMode === "console" ? "console" : "pc");
-  const profile = createProfile(mode, mode === "pc" ? "PC Gaming" : mode === "console" ? "Console Gaming" : "24/7 Music");
+  const profile = createProfile(mode, mode === "pc" ? "PC Gaming" : mode === "console" ? "Console Gaming" : mode === "vod" ? "VOD Reruns" : "24/7 Music");
   const payload = {
     name: "CastNexus Profiles",
     type: "html",

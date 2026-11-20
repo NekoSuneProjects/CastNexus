@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const { readFeatures, _profileModeAllowed, _sourceAllowed, _enabledProfileModes } = require("./features");
 
 test("everything except the Discord Activity is on by default", () => {
-  assert.deepEqual({ ...readFeatures({}) }, { music24:true, pcStreaming:true, consoleStreaming:true, discordActivity:false });
+  assert.deepEqual({ ...readFeatures({}) }, { music24:true, pcStreaming:true, consoleStreaming:true, vodReruns:true, discordActivity:false });
 });
 
 test("switches accept true/false style values and ignore junk", () => {
@@ -16,13 +16,17 @@ test("switches accept true/false style values and ignore junk", () => {
   assert.equal(f.discordActivity, true);
 });
 
-test("profile modes and sources follow their switch; reruns follow PC", () => {
-  const f = readFeatures({ CASTNEXUS_MUSIC24:"false", CASTNEXUS_PC_STREAMING:"false" });
+test("profile modes and sources follow their switch; reruns follow the VOD switch", () => {
+  const f = readFeatures({ CASTNEXUS_MUSIC24:"false", CASTNEXUS_PC_STREAMING:"false", CASTNEXUS_VOD:"false" });
   assert.equal(_profileModeAllowed("music", f), false);
   assert.equal(_profileModeAllowed("pc", f), false);
   assert.equal(_profileModeAllowed("console", f), true);
   assert.equal(_sourceAllowed("rerun", f), false);
   assert.equal(_sourceAllowed("console", f), true);
   assert.equal(_sourceAllowed("something-new", f), true);
+  assert.equal(_profileModeAllowed("vod", f), false);
   assert.deepEqual(_enabledProfileModes(f), ["console"]);
+  const pcOff = readFeatures({ CASTNEXUS_PC_STREAMING:"false" });
+  assert.equal(_sourceAllowed("rerun", pcOff), true, "reruns no longer depend on PC streaming");
+  assert.deepEqual(_enabledProfileModes(pcOff), ["console", "music", "vod"]);
 });

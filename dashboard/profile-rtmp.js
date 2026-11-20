@@ -84,6 +84,7 @@ function profileIngestServer(mediaHost, profile, app = PROFILE_APP) {
 function sourceForProfile(profile) {
   if (profile?.mode === "music") return "music";
   if (profile?.mode === "console") return "console";
+  if (profile?.mode === "vod") return "rerun";
   return "pc";
 }
 

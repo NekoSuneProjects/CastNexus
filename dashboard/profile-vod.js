@@ -486,11 +486,70 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
     });
 
     router.get("/status", (req, res) => res.json(publicStatus(req.account.twitchUserId)));
+
+    // Every profile that has a VOD library, so items saved on an old PC
+    // profile can be moved to a VOD profile.
+    router.get("/libraries", (req, res) => res.json({ libraries:libraries(req.account) }));
+    router.post("/move", async (req, res) => {
+      try { res.json({ ok:true, ...(await moveLibrary(req.account, req.body?.fromProfileId, req.body?.toProfileId)) }); }
+      catch (err) { res.status(err.status || 400).json({ error:err.message }); }
+    });
     return router;
   }
 
+  function libraries(account) {
+    ensureCollections(account);
+    return Object.entries(account.vodProfiles)
+      .map(([id, bucket]) => {
+        const profile = profileById(account, id);
+        return { profileId:id, name:profile?.name || null, mode:profile?.mode || null, exists:!!profile, items:Array.isArray(bucket?.items) ? bucket.items.length : 0 };
+      })
+      .filter(row => row.items > 0);
+  }
+
+  // Moves every item (and uploaded file) from one profile's VOD library to
+  // another's. Used when reruns moved from PC profiles to VOD profiles.
+  async function moveLibrary(account, fromProfileId, toProfileId) {
+    ensureCollections(account);
+    const fromId = safeSegment(fromProfileId || "");
+    const fromBucket = account.vodProfiles[fromId];
+    if (!fromId || !fromBucket) throw Object.assign(new Error("that profile has no VOD library"), { status:404 });
+    const to = bucketFor(account, toProfileId, true);
+    if (!to) throw Object.assign(new Error("unknown target profile"), { status:404 });
+    if (to.profileId === fromId) throw new Error("source and target are the same profile");
+    const running = sessions.get(account.twitchUserId);
+    if (running && safeSegment(running.profileId) === fromId) throw Object.assign(new Error("stop the running rerun before moving its library"), { status:409 });
+
+    const srcDir = diskDir(account, fromId), dstDir = diskDir(account, to.profileId);
+    await fs.promises.mkdir(dstDir, { recursive:true });
+    const known = new Set(to.items.map(i => i.id));
+    let moved = 0;
+    for (const item of fromBucket.items || []) {
+      if (known.has(item.id)) continue;
+      if (item.kind === "upload" && item.filename) {
+        let target = item.filename;
+        if (fs.existsSync(path.join(dstDir, target))) target = `${crypto.randomUUID().slice(0, 8)}-${target}`;
+        try {
+          await fs.promises.rename(path.join(srcDir, item.filename), path.join(dstDir, target));
+        } catch (err) {
+          if (err.code === "ENOENT") target = item.filename; // file already gone: move the entry, it stays unplayable
+          else if (err.code === "EXDEV") {
+            await fs.promises.copyFile(path.join(srcDir, item.filename), path.join(dstDir, target));
+            await fs.promises.unlink(path.join(srcDir, item.filename));
+          } else throw err;
+        }
+        item.filename = target;
+      }
+      to.items.push(item);
+      moved++;
+    }
+    fromBucket.items = [];
+    saveState(state);
+    return { moved, toProfileId:to.profileId };
+  }
+
   return {
-    createApiRouter, bucketFor, diskDir, publicStatus, stop, playItem, startTwitchLive,
+    createApiRouter, bucketFor, diskDir, publicStatus, stop, playItem, startTwitchLive, libraries, moveLibrary,
     refreshTwitchCatalog, getTwitchCatalog, playTwitchCatalogItem, ownLiveStatus,
     normalizeRemoteUrl, resolveRemote, inspectRemote, ffmpegArgsFor, remoteFormatFor,
   };

@@ -232,8 +232,8 @@ function openProfileModal(mode, profile = null) {
   const canvas = profile?.canvasMode || "landscape";
   modalShell(editing ? "Edit profile" : `New ${MODE_LABELS[chosenMode]} profile`, "PROFILE", `
     <div class="form-grid">
-      <div class="full"><label>Name</label><input id="pf-name" value="${esc(profile?.name || (chosenMode === "pc" ? "PC Gaming" : chosenMode === "console" ? "Console Gaming" : "24/7 Music"))}"></div>
-      <div><label>Mode</label><select id="pf-mode" ${editing ? "disabled" : ""}><option value="pc" ${chosenMode==="pc"?"selected":""}>PC Streaming</option><option value="console" ${chosenMode==="console"?"selected":""}>Console Streaming</option><option value="music" ${chosenMode==="music"?"selected":""}>24/7 Music</option></select></div>
+      <div class="full"><label>Name</label><input id="pf-name" value="${esc(profile?.name || (chosenMode === "pc" ? "PC Gaming" : chosenMode === "console" ? "Console Gaming" : chosenMode === "vod" ? "VOD Reruns" : "24/7 Music"))}"></div>
+      <div><label>Mode</label><select id="pf-mode" ${editing ? "disabled" : ""}><option value="pc" ${chosenMode==="pc"?"selected":""}>PC Streaming</option><option value="console" ${chosenMode==="console"?"selected":""}>Console Streaming</option><option value="music" ${chosenMode==="music"?"selected":""}>24/7 Music</option><option value="vod" ${chosenMode==="vod"?"selected":""}>VOD Reruns</option></select></div>
       <div><label>Profile colour</label><input id="pf-color" type="color" value="${esc(profile?.color || PROFILE_COLORS[chosenMode])}"></div>
       <div class="full"><label>Default canvas</label><select id="pf-canvas"><option value="landscape" ${canvas === "landscape" ? "selected" : ""}>16:9 Landscape · desktop / TV</option><option value="vertical" ${canvas === "vertical" ? "selected" : ""}>9:16 Vertical · TikTok / Instagram / Shorts</option></select></div>
       <div class="full" id="pf-key-wrap">${streamKeyChoiceHtml("pf")}</div>

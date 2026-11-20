@@ -40,7 +40,7 @@
         <div class="brand-mark"><img src="/logo.png" alt=""></div>
         <div><div class="eyebrow">FIRST PROFILE</div><h1>How do you want to broadcast?</h1></div>
       </div>
-      <p class="muted">Pick your first workspace. You can add all three later and switch between profiles from the top bar.</p>
+      <p class="muted">Pick your first workspace. You can add the others later and switch between profiles from the top bar.</p>
       <div class="mode-grid">
         <button class="mode-card" data-setup-mode="pc">
           <span class="mode-icon">◫</span><strong>PC Streaming</strong><small>OBS / Streamlabs / encoder input with CastNexus overlays and multi-restream outputs.</small><span class="mode-chip">OBS · RTMP · OVERLAYS</span>
@@ -50,6 +50,9 @@
         </button>
         <button class="mode-card music-card" data-setup-mode="music">
           <span class="mode-icon">♫</span><strong>24/7 Music</strong><small>Docker-powered always-on radio with uploaded tracks, animated cover art and a live spectrum.</small><span class="mode-chip">24/7 · SPECTRUM · RADIO</span>
+        </button>
+        <button class="mode-card" data-setup-mode="vod">
+          <span class="mode-icon">▶</span><strong>VOD Reruns</strong><small>Rerun uploaded videos or Twitch / YouTube VODs, or relay a live Twitch channel, through scenes and destinations.</small><span class="mode-chip">VOD · RERUN · HLS RELAY</span>
         </button>
       </div>
       <div id="setup-error" class="form-error"></div>
@@ -132,6 +135,7 @@
   <script src="/app-studio.js" defer></script>
   <script src="/app-outputs.js" defer></script>
   <script src="/app-discord-activity.js" defer></script>
+  <script src="/app-admin.js" defer></script>
   <script src="/app-brand.js" defer></script>
   <script src="/app-updater.js" defer></script>
 </body>
