@@ -372,3 +372,9 @@ input[type="checkbox"] { width:auto; accent-color:var(--purple); }
   .music-now { grid-template-columns:72px 1fr; }
   .music-cover { width:72px; }
 }
+
+/* Twitch stream key choice (Console profiles): OAuth2 import or manual entry */
+.stream-key-choice { display:flex; flex-direction:column; gap:4px; }
+.stream-key-choice .radio-row { display:flex; align-items:center; gap:8px; margin:4px 0; text-transform:none; letter-spacing:0; font-size:.9rem; color:inherit; cursor:pointer; }
+.stream-key-choice .radio-row input { width:auto; margin:0; flex:none; }
+.stream-key-choice [hidden], #pf-key-wrap[hidden] { display:none !important; }

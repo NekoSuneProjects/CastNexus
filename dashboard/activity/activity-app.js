@@ -1,7 +1,6 @@
-// CastNexus Discord Activity: watch a CastNexus program inside a Discord voice
-// channel. Plays the same public/<login> output as the other playback links,
-// so console, PC/OBS, Music 24/7 and rerun sources all work without anyone
-// screen-sharing.
+// CastNexus Discord Activity: plays the ONE CastNexus channel the host owner
+// selected (or DISCORD_ACTIVITY_CHANNEL) inside a Discord voice channel, so a
+// PS5 / console / PC stream can be watched together without screen sharing.
 (function () {
   "use strict";
 
@@ -10,22 +9,20 @@
   // Inside Discord the page is the mapped root ("/"). Opened directly it lives
   // at /activity/ - or /activity without a slash, where "." would mean "/".
   var BASE = /^\/activity\/?$/.test(location.pathname) ? "/activity/" : new URL(".", location.href).pathname;
+  var POLL_MS = 8000;
 
   var $ = function (id) { return document.getElementById(id); };
   var config = null;
-  var discord = null;
-  var channels = [];
-  var current = null;      // login being watched
+  var channel = null;      // last /api/channel answer
+  var playingLogin = null; // login currently connected (null = not playing)
   var session = 0;         // bumps on every (re)connect so stale callbacks bail out
   var pc = null;
   var hls = null;
   var userUnmuted = false;
-  var pollTimer = null;
+  var reconnectTimer = null;
 
   function url(rel) { return BASE + rel; }
-  function show(id) {
-    ["loading", "picker", "player", "error"].forEach(function (name) { $(name).classList.toggle("hidden", name !== id); });
-  }
+  function show(id) { ["loading", "player", "error"].forEach(function (n) { $(n).classList.toggle("hidden", n !== id); }); }
   function fail(message) { $("error-text").textContent = message; show("error"); }
   function getJSON(rel) {
     return fetch(url(rel), { cache:"no-store" }).then(function (r) {
@@ -35,6 +32,10 @@
   }
   function sourceLabel(source) {
     return { console:"Console", pc:"PC", music:"24/7 Music", rerun:"Rerun" }[source] || "Live";
+  }
+  function overlay(text) {
+    $("player-overlay").classList.toggle("hidden", !text);
+    if (text) $("overlay-text").textContent = text;
   }
 
   // --- Discord handshake ------------------------------------------------------
@@ -53,56 +54,11 @@
     });
   }
 
-  // --- Channel list -----------------------------------------------------------
-  function refreshChannels() {
-    return getJSON("api/channels").then(function (data) {
-      channels = Array.isArray(data.channels) ? data.channels : [];
-      renderPicker();
-      if (current) syncCurrent();
-    }).catch(function () { /* keep the last list on a transient error */ });
-  }
-
-  function renderPicker() {
-    var list = $("channel-list");
-    list.textContent = "";
-    channels.forEach(function (ch) {
-      var button = document.createElement("button");
-      button.type = "button";
-      button.className = "channel" + (ch.live ? " live" : "");
-      button.disabled = !ch.live;
-      var avatar = document.createElement(ch.profileImageUrl ? "img" : "div");
-      avatar.className = "avatar";
-      if (ch.profileImageUrl) { avatar.src = ch.profileImageUrl; avatar.alt = ""; avatar.referrerPolicy = "no-referrer"; }
-      else avatar.textContent = (ch.displayName || "?").slice(0, 1).toUpperCase();
-      var text = document.createElement("div");
-      text.className = "channel-text";
-      var name = document.createElement("strong");
-      name.textContent = ch.displayName;
-      var meta = document.createElement("span");
-      meta.textContent = ch.live ? "LIVE · " + sourceLabel(ch.source) : "Offline";
-      text.appendChild(name); text.appendChild(meta);
-      button.appendChild(avatar); button.appendChild(text);
-      button.addEventListener("click", function () { watch(ch.login); });
-      list.appendChild(button);
-    });
-    $("empty").classList.toggle("hidden", channels.some(function (ch) { return ch.live; }));
-  }
-
-  function chooseInitial() {
-    var wanted = (params.get("channel") || location.hash.replace(/^#/, "") || config.defaultChannel || "").toLowerCase();
-    var live = channels.filter(function (ch) { return ch.live; });
-    if (wanted && channels.some(function (ch) { return ch.login === wanted; })) return wanted;
-    return live.length === 1 && channels.length === 1 ? live[0].login : null;
-  }
-
-  // --- Player -----------------------------------------------------------------
-  function overlay(text) {
-    $("player-overlay").classList.toggle("hidden", !text);
-    if (text) $("overlay-text").textContent = text;
-  }
-
+  // --- Playback ---------------------------------------------------------------
   function stopPlayback() {
     session++;
+    playingLogin = null;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (pc) { try { pc.close(); } catch (e) {} pc = null; }
     if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
     var video = $("video");
@@ -113,6 +69,12 @@
   }
 
   function streamPath(login) { return "public/" + encodeURIComponent(login); }
+
+  function updateUnmute() {
+    var video = $("video");
+    $("unmute").textContent = video.muted ? "🔊 Tap to unmute" : "🔇 Mute";
+    $("unmute").classList.toggle("primary", video.muted);
+  }
 
   function playVideo() {
     var video = $("video");
@@ -133,12 +95,13 @@
       var conn = new RTCPeerConnection();
       pc = conn;
       var settled = false;
-      var done = function (err) {
-        if (settled) return; settled = true;
+      var timer = setTimeout(function () { done(new Error("webrtc timeout")); }, 9000);
+      function done(err) {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         if (err) { try { conn.close(); } catch (e) {} if (pc === conn) pc = null; reject(err); } else resolve();
-      };
-      var timer = setTimeout(function () { done(new Error("webrtc timeout")); }, 9000);
+      }
       conn.addTransceiver("video", { direction:"recvonly" });
       conn.addTransceiver("audio", { direction:"recvonly" });
       conn.ontrack = function (ev) {
@@ -148,9 +111,11 @@
       };
       conn.oniceconnectionstatechange = function () {
         var s = conn.iceConnectionState;
-        if (s === "connected" || s === "completed") { done(); overlay(""); }
-        else if (s === "failed") { done(new Error("ice failed")); if (mine === session && settled) reconnectSoon(); }
-        else if (s === "disconnected" && settled && mine === session) reconnectSoon();
+        if (s === "connected" || s === "completed") { done(); if (mine === session) overlay(""); }
+        else if (s === "failed" || s === "disconnected") {
+          if (!settled) done(new Error("ice " + s));
+          else if (mine === session) reconnectSoon();
+        }
       };
       conn.createOffer().then(function (offer) { return conn.setLocalDescription(offer); }).then(function () {
         return new Promise(function (res) {
@@ -187,6 +152,7 @@
     if (video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = src;
       video.onplaying = function () { if (mine === session) overlay(""); };
+      video.onerror = function () { if (mine === session) reconnectSoon(); };
       playVideo();
       return Promise.resolve();
     }
@@ -206,66 +172,65 @@
     });
   }
 
-  var reconnectTimer = null;
-  function reconnectSoon() {
-    if (reconnectTimer || !current) return;
-    overlay("Reconnecting…");
-    reconnectTimer = setTimeout(function () { reconnectTimer = null; if (current) connect(current); }, 3000);
-  }
-
   function connect(login) {
     stopPlayback();
+    playingLogin = login;
     var mine = session;
-    var ch = channels.find(function (c) { return c.login === login; });
-    if (!ch || !ch.live) { overlay("Offline - waiting for the stream to start…"); return; }
     overlay("Connecting…");
     startWebRtc(login, mine).catch(function () {
       if (mine !== session) return;
       return startHls(login, mine);
     }).catch(function (err) {
       if (mine !== session) return;
-      overlay(err.message || "Playback failed - retrying…");
+      overlay((err && err.message) || "Playback failed - retrying…");
       reconnectSoon();
     });
   }
 
-  function renderNow(ch) {
-    $("now-name").textContent = ch ? ch.displayName : current;
-    $("now-meta").textContent = ch && ch.live ? " · LIVE · " + sourceLabel(ch.source) : " · Offline";
-    var img = $("now-avatar");
-    if (ch && ch.profileImageUrl) { img.src = ch.profileImageUrl; img.referrerPolicy = "no-referrer"; img.hidden = false; } else img.hidden = true;
-    $("back").hidden = channels.length <= 1;
+  function reconnectSoon() {
+    if (reconnectTimer || !playingLogin) return;
+    var login = playingLogin;
+    overlay("Reconnecting…");
+    reconnectTimer = setTimeout(function () {
+      reconnectTimer = null;
+      if (channel && channel.live && channel.login === login) connect(login);
+    }, 3000);
   }
 
-  var wasLive = false;
-  function syncCurrent() {
-    var ch = channels.find(function (c) { return c.login === current; });
-    renderNow(ch);
-    var live = !!(ch && ch.live);
-    if (live && !wasLive) connect(current);
-    if (!live && wasLive) { stopPlayback(); overlay("Offline - waiting for the stream to start…"); }
-    wasLive = live;
+  // --- Channel state ----------------------------------------------------------
+  function render() {
+    var ch = channel;
+    $("now-name").textContent = ch.displayName;
+    $("now-meta").textContent = ch.live ? "LIVE · " + sourceLabel(ch.source) : "Offline";
+    $("now-meta").className = ch.live ? "live" : "muted";
+    [["now-avatar"], ["offline-avatar"]].forEach(function (pair) {
+      var img = $(pair[0]);
+      if (ch.profileImageUrl) { img.src = ch.profileImageUrl; img.referrerPolicy = "no-referrer"; img.hidden = false; } else img.hidden = true;
+    });
+    $("offline-name").textContent = ch.displayName;
+    $("offline").classList.toggle("hidden", ch.live);
+    $("unmute").hidden = !ch.live;
+    document.title = ch.displayName + " · " + config.title;
   }
 
-  function watch(login) {
-    current = login;
-    wasLive = false;
+  function applyChannel(next) {
+    if (!next) {
+      stopPlayback();
+      channel = null;
+      fail("No channel is set up for this Activity yet. The CastNexus host owner chooses it in Studio → Settings → Discord Activity.");
+      return;
+    }
+    var changed = !channel || channel.login !== next.login;
+    channel = next;
     show("player");
-    syncCurrent();
-    if (!channels.some(function (c) { return c.login === login && c.live; })) overlay("Offline - waiting for the stream to start…");
+    render();
+    if (!next.live) { if (playingLogin) stopPlayback(); overlay(""); return; }
+    if (changed || !playingLogin) connect(next.login);
   }
 
-  function backToList() {
-    stopPlayback();
-    current = null;
-    wasLive = false;
-    show("picker");
-  }
-
-  function updateUnmute() {
-    var video = $("video");
-    $("unmute").textContent = video.muted ? "🔊 Tap to unmute" : "🔇 Mute";
-    $("unmute").classList.toggle("primary", video.muted);
+  function refresh() {
+    return getJSON("api/channel").then(function (data) { applyChannel(data.channel || null); })
+      .catch(function () { /* keep the current state on a transient error */ });
   }
 
   $("unmute").addEventListener("click", function () {
@@ -275,21 +240,18 @@
     video.play().catch(function () {});
     updateUnmute();
   });
-  $("back").addEventListener("click", backToList);
 
   // --- Boot -------------------------------------------------------------------
+  var pollTimer = null;
   getJSON("api/config").then(function (cfg) {
     config = cfg;
     document.title = cfg.title;
-    $("title").textContent = cfg.title;
     return connectDiscord();
-  }).then(function (sdk) {
-    discord = sdk;
-    return refreshChannels();
   }).then(function () {
-    var initial = chooseInitial();
-    if (initial) watch(initial); else show("picker");
-    pollTimer = setInterval(refreshChannels, 8000);
+    return getJSON("api/channel");
+  }).then(function (data) {
+    applyChannel(data.channel || null);
+    pollTimer = setInterval(refresh, POLL_MS);
   }).catch(function (err) {
     fail(err && err.message ? err.message : String(err));
   });

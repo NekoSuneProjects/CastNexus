@@ -4,51 +4,46 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
 const express = require("express");
-const { activityConfig, visibleChannels, allowedStreamLogin, createDiscordActivityRouter } = require("./discord-activity");
+const { activityConfig, selectedChannelLogin, streamPathAllowed, publicChannel, createDiscordActivityRouter } = require("./discord-activity");
 
-const rows = [
-  { login:"nekosunevr", displayName:"NekoSuneVR", source:"console", profileImageUrl:"https://example.com/a.png" },
-  { login:"friend", displayName:"Friend", source:null, profileImageUrl:"http://insecure/a.png" },
-  { login:"other", displayName:"Other", source:"pc" },
-];
-
-test("config validates the client id and parses the channel allow-list", () => {
+test("config validates the client id and reads the channel lock", () => {
   assert.equal(activityConfig({ DISCORD_CLIENT_ID:"123456789012345678" }).clientId, "123456789012345678");
   const bad = activityConfig({ DISCORD_CLIENT_ID:"not-a-number" });
   assert.equal(bad.clientId, "");
   assert.equal(bad.clientIdInvalid, true);
-  assert.equal(activityConfig({ DISCORD_ACTIVITY_CHANNELS:"*" }).allowed, null);
-  assert.deepEqual([...activityConfig({ DISCORD_ACTIVITY_CHANNELS:"NekoSuneVR, friend" }).allowed], ["nekosunevr", "friend"]);
+  assert.equal(activityConfig({ DISCORD_ACTIVITY_CHANNEL:" NekoSuneVR " }).lockedChannel, "nekosunevr");
+  assert.equal(activityConfig({}).lockedChannel, "");
 });
 
-test("without an allow-list only live channels are listed, live first", () => {
-  const list = visibleChannels(rows, activityConfig({}));
-  assert.deepEqual(list.map(c => c.login), ["nekosunevr", "other"]);
-  assert.equal(list[0].source, "console");
+test("channel choice: env lock > owner's saved pick > owner's own channel", () => {
+  const logins = ["NekoSuneVR", "friend"];
+  assert.equal(selectedChannelLogin({ ownerLogin:"NekoSuneVR", logins }), "nekosunevr");
+  assert.equal(selectedChannelLogin({ ownerLogin:"nekosunevr", savedChannel:"friend", logins }), "friend");
+  assert.equal(selectedChannelLogin({ ownerLogin:"nekosunevr", savedChannel:"gone", logins }), "nekosunevr", "a deleted account falls back to the owner");
+  assert.equal(selectedChannelLogin({ ownerLogin:"nekosunevr", savedChannel:"friend", lockedChannel:"Other", logins }), "other");
+  assert.equal(selectedChannelLogin({ logins }), null);
 });
 
-test("an allow-list shows its channels (offline too) and hides everyone else", () => {
-  const list = visibleChannels(rows, activityConfig({ DISCORD_ACTIVITY_CHANNELS:"friend,nekosunevr" }));
-  assert.deepEqual(list.map(c => [c.login, c.live]), [["nekosunevr", true], ["friend", false]]);
-  assert.equal(list[1].profileImageUrl, null, "non-https avatars are dropped");
+test("stream proxy only allows the selected channel's public program", () => {
+  assert.equal(streamPathAllowed("/public/nekosunevr/index.m3u8", "nekosunevr"), true);
+  assert.equal(streamPathAllowed("/public/NekoSuneVR/whep", "nekosunevr"), true);
+  assert.equal(streamPathAllowed("/public/friend/index.m3u8", "nekosunevr"), false, "other people's channels are never served");
+  assert.equal(streamPathAllowed("/app/live_streamkey", "nekosunevr"), false, "ingest paths are never served");
+  assert.equal(streamPathAllowed("/public/%E0%A4%A/x", "nekosunevr"), false);
+  assert.equal(streamPathAllowed("/public/nekosunevr/index.m3u8", null), false);
 });
 
-test("stream proxy only allows public/<login> of permitted channels", () => {
-  const open = activityConfig({});
-  assert.equal(allowedStreamLogin("/public/nekosunevr/index.m3u8", rows, open), "nekosunevr");
-  assert.equal(allowedStreamLogin("/public/unknown/index.m3u8", rows, open), null);
-  assert.equal(allowedStreamLogin("/app/streamkey", rows, open), null);
-  assert.equal(allowedStreamLogin("/public/%E0%A4%A/x", rows, open), null);
-  const limited = activityConfig({ DISCORD_ACTIVITY_CHANNELS:"nekosunevr" });
-  assert.equal(allowedStreamLogin("/public/other/whep", rows, limited), null);
+test("public channel info drops non-https avatars", () => {
+  assert.deepEqual(publicChannel({ login:"Neko", displayName:"Neko", profileImageUrl:"http://x/a.png", source:"console" }), { login:"neko", displayName:"Neko", profileImageUrl:null, live:true, source:"console" });
+  assert.equal(publicChannel(null), null);
 });
 
-async function withServer(fn) {
+async function withServer(channelRef, fn) {
   const upstream = http.createServer((req, res) => { res.end(`upstream:${req.method}:${req.url}`); });
   await new Promise(r => upstream.listen(0, "127.0.0.1", r));
   const target = `http://127.0.0.1:${upstream.address().port}`;
   const app = express();
-  const router = createDiscordActivityRouter({ listChannels:() => rows, env:{ DISCORD_CLIENT_ID:"123456789012345678" }, hlsTarget:target, webrtcTarget:target });
+  const router = createDiscordActivityRouter({ getChannel:() => channelRef.current, env:{ DISCORD_CLIENT_ID:"123456789012345678" }, hlsTarget:target, webrtcTarget:target });
   app.use("/activity", router);
   app.get(["/activity-app.js", "/activity-app.css"], router);
   const server = app.listen(0, "127.0.0.1");
@@ -57,8 +52,9 @@ async function withServer(fn) {
   try { await fn(base); } finally { server.close(); upstream.close(); }
 }
 
-test("router serves the page, config, SDK and guarded stream proxies", async () => {
-  await withServer(async base => {
+test("router serves the page, SDK and only the selected channel's stream", async () => {
+  const channelRef = { current:{ login:"nekosunevr", displayName:"NekoSuneVR", source:"console" } };
+  await withServer(channelRef, async base => {
     for (const p of ["/activity", "/activity/"]) {
       const page = await fetch(base + p);
       assert.equal(page.status, 200, p);
@@ -73,14 +69,21 @@ test("router serves the page, config, SDK and guarded stream proxies", async () 
     assert.equal(sdk.status, 200);
     assert.match(sdk.headers.get("content-type"), /javascript/);
     assert.equal((await fetch(base + "/activity/hls.min.js")).status, 200);
-    const channels = await (await fetch(base + "/activity/api/channels")).json();
-    assert.deepEqual(channels.channels.map(c => c.login), ["nekosunevr", "other"]);
 
-    const hls = await fetch(base + "/activity/hls/public/nekosunevr/index.m3u8");
-    assert.equal(await hls.text(), "upstream:GET:/public/nekosunevr/index.m3u8");
-    const whep = await fetch(base + "/activity/webrtc/public/other/whep", { method:"POST", body:"v=0" });
-    assert.equal(await whep.text(), "upstream:POST:/public/other/whep");
+    const { channel } = await (await fetch(base + "/activity/api/channel")).json();
+    assert.deepEqual(channel, { login:"nekosunevr", displayName:"NekoSuneVR", profileImageUrl:null, live:true, source:"console" });
+
+    assert.equal(await (await fetch(base + "/activity/hls/public/nekosunevr/index.m3u8")).text(), "upstream:GET:/public/nekosunevr/index.m3u8");
+    assert.equal(await (await fetch(base + "/activity/webrtc/public/nekosunevr/whep", { method:"POST", body:"v=0" })).text(), "upstream:POST:/public/nekosunevr/whep");
+    assert.equal((await fetch(base + "/activity/hls/public/friend/index.m3u8")).status, 404);
     assert.equal((await fetch(base + "/activity/hls/app/secret-key/index.m3u8")).status, 404);
-    assert.equal((await fetch(base + "/activity/hls/public/nobody/index.m3u8")).status, 404);
+
+    // The owner switches the channel: the old one is no longer reachable.
+    channelRef.current = { login:"friend", displayName:"Friend", source:null };
+    assert.equal((await fetch(base + "/activity/hls/public/nekosunevr/index.m3u8")).status, 404);
+    assert.equal((await (await fetch(base + "/activity/api/channel")).json()).channel.live, false);
+
+    channelRef.current = null;
+    assert.equal((await (await fetch(base + "/activity/api/channel")).json()).channel, null);
   });
 });

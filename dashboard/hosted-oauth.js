@@ -17,10 +17,13 @@ function createHostedOauth({ brokerUrl, fetchImpl = global.fetch } = {}) {
     if (!response.ok && response.status !== 202) throw Object.assign(new Error(data.error || `OAuth broker request failed (${response.status})`), { status:response.status });
     return { status:response.status, data };
   }
-  async function start(provider) {
+  // purpose "stream_key" asks the broker for a one-time Twitch stream key read
+  // (scope channel:read:stream_key) instead of a sign-in.
+  async function start(provider, { purpose = "login" } = {}) {
     const pkce = createPkce();
-    const { data } = await request("/v1/transactions", { method:"POST", body:JSON.stringify({ provider, codeChallenge:pkce.challenge }) });
-    return { provider, id:data.id, authorizationUrl:data.authorizationUrl, expiresAt:Date.now() + Number(data.expiresIn || 600) * 1000, verifier:pkce.verifier };
+    const body = { provider, codeChallenge:pkce.challenge, ...(purpose !== "login" ? { purpose } : {}) };
+    const { data } = await request("/v1/transactions", { method:"POST", body:JSON.stringify(body) });
+    return { provider, purpose, id:data.id, authorizationUrl:data.authorizationUrl, expiresAt:Date.now() + Number(data.expiresIn || 600) * 1000, verifier:pkce.verifier };
   }
   async function exchange(flow) {
     if (!flow?.id || !flow?.verifier) throw new Error("OAuth transaction is missing");

@@ -16,26 +16,24 @@
       <p id="loading-text">Connecting to CastNexus…</p>
     </section>
 
-    <section id="picker" class="panel hidden">
-      <header class="picker-head">
-        <h1 id="title">CastNexus Live</h1>
-        <p class="muted">Pick a stream to watch together.</p>
-      </header>
-      <div id="channel-list" class="channel-list"></div>
-      <p id="empty" class="muted center hidden">Nobody is live right now. This list refreshes automatically.</p>
-    </section>
-
     <section id="player" class="player hidden">
       <video id="video" playsinline autoplay muted></video>
+
+      <div id="offline" class="offline hidden">
+        <img id="offline-avatar" class="offline-avatar" alt="" hidden>
+        <h1 id="offline-name"></h1>
+        <p class="muted">is offline right now. The stream starts here automatically when they go live.</p>
+      </div>
+
       <div id="player-overlay" class="player-overlay hidden">
         <div class="spinner" aria-hidden="true"></div>
         <p id="overlay-text">Connecting…</p>
       </div>
+
       <div class="player-bar">
-        <button id="back" class="btn ghost" type="button" title="Back to stream list">‹ Streams</button>
         <div class="now">
           <img id="now-avatar" alt="" hidden>
-          <div><strong id="now-name"></strong><span id="now-meta" class="muted"></span></div>
+          <div class="now-text"><strong id="now-name"></strong><span id="now-meta"></span></div>
         </div>
         <button id="unmute" class="btn primary" type="button">🔊 Tap to unmute</button>
       </div>

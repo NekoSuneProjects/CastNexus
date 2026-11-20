@@ -8,7 +8,7 @@ function renderPcSourceSetup() {
 function renderConsoleSourceSetup() {
   return `<section class="grid grid-2">
     <div class="card-panel"><div class="card-title-row"><h3>Console capture</h3><span class="badge ${S.status?.sources?.console?.live ? "green" : ""}">${S.status?.sources?.console?.live ? "CONNECTED" : "WAITING"}</span></div><p>Point the console at the CastNexus host for DNS capture. The intercept container is required for reliable Twitch ingest capture.</p><label>CastNexus / DNS host</label><div class="copy-field"><input readonly value="${esc(S.status?.mediaHost || "")}"><button class="btn btn-ghost btn-sm" data-copy="${esc(S.status?.mediaHost || "")}">Copy</button></div><label>Twitch key</label><div class="code-note">${esc(S.status?.streamKeyMasked || "Not configured")}</div></div>
-    <div class="card-panel"><h3>Change console Twitch key</h3><p>The saved key is masked and never returned in full. Replace it here if Twitch rotates your stream key.</p><button class="btn btn-primary btn-sm" data-action="change-stream-key">Replace Twitch stream key</button></div>
+    <div class="card-panel"><h3>Console Twitch stream key</h3><p>The saved key is masked and never returned in full. Import it from Twitch with OAuth2 or enter it manually - do this again if you reset your key on Twitch.</p><button class="btn btn-primary btn-sm" data-action="change-stream-key">${S.status?.streamKeyMasked ? "Change stream key" : "Add stream key"}</button></div>
   </section>`;
 }
 

@@ -131,6 +131,9 @@ async function enterApp() {
   if(location.pathname!=="/dashboard")history.replaceState(null,"","/dashboard"+location.search);
   updateChrome();renderProfileSelect();renderPage();
   if(S.pollTimer)clearInterval(S.pollTimer);S.pollTimer=setInterval(pollStatus,2500);
+  // Back from the Twitch OAuth2 stream key import (/auth/twitch/stream-key).
+  const qs=new URLSearchParams(location.search);
+  if(qs.get("streamkey")==="imported"){toast("Twitch stream key imported - console capture is ready","success");qs.delete("streamkey");history.replaceState(null,"","/dashboard"+(qs.toString()?"?"+qs:""));}
 }
 
 async function boot() {

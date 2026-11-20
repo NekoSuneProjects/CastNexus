@@ -440,10 +440,24 @@ console-only VPS can set `CASTNEXUS_MUSIC24=false` and `CASTNEXUS_PC_STREAMING=f
 
 # Discord Activity
 
-Watch any CastNexus stream (console, PC, Music 24/7, rerun) together inside a
-Discord voice channel, with no screen sharing. This is useful for PS5 players,
-because a console can't screen-share to Discord. Set `CASTNEXUS_DISCORD_ACTIVITY=true`
-and `DISCORD_CLIENT_ID`, then follow [docs/DISCORD-ACTIVITY.md](https://github.com/NekoSuneProjects/CastNexus/blob/docker/docs/DISCORD-ACTIVITY.md).
+Watch your stream (console, PC, Music 24/7 or rerun) together inside a Discord
+voice channel, with no screen sharing. This is useful for PS5 players, because a
+console can't screen-share to Discord.
+
+The Activity plays **one** channel and never lists other people's streams. The
+**host owner** chooses that channel in Studio → Settings → Discord Activity, or
+locks it with `DISCORD_ACTIVITY_CHANNEL`. The host owner is
+`CASTNEXUS_OWNER_LOGIN`, or the first account that signed in.
+
+Set `CASTNEXUS_DISCORD_ACTIVITY=true` and `DISCORD_CLIENT_ID`, then follow
+[docs/DISCORD-ACTIVITY.md](https://github.com/NekoSuneProjects/CastNexus/blob/docker/docs/DISCORD-ACTIVITY.md).
+
+# Console stream key
+
+Console profiles need your Twitch stream key, so CastNexus can recognise the
+console's broadcast as yours. When you create a Console profile you can
+**import it from Twitch with OAuth2**, or **enter it manually**. See
+[docs/CONSOLE-STREAM-KEY.md](https://github.com/NekoSuneProjects/CastNexus/blob/docker/docs/CONSOLE-STREAM-KEY.md).
 
 ---
 

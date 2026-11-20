@@ -62,9 +62,12 @@
       <div class="eyebrow">CONSOLE PROFILE</div>
       <h1>Add your Twitch stream key</h1>
       <p>Console capture matches the intercepted broadcast to your account using the Twitch stream key. CastNexus never shows the full key again after saving it.</p>
+      <a class="btn btn-primary btn-lg" href="/auth/twitch/stream-key" id="streamkey-oauth">Import from Twitch (OAuth2)</a>
+      <small class="muted">Twitch asks you to allow "View your stream key" once. CastNexus saves the key and does not keep any Twitch access.</small>
+      <div class="eyebrow" style="margin-top:14px">OR ENTER IT MANUALLY</div>
       <label>Stream key</label>
       <input id="streamkey-input" type="password" autocomplete="off" placeholder="live_..." required>
-      <button class="btn btn-primary btn-lg" type="submit">Save &amp; enter studio</button>
+      <button class="btn btn-ghost btn-lg" type="submit">Save manual key &amp; enter studio</button>
       <button class="btn btn-ghost" type="button" id="streamkey-back">Use a different profile</button>
       <div id="streamkey-error" class="form-error"></div>
     </form>
@@ -128,6 +131,7 @@
   <script src="/app-music-ui-fixes.js" defer></script>
   <script src="/app-studio.js" defer></script>
   <script src="/app-outputs.js" defer></script>
+  <script src="/app-discord-activity.js" defer></script>
   <script src="/app-brand.js" defer></script>
   <script src="/app-updater.js" defer></script>
 </body>

@@ -193,6 +193,39 @@ function openOverlayModal(o = null) {
   render();
 }
 
+// Console profiles need the real Twitch stream key (the console broadcast is
+// matched to the account by it). Two ways to provide it: OAuth2 import from
+// Twitch, or typing it in. Returns the markup for that choice.
+function streamKeyChoiceHtml(prefix) {
+  const saved = S.status?.streamKeyMasked;
+  const source = S.status?.streamKeySource === "oauth" ? "imported from Twitch" : "entered manually";
+  return `<div class="stream-key-choice" id="${prefix}-key-section">
+    <label>Twitch stream key</label>
+    ${saved ? `<label class="radio-row"><input type="radio" name="${prefix}-key" value="keep" checked> Keep the saved key <code>${esc(saved)}</code> <small class="muted">(${esc(source)})</small></label>` : ""}
+    <label class="radio-row"><input type="radio" name="${prefix}-key" value="oauth" ${saved ? "" : "checked"}> Import it from Twitch with OAuth2 <small class="muted">(recommended - no copy/paste)</small></label>
+    <label class="radio-row"><input type="radio" name="${prefix}-key" value="manual"> Enter it manually</label>
+    <input id="${prefix}-key-manual" type="password" autocomplete="off" placeholder="live_..." hidden>
+    <small class="muted">Manual: Twitch Creator Dashboard → Settings → Stream → Primary Stream key. With OAuth2, Twitch asks you once to allow "View your stream key"; CastNexus stores only the key, masked, and keeps no Twitch access.</small>
+  </div>`;
+}
+function wireStreamKeyChoice(prefix) {
+  const manual = $(`#${prefix}-key-manual`);
+  $$(`input[name="${prefix}-key"]`).forEach(r => r.onchange = () => { manual.hidden = streamKeyChoice(prefix) !== "manual"; if (!manual.hidden) manual.focus(); });
+}
+function streamKeyChoice(prefix) { return $(`input[name="${prefix}-key"]:checked`)?.value || "keep"; }
+// Applies the chosen option. Returns true when the browser is leaving for the
+// Twitch OAuth2 page.
+async function applyStreamKeyChoice(prefix) {
+  const choice = streamKeyChoice(prefix);
+  if (choice === "manual") {
+    const key = $(`#${prefix}-key-manual`).value.trim();
+    if (!key) throw new Error("Enter the stream key, or choose Import from Twitch");
+    await api("/api/streamkey", { method:"POST", body:{ streamKey:key } });
+  }
+  if (choice === "oauth") { location.href = "/auth/twitch/stream-key"; return true; }
+  return false;
+}
+
 function openProfileModal(mode, profile = null) {
   const editing = !!profile;
   const chosenMode = profile?.mode || mode || "pc";
@@ -203,23 +236,36 @@ function openProfileModal(mode, profile = null) {
       <div><label>Mode</label><select id="pf-mode" ${editing ? "disabled" : ""}><option value="pc" ${chosenMode==="pc"?"selected":""}>PC Streaming</option><option value="console" ${chosenMode==="console"?"selected":""}>Console Streaming</option><option value="music" ${chosenMode==="music"?"selected":""}>24/7 Music</option></select></div>
       <div><label>Profile colour</label><input id="pf-color" type="color" value="${esc(profile?.color || PROFILE_COLORS[chosenMode])}"></div>
       <div class="full"><label>Default canvas</label><select id="pf-canvas"><option value="landscape" ${canvas === "landscape" ? "selected" : ""}>16:9 Landscape · desktop / TV</option><option value="vertical" ${canvas === "vertical" ? "selected" : ""}>9:16 Vertical · TikTok / Instagram / Shorts</option></select></div>
+      <div class="full" id="pf-key-wrap">${streamKeyChoiceHtml("pf")}</div>
     </div>
     <div class="callout" style="margin-top:12px">The profile canvas controls scene previews and 24/7 rendering. Individual destinations can still override to Source, 16:9 or 9:16, so one profile can feed YouTube's horizontal and vertical keys at the same time.</div>
     <div id="modal-error" class="form-error"></div>`, `<button class="btn btn-ghost" data-modal-close>Cancel</button><button class="btn btn-primary" id="pf-save">Save profile</button>`, true);
   $$('[data-modal-close]').forEach(b=>b.onclick=closeModal);
+  const selectedMode = () => editing ? profile.mode : $("#pf-mode").value;
+  const syncKeySection = () => { $("#pf-key-wrap").hidden = selectedMode() !== "console"; };
+  wireStreamKeyChoice("pf");
+  $("#pf-mode").addEventListener("change", syncKeySection);
+  syncKeySection();
   $("#pf-save").onclick = async () => {
-    const name=$("#pf-name").value.trim(), m=editing ? profile.mode : $("#pf-mode").value, color=$("#pf-color").value, canvasMode=$("#pf-canvas").value;
+    const name=$("#pf-name").value.trim(), m=selectedMode(), color=$("#pf-color").value, canvasMode=$("#pf-canvas").value;
     if(!name) return $("#modal-error").textContent="Name is required";
+    if(m==="console" && streamKeyChoice("pf")==="manual" && !$("#pf-key-manual").value.trim()) return $("#modal-error").textContent="Enter the stream key, or choose Import from Twitch";
+    let saved=profile;
     if(editing){ profile.name=name; profile.color=color; profile.canvasMode=canvasMode; }
-    else { const p=createProfile(m,name); p.color=color; p.canvasMode=canvasMode; S.profiles.push(p); }
-    try { await saveProfileStore(); closeModal(); renderProfileSelect(); renderPage(); toast("Profile saved","success"); } catch(e){ $("#modal-error").textContent=e.message; }
+    else { saved=createProfile(m,name); saved.color=color; saved.canvasMode=canvasMode; S.profiles.push(saved); }
+    try {
+      await saveProfileStore();
+      if (saved.mode === "console" && await applyStreamKeyChoice("pf")) return;
+      closeModal(); await refreshAndRender(); renderProfileSelect(); toast("Profile saved","success");
+    } catch(e){ $("#modal-error").textContent=e.message; }
   };
 }
 
 function openStreamKeyModal() {
-  modalShell("Replace Twitch stream key", "CONSOLE SOURCE", `<p class="muted">Paste the current Twitch stream key. It will be stored server-side and masked in the UI after saving.</p><label>Stream key</label><input id="modal-stream-key" type="password" autocomplete="off"><div id="modal-error" class="form-error"></div>`, `<button class="btn btn-ghost" data-modal-close>Cancel</button><button class="btn btn-primary" id="modal-stream-save">Save key</button>`);
+  modalShell("Twitch stream key", "CONSOLE SOURCE", `<p class="muted">Console capture matches the console's broadcast to your account using your Twitch stream key. Import it from Twitch, or paste it yourself. It is stored server-side and masked after saving.</p>${streamKeyChoiceHtml("sk")}<div id="modal-error" class="form-error"></div>`, `<button class="btn btn-ghost" data-modal-close>Cancel</button><button class="btn btn-primary" id="modal-stream-save">Save</button>`);
   $$('[data-modal-close]').forEach(b=>b.onclick=closeModal);
-  $("#modal-stream-save").onclick=async()=>{ try{ await api("/api/streamkey",{method:"POST",body:{streamKey:$("#modal-stream-key").value.trim()}}); closeModal(); await refreshAndRender(); toast("Stream key updated","success"); }catch(e){ $("#modal-error").textContent=e.message; } };
+  wireStreamKeyChoice("sk");
+  $("#modal-stream-save").onclick=async()=>{ try{ const choice=streamKeyChoice("sk"); if(await applyStreamKeyChoice("sk")) return; closeModal(); await refreshAndRender(); if(choice==="manual") toast("Stream key updated","success"); }catch(e){ $("#modal-error").textContent=e.message; } };
 }
 
 function openTrackModal(track) {
