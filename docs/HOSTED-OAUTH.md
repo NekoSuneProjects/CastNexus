@@ -87,6 +87,15 @@ retention and operational practices match the production deployment.
 - Request bodies are limited to 16 KiB.
 - Provider tokens are never placed in browser URLs.
 - Twitch login returns identity only.
+- Twitch stream key import (`purpose: "stream_key"` on `POST /v1/transactions`)
+  is a separate, explicit authorization. It asks Twitch for
+  `channel:read:stream_key` with `force_verify`, so the user always sees the
+  consent screen. The broker reads the key once (`GET helix/streams/key`) and
+  revokes the user token immediately. It returns only `{ purpose, user,
+  streamKey }`: no Twitch token and no broker sign-in token. The CastNexus
+  install then refuses the key unless `user.id` matches the signed-in account.
+  Unknown purposes, and any purpose on YouTube, are rejected with `400`. No
+  change to the Twitch application is needed.
 - YouTube refresh tokens are returned once to the user's own server, encrypted
   there using the existing CastNexus state secret, and sent back to the broker
   only when a short-lived YouTube access token is required.

@@ -109,15 +109,48 @@ async function jsonRequest(url, options = {}) {
   if (!response.ok) throw new Error(data.message || data.error_description || data.error || `provider request failed (${response.status})`);
   return data;
 }
-async function exchangeTwitch(code) {
+// Why a Twitch authorization was started:
+//   login      - sign in to CastNexus (no Twitch scopes)
+//   stream_key - one-time read of the broadcaster's stream key for Console
+//                profiles (scope channel:read:stream_key). The user token is
+//                used once, revoked immediately and never stored or returned.
+const TWITCH_PURPOSES = Object.freeze({
+  login:{ scope:"" },
+  stream_key:{ scope:"channel:read:stream_key", forceVerify:true },
+});
+function twitchPurpose(value) {
+  const purpose = String(value || "login");
+  return Object.prototype.hasOwnProperty.call(TWITCH_PURPOSES, purpose) ? purpose : null;
+}
+async function revokeTwitchToken(accessToken) {
+  try {
+    await fetch("https://id.twitch.tv/oauth2/revoke", {
+      method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" },
+      body:new URLSearchParams({ client_id:TWITCH_CLIENT_ID, token:accessToken }),
+    });
+  } catch (error) { console.warn(`[oauth-broker] could not revoke a one-time Twitch token: ${error.message}`); }
+}
+async function exchangeTwitch(code, purpose = "login") {
   const token = await jsonRequest("https://id.twitch.tv/oauth2/token", {
     method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" },
     body:new URLSearchParams({ client_id:TWITCH_CLIENT_ID, client_secret:TWITCH_CLIENT_SECRET, code, grant_type:"authorization_code", redirect_uri:callbackUrl("twitch") }),
   });
-  const users = await jsonRequest("https://api.twitch.tv/helix/users", { headers:{ Authorization:`Bearer ${token.access_token}`, "Client-Id":TWITCH_CLIENT_ID } });
-  const user = users.data?.[0];
-  if (!user) throw new Error("Twitch did not return an account");
-  return { user:{ id:user.id, login:user.login, displayName:user.display_name, profileImageUrl:user.profile_image_url }, brokerToken:signBrokerToken({ sub:user.id, login:user.login, scope:"twitch:read" }) };
+  const auth = { headers:{ Authorization:`Bearer ${token.access_token}`, "Client-Id":TWITCH_CLIENT_ID } };
+  try {
+    const users = await jsonRequest("https://api.twitch.tv/helix/users", auth);
+    const user = users.data?.[0];
+    if (!user) throw new Error("Twitch did not return an account");
+    const profile = { id:user.id, login:user.login, displayName:user.display_name, profileImageUrl:user.profile_image_url };
+    if (purpose === "stream_key") {
+      const keys = await jsonRequest(`https://api.twitch.tv/helix/streams/key?broadcaster_id=${encodeURIComponent(user.id)}`, auth);
+      const streamKey = keys.data?.[0]?.stream_key;
+      if (!streamKey) throw new Error("Twitch did not return a stream key");
+      return { purpose, user:profile, streamKey };
+    }
+    return { user:profile, brokerToken:signBrokerToken({ sub:user.id, login:user.login, scope:"twitch:read" }) };
+  } finally {
+    if (purpose === "stream_key") await revokeTwitchToken(token.access_token);
+  }
 }
 async function exchangeYoutube(code) {
   return jsonRequest("https://oauth2.googleapis.com/token", {
@@ -161,8 +194,10 @@ function createApp() {
     const codeChallenge = String(req.body?.codeChallenge || "");
     if (!providerConfigured(provider)) return res.status(503).json({ error:`${provider || "provider"} OAuth is not configured` });
     if (!validChallenge(codeChallenge)) return res.status(400).json({ error:"a valid S256 PKCE challenge is required" });
+    const purpose = provider === "twitch" ? twitchPurpose(req.body?.purpose) : (req.body?.purpose ? null : "login");
+    if (!purpose) return res.status(400).json({ error:`unsupported purpose for ${provider}` });
     const id = transactionId();
-    transactions.set(id, { id, provider, codeChallenge, createdAt:Date.now(), status:"pending", result:null, attempts:0 });
+    transactions.set(id, { id, provider, purpose, codeChallenge, createdAt:Date.now(), status:"pending", result:null, attempts:0 });
     res.status(201).json({ id, expiresIn:Math.floor(TRANSACTION_TTL_MS / 1000), authorizationUrl:`${PUBLIC_URL}/authorize/${id}` });
   });
 
@@ -174,7 +209,8 @@ function createApp() {
     tx.stateHash = base64url(sha256(state));
     if (tx.provider === "twitch") {
       const url = new URL("https://id.twitch.tv/oauth2/authorize");
-      url.search = new URLSearchParams({ client_id:TWITCH_CLIENT_ID, redirect_uri:callbackUrl("twitch"), response_type:"code", scope:"", state }).toString();
+      const purpose = TWITCH_PURPOSES[tx.purpose] || TWITCH_PURPOSES.login;
+      url.search = new URLSearchParams({ client_id:TWITCH_CLIENT_ID, redirect_uri:callbackUrl("twitch"), response_type:"code", scope:purpose.scope, state, ...(purpose.forceVerify ? { force_verify:"true" } : {}) }).toString();
       return res.redirect(302, url.toString());
     }
     const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -194,7 +230,7 @@ function createApp() {
     }
     if (!req.query.code) return res.status(400).send(resultPage("Sign-in rejected", "The provider did not return an authorization code.", false));
     try {
-      tx.result = provider === "twitch" ? await exchangeTwitch(String(req.query.code)) : await exchangeYoutube(String(req.query.code));
+      tx.result = provider === "twitch" ? await exchangeTwitch(String(req.query.code), tx.purpose) : await exchangeYoutube(String(req.query.code));
       tx.status = "complete";
       res.send(resultPage("Connected to CastNexus", "Authorization is complete. Return to your CastNexus window; it will finish automatically."));
     } catch (error) {
@@ -266,4 +302,4 @@ if (require.main === module) {
   catch (error) { console.error(`[oauth-broker] ${error.message}`); process.exit(1); }
 }
 
-module.exports = { createApp, base64url, sha256, safeEqual, verifyOauthState, validChallenge, signBrokerToken, verifyBrokerToken, brokerMountPath, stripBrokerMount };
+module.exports = { createApp, twitchPurpose, TWITCH_PURPOSES, base64url, sha256, safeEqual, verifyOauthState, validChallenge, signBrokerToken, verifyBrokerToken, brokerMountPath, stripBrokerMount };
