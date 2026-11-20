@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - "dashboard/**"
-      - "config/mediamtx.yml"
       - ".github/workflows/music24-e2e.yml"
   push:
     branches:
@@ -13,7 +12,6 @@ on:
       - "feature/**"
     paths:
       - "dashboard/**"
-      - "config/mediamtx.yml"
       - ".github/workflows/music24-e2e.yml"
   workflow_dispatch:
 
@@ -58,6 +56,14 @@ jobs:
           echo "chrome=$CHROME" >> "$GITHUB_OUTPUT"
           "$CHROME" --version
 
+      # MediaMTX's config lives in the docker branch.
+      - name: Fetch MediaMTX config from the docker branch
+        uses: actions/checkout@v7
+        with:
+          ref: docker
+          path: _docker
+          sparse-checkout: config
+
       - name: Start real MediaMTX
         shell: bash
         run: |
@@ -65,14 +71,14 @@ jobs:
           # A previous run's Docker bind-mount to a missing path can leave a
           # root-owned directory here, which then shadows the tracked file on
           # this self-hosted runner's reused workspace.
-          if [ -d config/mediamtx.yml ]; then
-            echo "Removing stray directory at config/mediamtx.yml"
-            rm -rf config/mediamtx.yml 2>/dev/null || sudo rm -rf config/mediamtx.yml
-            git checkout -- config/mediamtx.yml
+          if [ -d _docker/config/mediamtx.yml ]; then
+            echo "Removing stray directory at _docker/config/mediamtx.yml"
+            rm -rf _docker/config/mediamtx.yml 2>/dev/null || sudo rm -rf _docker/config/mediamtx.yml
+            git -C _docker checkout -- config/mediamtx.yml
           fi
           docker run -d --name castnexus-music24-mediamtx \
             --network host \
-            -v "$PWD/config/mediamtx.yml:/mediamtx.yml:ro" \
+            -v "$PWD/_docker/config/mediamtx.yml:/mediamtx.yml:ro" \
             bluenviron/mediamtx:1.19.2 /mediamtx.yml
 
           ready=0

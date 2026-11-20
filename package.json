@@ -11,8 +11,6 @@
     "dev:dashboard": "npm --prefix dashboard start",
     "dev:cli": "npm --prefix cli start",
     "build:cli": "npm --prefix cli run pkg:build",
-    "docker:build": "docker build -f dashboard/Dockerfile -t castnexus:latest .",
-    "docker:compose": "docker-compose -f compose.yaml up -d",
     "docker:logs": "docker logs -f castnexus-dashboard"
   },
   "workspaces": [

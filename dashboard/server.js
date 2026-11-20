@@ -31,6 +31,8 @@ const relayPush = require("./relay-push");
 const { EncryptedFileSessionStore, accountSessionIsValid } = require("./persistent-session-store");
 const { publicBaseUrl, normalisePublicBase, playbackTargets } = require("./public-playback");
 const registration = require("./registration");
+const featureFlags = require("./features");
+const { createDiscordActivityRouter } = require("./discord-activity");
 
 const PORT = Number(process.env.DASHBOARD_PORT || 8090);
 const MEDIAMTX_API = process.env.MEDIAMTX_API || "http://127.0.0.1:9997";
@@ -518,7 +520,19 @@ function stopRepublish(accountId) {
   child.removeAllListeners("exit"); child.kill("SIGTERM"); activeRepublish.delete(accountId);
 }
 
+// Paths whose source is switched off on this install (CASTNEXUS_PC_STREAMING /
+// CASTNEXUS_CONSOLE_STREAMING / CASTNEXUS_MUSIC24 = false). Logged once each.
+const disabledSourcePaths = new Set();
 function matchAccountForPath(pathName) {
+  const matched = matchAccountForPathRaw(pathName);
+  if (!matched || featureFlags.sourceAllowed(matched.source)) { disabledSourcePaths.delete(pathName); return matched; }
+  if (!disabledSourcePaths.has(pathName)) {
+    disabledSourcePaths.add(pathName);
+    console.warn(`[dashboard] ${matched.account.twitchLogin} ${matched.source} stream ignored - that source is switched off on this install (see CASTNEXUS_* feature switches in .env)`);
+  }
+  return null;
+}
+function matchAccountForPathRaw(pathName) {
   for (const raw of Object.values(state.accounts)) {
     const account = getAccount(raw.twitchUserId);
     const match = profileRtmp.matchProfilePath(account, pathName);
@@ -697,7 +711,7 @@ app.set("trust proxy", 1);
 const SLOW_REQUEST_MS=Number(process.env.CASTNEXUS_SLOW_REQUEST_MS||3000);
 app.use((req,res,next)=>{
   const url=String(req.originalUrl||req.url||"").split("?")[0];
-  if(/\/events$|^\/(hls|vrchat-hls|webrtc)\/|\/music\/.*\/file\/|^\/api\/recordings\/play/.test(url))return next();
+  if(/\/events$|^\/(activity\/)?(hls|vrchat-hls|webrtc)\/|\/music\/.*\/file\/|^\/api\/recordings\/play/.test(url))return next();
   const started=Date.now();
   const pending=setTimeout(()=>console.warn(`[http] still pending after 15s: ${req.method} ${url}`),15000);
   pending.unref?.();
@@ -721,6 +735,21 @@ app.use("/setup", require("./setup-routes"));
 app.use("/hls", createProxyMiddleware({ target:"http://127.0.0.1:8888", changeOrigin:true, pathRewrite:{ "^/hls":"" }, ws:true, onProxyRes:fixRedirectPrefix("/hls") }));
 app.use("/vrchat-hls", createProxyMiddleware({ target:"http://127.0.0.1:8898", changeOrigin:true, pathRewrite:{ "^/vrchat-hls":"" }, ws:true, onProxyRes:fixRedirectPrefix("/vrchat-hls") }));
 app.use("/webrtc", createProxyMiddleware({ target:"http://127.0.0.1:8889", changeOrigin:true, pathRewrite:{ "^/webrtc":"" }, ws:true, onProxyRes:fixRedirectPrefix("/webrtc") }));
+// Discord Activity watch page (CASTNEXUS_DISCORD_ACTIVITY=true). Mounted before
+// the JSON/session middleware: it is public and needs neither.
+if (featureFlags.features.discordActivity) {
+  const activityRouter = createDiscordActivityRouter({
+    listChannels:() => Object.values(state.accounts).map(raw => {
+      const account = getAccount(raw.twitchUserId);
+      if (!account) return null;
+      return { login:account.twitchLogin, displayName:account.displayName || account.twitchLogin, profileImageUrl:account.profileImageUrl || null, source:activeSourceFor(account.twitchUserId) };
+    }).filter(Boolean),
+  });
+  app.use("/activity", activityRouter);
+  // "/activity" without a trailing slash resolves the page's relative assets
+  // against "/", so serve them there too.
+  app.get(["/activity-app.js", "/activity-app.css"], activityRouter);
+}
 app.use("/overlay", createOverlayRouter({
   getAccountByLogin, musicDir:MUSIC_DIR,
   isLiveFn:account => !!activeSourceFor(account.twitchUserId),
@@ -808,7 +837,9 @@ app.put("/api/overlays/:id",requireAuth,(req,res)=>{const overlay=req.account.ov
 app.delete("/api/overlays/:id",requireAuth,(req,res)=>{const before=req.account.overlays.length;req.account.overlays=req.account.overlays.filter(o=>o.id!==req.params.id);if(before===req.account.overlays.length)return res.status(404).json({error:"unknown overlay"});saveState(state);res.json({ok:true});});
 
 app.use("/api/music",requireAuth,profileMusic.createApiRouter());
-app.use("/api/vod",requireAuth,profileVod.createApiRouter());
+// VOD reruns are a PC-profile source: with CASTNEXUS_PC_STREAMING=false the
+// library can still be listed, but nothing can be started or uploaded.
+app.use("/api/vod",requireAuth,(req,res,next)=>{if(req.method==="GET"||featureFlags.features.pcStreaming)return next();res.status(403).json({error:"VOD reruns need PC Streaming, which is switched off on this install (CASTNEXUS_PC_STREAMING=false)",code:"FEATURE_DISABLED"});},profileVod.createApiRouter());
 const SCENE_KINDS=["none","builtin","custom"],BUILTIN_SCENE_NAMES=["startingSoon","brb","ending","offline"];
 app.get("/api/scenes/current",requireAuth,(req,res)=>res.json({currentScene:req.account.currentScene}));
 app.post("/api/scenes/current",requireAuth,(req,res)=>{const{kind,name,overlayId}=req.body||{};if(!SCENE_KINDS.includes(kind))return res.status(400).json({error:`kind must be one of ${SCENE_KINDS.join(", ")}`});let scene=null;if(kind==="builtin"){if(!BUILTIN_SCENE_NAMES.includes(name))return res.status(400).json({error:`name must be one of ${BUILTIN_SCENE_NAMES.join(", ")}`});scene={kind,name,since:new Date().toISOString()};if(name==="startingSoon"){const minutes=Number(req.account.overlayConfig?.startingSoon?.countdownMinutes||0);if(Number.isFinite(minutes)&&minutes>0)scene.countdownAt=new Date(Date.now()+minutes*60000).toISOString();}}else if(kind==="custom"){const overlay=req.account.overlays.find(o=>o.id===overlayId&&(o.type==="text"||o.type==="html"||o.type==="music"));if(!overlay)return res.status(404).json({error:"unknown overlay"});scene={kind,overlayId};}req.account.currentScene=scene;saveState(state);const html=withWidgets(resolveSceneFragment(scene,req.account),req.account.overlayConfig,req.account.twitchLogin);events.publish(req.account.twitchUserId,{type:"scene",html});for(const orientation of sceneModel.ORIENTATIONS)events.publish(req.account.twitchUserId,{type:"program",orientation});for(const entry of programCompositors.values())if(entry.accountId===req.account.twitchUserId)entry.compositor.updateHybridPlan?.();res.json({ok:true,currentScene:scene});});
@@ -830,7 +861,7 @@ function configuredPublicBaseUrl(){return PUBLIC_BASE_URL_ENV||normalisePublicBa
 function publicPlaybackBase(req){return publicBaseUrl(req,{explicitBase:configuredPublicBaseUrl()});}
 function playbackUrlsFor(req,account){if(!activeSourceFor(account.twitchUserId))return null;return playbackTargets({base:publicPlaybackBase(req),safePath:safePathFor(account),mediaHost:PUBLIC_MEDIA_HOST});}
 function sourcesStatusFor(account){const selected=activeProfile(account);const sources={console:{enabled:selected?.mode==="console",live:false},pc:{enabled:selected?.mode==="pc",live:false},music:{enabled:selected?.mode==="music",live:false},rerun:{enabled:selected?.mode!=="console",live:false}};const connectedProfiles=[];for(const[pathName,live]of liveSessions.entries()){if(live.accountId!==account.twitchUserId)continue;connectedProfiles.push({profileId:live.profileId,source:live.source,path:pathName,active:activeFeedPath.get(account.twitchUserId)===pathName});if(live.profileId===selected?.id&&sources[live.source])sources[live.source].live=true;}return{sources,activeSource:activeSourceFor(account.twitchUserId),connectedProfiles};}
-app.get("/api/status",requireAuth,(req,res)=>{const account=req.account;ensureAccountProfileKeys(account);const selected=activeProfile(account),rtmp=profileRtmp.profileRtmpInfo(account,MEDIA_HOST,selected?.id);const{sources,activeSource,connectedProfiles}=sourcesStatusFor(account);res.json({twitchLogin:account.twitchLogin,displayName:account.displayName,profileImageUrl:account.profileImageUrl,needsSourceMode:!account.sourceMode,needsStreamKey:needsStreamKeyFor(account),streamKeyMasked:account.streamKey?maskSecret(account.streamKey):null,sourceMode:account.sourceMode||null,activeProfileId:selected?.id||null,profileRtmp:rtmp,live:!!activeSource,sources,activeSource,connectedProfiles,rerun:profileVod.publicStatus(account.twitchUserId),recordingEnabled:!!account.recordingEnabled,encoder:gpuEncoder.status(),graceUntil:graceState.get(account.twitchUserId)?.deadline??null,pcServer:rtmp?.server||`rtmp://${MEDIA_HOST}:1935/${PC_APP}`,pcKey:rtmp?.key||account.pcKey,mediaHost:MEDIA_HOST,publicBaseUrl:{value:state.publicBaseUrl||"",effective:publicPlaybackBase(req),lockedByEnv:!!PUBLIC_BASE_URL_ENV},playback:playbackUrlsFor(req,account),destinations:account.destinations.map(d=>({id:d.id,name:d.name,platform:normaliseDestinationPlatform(d.platform),urlMasked:maskUrl(d.url),layout:normaliseLayout(d.layout),output:effectiveOutput(d),outputConfigured:!!d.output,route:planDestination(d,programContext(account)).reason,enabled:d.enabled,active:activeDestinations.has(`${account.twitchUserId}:${d.id}`),health:destinationHealth(account.twitchUserId,d.id)})),programs:programStatusFor(account),music24:music24Status(account),relayPush:{available:!!relayPush.relaystreamBaseUrl(),enabled:!!account.relayPushEnabled,mode:account.relayPushMode,nodeId:account.relayNodeId,active:activeDestinations.has(`${account.twitchUserId}:${relayPush.RELAY_DESTINATION_ID}`),watchUrl:relayPush.cachedRelayDestination(account)?.watchUrl||null}});});
+app.get("/api/status",requireAuth,(req,res)=>{const account=req.account;ensureAccountProfileKeys(account);const selected=activeProfile(account),rtmp=profileRtmp.profileRtmpInfo(account,MEDIA_HOST,selected?.id);const{sources,activeSource,connectedProfiles}=sourcesStatusFor(account);res.json({features:featureFlags.publicFeatures(),twitchLogin:account.twitchLogin,displayName:account.displayName,profileImageUrl:account.profileImageUrl,needsSourceMode:!account.sourceMode,needsStreamKey:needsStreamKeyFor(account),streamKeyMasked:account.streamKey?maskSecret(account.streamKey):null,sourceMode:account.sourceMode||null,activeProfileId:selected?.id||null,profileRtmp:rtmp,live:!!activeSource,sources,activeSource,connectedProfiles,rerun:profileVod.publicStatus(account.twitchUserId),recordingEnabled:!!account.recordingEnabled,encoder:gpuEncoder.status(),graceUntil:graceState.get(account.twitchUserId)?.deadline??null,pcServer:rtmp?.server||`rtmp://${MEDIA_HOST}:1935/${PC_APP}`,pcKey:rtmp?.key||account.pcKey,mediaHost:MEDIA_HOST,publicBaseUrl:{value:state.publicBaseUrl||"",effective:publicPlaybackBase(req),lockedByEnv:!!PUBLIC_BASE_URL_ENV},playback:playbackUrlsFor(req,account),destinations:account.destinations.map(d=>({id:d.id,name:d.name,platform:normaliseDestinationPlatform(d.platform),urlMasked:maskUrl(d.url),layout:normaliseLayout(d.layout),output:effectiveOutput(d),outputConfigured:!!d.output,route:planDestination(d,programContext(account)).reason,enabled:d.enabled,active:activeDestinations.has(`${account.twitchUserId}:${d.id}`),health:destinationHealth(account.twitchUserId,d.id)})),programs:programStatusFor(account),music24:music24Status(account),relayPush:{available:!!relayPush.relaystreamBaseUrl(),enabled:!!account.relayPushEnabled,mode:account.relayPushMode,nodeId:account.relayNodeId,active:activeDestinations.has(`${account.twitchUserId}:${relayPush.RELAY_DESTINATION_ID}`),watchUrl:relayPush.cachedRelayDestination(account)?.watchUrl||null}});});
 app.post("/api/relay-push",requireAuth,requireOnboarded,(req,res)=>{const{enabled,mode}=req.body||{};if(enabled&&!relayPush.relaystreamBaseUrl())return res.status(503).json({error:"RELAYSTREAM_URL is not configured on this install"});if(mode!==undefined){if(!["rtmp","whip"].includes(mode))return res.status(400).json({error:"mode must be rtmp or whip"});req.account.relayPushMode=mode;}const wasEnabled=req.account.relayPushEnabled;if(enabled!==undefined)req.account.relayPushEnabled=Boolean(enabled);saveState(state);const source=destinationSourcePathFor(req.account);if(req.account.relayPushEnabled){if(source){if(wasEnabled)stopDestination(req.account.twitchUserId,relayPush.RELAY_DESTINATION_ID);startRelayPushFor(req.account,source);}}else{stopDestination(req.account.twitchUserId,relayPush.RELAY_DESTINATION_ID);}res.json({ok:true,enabled:req.account.relayPushEnabled,mode:req.account.relayPushMode});});
 // `output` is the per-destination layout (mode/scene/size/fps/encoder/bitrate/
 // audio/captions). `layout` is still accepted for older clients and scripts;
@@ -859,6 +890,7 @@ function programStatusFor(account) {
 }
 
 function music24Status(account) {
+  if (!featureFlags.features.music24) return { state:"disabled", disabled:true, streaming:false, running:false, profileId:null, outputPath:null, error:null };
   try { return music24Runtime.statusFor(account.twitchUserId); } catch { return null; }
 }
 
@@ -961,6 +993,7 @@ app.post("/api/system/hardware/probe", requireAuth, async (req, res) => {
 });
 
 app.post("/api/music24/streaming", requireAuth, (req, res) => {
+  if (!featureFlags.features.music24) return res.status(403).json({ error:"Music 24/7 is switched off on this install (CASTNEXUS_MUSIC24=false)", code:"FEATURE_DISABLED" });
   const enabled = music24Runtime.setStreaming(req.account.twitchUserId, req.body?.enabled === true);
   console.log(`[music24] ${req.account.twitchLogin} turned Music 24/7 streaming ${enabled ? "on" : "off"}`);
   res.json({ ok:true, enabled, music24:music24Status(req.account) });
@@ -1006,7 +1039,7 @@ app.get("/build-info.js",(_req,res)=>{
     installType:process.env.CASTNEXUS_INSTALL_TYPE||"source",
     repository:"NekoSuneProjects/CastNexus",
   };
-  res.type("application/javascript").send(`window.CASTNEXUS_BUILD = Object.freeze(${JSON.stringify(info)});\n`);
+  res.type("application/javascript").send(`window.CASTNEXUS_BUILD = Object.freeze(${JSON.stringify(info)});\nwindow.CASTNEXUS_FEATURES = Object.freeze(${JSON.stringify(featureFlags.publicFeatures())});\n`);
 });
 app.use(express.static(path.join(__dirname,"public"),{index:false}));
 const httpServer=app.listen(PORT,()=>{const encoder=gpuEncoder.status().selected;console.log(`[dashboard] listening on :${PORT}`);hardwareProfile.ensureHostProfile().catch(()=>{});console.log(`[dashboard] video encoder: ${encoder.label}${encoder.hardware?" (hardware)":" (software fallback)"}`);console.log(`[dashboard] oauth-broker: ${hostedOauth.baseUrl}`);const allowList=registration.allowedLogins();if(allowList.length)console.log(`[dashboard] sign-in restricted to: ${allowList.join(", ")}`);else if(registration.registrationDisabled())console.log(`[dashboard] registration disabled - only the ${Object.keys(state.accounts).length} existing account(s) can sign in`);if(registration.locksOutEveryone({accountCount:Object.keys(state.accounts).length}))console.warn("[dashboard] DISABLE_REGISTRATION is set but no account exists yet - nobody can sign in. Set ALLOWED_TWITCH_LOGINS to your Twitch login, or unset DISABLE_REGISTRATION for one sign-in.");});

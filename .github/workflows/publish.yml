@@ -100,6 +100,17 @@ jobs:
           else
             echo "Version already up to date."
           fi
+      # The Dockerfile lives in the docker branch (Docker files only); the build
+      # context is still this branch's dashboard/ app folder.
+      - name: Fetch Dockerfile from the docker branch
+        uses: actions/checkout@v4
+        with:
+          ref: docker
+          path: _docker
+          sparse-checkout: |
+            Dockerfile
+            Dockerfile.dockerignore
+          sparse-checkout-cone-mode: false
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -111,6 +122,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./dashboard
+          file: ./_docker/Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: |

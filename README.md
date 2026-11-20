@@ -213,42 +213,21 @@ Studio:   http://<CASTNEXUS_HOST>:8090/dashboard
 
 # Docker install
 
-Copy the environment template:
+The Docker files (compose files, `.env.example`, `install.sh`, the Dockerfile
+and the MediaMTX config) live in their own
+[**`docker` branch**](https://github.com/NekoSuneProjects/CastNexus/tree/docker).
+This `dashboard` branch is only the CastNexus web app itself.
 
 ```bash
-cp .env.example .env
-nano .env
+git clone --branch docker https://github.com/NekoSuneProjects/CastNexus castnexus
+cd castnexus
+./install.sh      # first run creates .env - edit it, then run again
 ```
 
-Configure at minimum:
-
-```dotenv
-PI_IP=192.168.1.50
-CASTNEXUS_OAUTH_BROKER_URL=https://castnexus.nekosunevr.co.uk/oauth
-```
-
-For console capture also configure:
-
-```dotenv
-TARGET_IPS=192.168.1.100
-GATEWAY_IP=192.168.1.1
-```
-
-Then start CastNexus.
-
-For PC/Music only:
-
-```bash
-docker compose up -d
-```
-
-For console capture helpers as well:
-
-```bash
-docker compose --profile console up -d
-```
-
-The dashboard Docker image contains FFmpeg, Chromium, yt-dlp nightly and Deno, so Twitch/YouTube VOD resolving does not need separate helper containers.
+See the docker branch's [README](https://github.com/NekoSuneProjects/CastNexus/blob/docker/README.md)
+and [INSTALL.md](https://github.com/NekoSuneProjects/CastNexus/blob/docker/INSTALL.md).
+The dashboard image contains FFmpeg, Chromium, yt-dlp nightly and Deno, so
+Twitch/YouTube VOD resolving does not need separate helper containers.
 
 ---
 
@@ -344,20 +323,15 @@ Stable release dispatches are intentionally blocked from non-`main` branches. St
 
 # Updating Docker
 
-## Stable
+From your docker-branch checkout:
 
 ```bash
-CASTNEXUS_IMAGE_TAG=latest CASTNEXUS_CHANNEL=stable docker compose pull
+git pull
+docker compose pull
 docker compose up -d
 ```
 
-## Beta
-
-```bash
-CASTNEXUS_IMAGE_TAG=beta CASTNEXUS_CHANNEL=beta docker compose pull
-docker compose up -d
-```
-
+Set `CASTNEXUS_IMAGE_TAG=beta` and `CASTNEXUS_CHANNEL=beta` in `.env` for the beta channel.
 CastNexus embeds its version/channel into each release build. Studio checks GitHub Releases and displays an update notification when a newer release exists for the installed channel. Stable installations ignore beta/prerelease versions.
 
 ---
@@ -444,6 +418,32 @@ The Twitch stream key is masked after it is saved.
 8. Enable the destinations you want.
 
 The `music24` service watches the active profile. When a Music profile is active and has tracks it renders and publishes that profile's isolated station.
+
+---
+
+# Feature switches (Docker `.env`)
+
+Set these in the `.env` of your [docker branch](https://github.com/NekoSuneProjects/CastNexus/tree/docker) checkout. They turn whole parts of CastNexus on or off per install; restart the container after changing them:
+
+```dotenv
+CASTNEXUS_MUSIC24=true            # Music 24/7 radio worker + Music profiles
+CASTNEXUS_PC_STREAMING=true       # PC / OBS RTMP ingest, PC profiles, VOD reruns
+CASTNEXUS_CONSOLE_STREAMING=true  # PS5 / Xbox / Switch capture, Console profiles
+CASTNEXUS_DISCORD_ACTIVITY=false  # Discord Activity watch page (see below)
+```
+
+A switched-off feature is hidden in the Studio, refused by its API routes, and
+its incoming streams are not routed to any destination. For example, a
+console-only VPS can set `CASTNEXUS_MUSIC24=false` and `CASTNEXUS_PC_STREAMING=false`.
+
+---
+
+# Discord Activity
+
+Watch any CastNexus stream (console, PC, Music 24/7, rerun) together inside a
+Discord voice channel, with no screen sharing. This is useful for PS5 players,
+because a console can't screen-share to Discord. Set `CASTNEXUS_DISCORD_ACTIVITY=true`
+and `DISCORD_CLIENT_ID`, then follow [docs/DISCORD-ACTIVITY.md](https://github.com/NekoSuneProjects/CastNexus/blob/docker/docs/DISCORD-ACTIVITY.md).
 
 ---
 

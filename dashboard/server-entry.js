@@ -32,7 +32,13 @@ process.on("unhandledRejection", err => console.error("[castnexus] unhandled rej
 // This avoids a cold-start race where Music 24/7 tries to open its own overlay
 // before the dashboard is listening.
 require("./server");
-startTimer = setTimeout(() => {
-  startTimer = null;
-  music24.startMusic24();
-}, Number(process.env.MUSIC24_EMBED_START_DELAY_MS || 500));
+const featureFlags = require("./features");
+console.log(`[castnexus] features: ${featureFlags.describe()}`);
+if (featureFlags.features.music24) {
+  startTimer = setTimeout(() => {
+    startTimer = null;
+    music24.startMusic24();
+  }, Number(process.env.MUSIC24_EMBED_START_DELAY_MS || 500));
+} else {
+  console.log("[music24] CASTNEXUS_MUSIC24=false - the Music 24/7 radio worker is not started");
+}

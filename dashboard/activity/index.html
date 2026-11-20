@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex">
+  <title>CastNexus Live</title>
+  <!-- Relative URLs only: inside Discord every request goes through the
+       Activity's URL mapping on *.discordsays.com. -->
+  <link rel="stylesheet" href="activity-app.css">
+</head>
+<body>
+  <main id="app" class="screen">
+    <section id="loading" class="panel center">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="loading-text">Connecting to CastNexus…</p>
+    </section>
+
+    <section id="picker" class="panel hidden">
+      <header class="picker-head">
+        <h1 id="title">CastNexus Live</h1>
+        <p class="muted">Pick a stream to watch together.</p>
+      </header>
+      <div id="channel-list" class="channel-list"></div>
+      <p id="empty" class="muted center hidden">Nobody is live right now. This list refreshes automatically.</p>
+    </section>
+
+    <section id="player" class="player hidden">
+      <video id="video" playsinline autoplay muted></video>
+      <div id="player-overlay" class="player-overlay hidden">
+        <div class="spinner" aria-hidden="true"></div>
+        <p id="overlay-text">Connecting…</p>
+      </div>
+      <div class="player-bar">
+        <button id="back" class="btn ghost" type="button" title="Back to stream list">‹ Streams</button>
+        <div class="now">
+          <img id="now-avatar" alt="" hidden>
+          <div><strong id="now-name"></strong><span id="now-meta" class="muted"></span></div>
+        </div>
+        <button id="unmute" class="btn primary" type="button">🔊 Tap to unmute</button>
+      </div>
+    </section>
+
+    <section id="error" class="panel center hidden">
+      <h2>Can't open the stream</h2>
+      <p id="error-text" class="muted"></p>
+    </section>
+  </main>
+  <script src="activity-app.js"></script>
+</body>
+</html>
