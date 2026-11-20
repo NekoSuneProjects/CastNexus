@@ -44,7 +44,7 @@ docker compose up -d
 | `Dockerfile` | The `castnexus-dashboard` image. CI builds it from the dashboard branch |
 | `fetch-dashboard.sh` | Pulls the dashboard app into `./build/dashboard` for a local build |
 | `tools/docker-parity-check.sh` | Live-stream A/V checks against a running stack |
-| `docs/` | Docker setup guides, including [Discord Activity](docs/DISCORD-ACTIVITY.md) |
+| `docs/` | Docker setup guides, including [Discord Activity](docs/DISCORD-ACTIVITY.md) and [console stream key](docs/CONSOLE-STREAM-KEY.md) |
 
 ## Feature switches
 
@@ -54,8 +54,11 @@ Turn parts of CastNexus on or off in `.env`, then run `docker compose up -d`:
 CASTNEXUS_MUSIC24=true            # Music 24/7 radio
 CASTNEXUS_PC_STREAMING=true       # PC / OBS ingest + VOD reruns
 CASTNEXUS_CONSOLE_STREAMING=true  # PS5 / Xbox / Switch capture
-CASTNEXUS_DISCORD_ACTIVITY=false  # watch streams inside Discord voice channels
+CASTNEXUS_DISCORD_ACTIVITY=false  # watch your stream inside Discord voice channels
 ```
+
+Console only (PS5 / Xbox / Switch, with console scenes and scene music):
+`CASTNEXUS_MUSIC24=false` and `CASTNEXUS_PC_STREAMING=false`.
 
 ## Build the image yourself
 
