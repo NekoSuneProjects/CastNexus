@@ -1,0 +1,4 @@
+.env
+dashboard/data/
+build/
+.dashboard-branch-fetch/

@@ -1,0 +1,67 @@
+name: Docker
+
+# Checks the compose files on every change. When the Dockerfile changes, asks
+# the dashboard branch's "Publish Docker Image" workflow to rebuild the image
+# (the dashboard branch owns the app source and the version/channel logic).
+#   commit message contains [beta] -> beta image, otherwise -> stable image.
+
+on:
+  push:
+    branches: [docker]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          sed -i 's/^PUBLIC_IP=$/PUBLIC_IP=203.0.113.1/' .env
+          for combo in \
+            "-f docker-compose.yml" \
+            "-f docker-compose.yml --profile console" \
+            "-f docker-compose.yml -f docker-compose.vps.yml --profile vps-console" \
+            "-f docker-compose.yml -f docker-compose.gpu-nvidia.yml" \
+            "-f docker-compose.yml -f docker-compose.gpu-vaapi.yml" \
+            "-f docker-compose.yml -f docker-compose.build.yml"; do
+            echo "docker compose $combo config"
+            docker compose $combo config -q
+          done
+      - name: Check shell scripts
+        run: bash -n install.sh fetch-dashboard.sh tools/docker-parity-check.sh
+
+  rebuild-image:
+    needs: validate
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Dockerfile changed?
+        id: changed
+        run: |
+          if git diff --quiet HEAD~1 HEAD -- Dockerfile Dockerfile.dockerignore 2>/dev/null; then
+            echo "rebuild=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "rebuild=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Trigger dashboard image build
+        if: steps.changed.outputs.rebuild == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          CHANNEL=stable
+          if [[ "$COMMIT_MESSAGE" == *"[beta]"* ]]; then CHANNEL=beta; fi
+          gh workflow run publish.yml --repo "${{ github.repository }}" --ref dashboard -f channel="$CHANNEL" -f runner=auto
+          echo "Requested a $CHANNEL dashboard image build."

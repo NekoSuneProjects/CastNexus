@@ -1,0 +1,18 @@
+# Build the dashboard image locally from source instead of pulling it.
+# Run ./fetch-dashboard.sh first (it puts the app in ./build/dashboard), then:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml build dashboard
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
+#
+# Combine with the other overrides as usual (docker-compose.vps.yml,
+# docker-compose.gpu-nvidia.yml, ...).
+services:
+  dashboard:
+    image: castnexus-dashboard:local
+    build:
+      context: ./build/dashboard
+      # The Dockerfile lives here in the docker branch, outside the context.
+      dockerfile: ../../Dockerfile
+      args:
+        CASTNEXUS_VERSION: ${CASTNEXUS_VERSION:-0.0.0-local}
+        CASTNEXUS_CHANNEL: ${CASTNEXUS_CHANNEL:-dev}

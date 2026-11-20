@@ -1,0 +1,5 @@
+# BuildKit reads <Dockerfile>.dockerignore next to the Dockerfile, so this
+# applies to the dashboard build context even though it lives in another branch.
+# Keeps a developer's local node_modules / runtime data out of the image.
+node_modules
+data
