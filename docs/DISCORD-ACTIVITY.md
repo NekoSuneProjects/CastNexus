@@ -12,7 +12,7 @@ stream directly.
 ```text
 PS5 ──RTMP──> CastNexus (VPS console gateway) ──> Twitch / YouTube / ...
                      │
-                     └──> public/<your login> ──> Discord Activity (WebRTC or LL-HLS)
+                     └──> public/<your login> ──> Discord Activity (HLS over HTTPS)
                                                    in any voice channel
 ```
 
@@ -53,7 +53,7 @@ PS5 ──RTMP──> CastNexus (VPS console gateway) ──> Twitch / YouTube /
 | CastNexus on a **public HTTPS domain**, e.g. `https://castnexus.example.com` behind a reverse proxy | Discord only loads Activities over HTTPS from a real domain. A raw IP or plain HTTP won't work. |
 | A Discord application (free) | Discord runs the Activity under your application. |
 | `CASTNEXUS_CONSOLE_STREAMING=true` (default) | Needed for the PS5 / console source. |
-| Optional: MediaMTX WebRTC UDP `8189/udp` open, plus `webrtcAdditionalHosts` in `config/mediamtx.yml` | Lowest latency (under 1 s). Without it the Activity falls back to LL-HLS over HTTPS automatically (about 2-5 s). |
+| Nothing extra for video | The Activity plays **HLS only**, over HTTPS through Discord's proxy, so no UDP ports or WebRTC setup are needed (latency is about 2-6 s). |
 
 ## 2. Create the Discord application
 
@@ -107,7 +107,6 @@ CASTNEXUS_OWNER_LOGIN=nekosunevr      # who controls the Activity (default: firs
 DISCORD_REDIRECT_URI=                 # only if the auto-built https://<domain>/auth/discord/callback is wrong
 DISCORD_ACTIVITY_CHANNEL=             # lock the channel here instead of choosing it in Studio
 DISCORD_ACTIVITY_TITLE=CastNexus Live
-DISCORD_ACTIVITY_WEBRTC=true          # false = always use LL-HLS
 ```
 
 Apply it:
@@ -253,7 +252,7 @@ With these settings:
   access token. CastNexus checks it with Discord, caching the result for about
   5 minutes, and never stores it.
 - **Proxy is limited.** The Activity's stream proxy (`/activity/hls`,
-  `/activity/webrtc`) serves only:
+  `/activity/tshls`) serves only:
   - `public/<owner's channel>`, and
   - in Auto mode, `public/<login>` of linked, opted-in accounts that are live
     right now.
@@ -282,7 +281,6 @@ With these settings:
 | `CASTNEXUS_OWNER_LOGIN` | first sign-in | Twitch login of the host owner. |
 | `DISCORD_ACTIVITY_CHANNEL` | — | Locks the played channel. Leave blank to let the owner choose in Studio. |
 | `DISCORD_ACTIVITY_TITLE` | `CastNexus Live` | Page title. |
-| `DISCORD_ACTIVITY_WEBRTC` | `true` | Try WebRTC first; `false` = LL-HLS only. |
 
 | Endpoint | Who | Purpose |
 | --- | --- | --- |
@@ -305,10 +303,10 @@ With these settings:
 | Activity is blank or shows a Discord error | The URL-mapping target must be `your-domain/activity`. Check that `https://your-domain/activity/` opens in a browser. |
 | Shows offline while you are live | The selected channel must be the CastNexus account receiving the stream. Check Settings → Discord Activity. For consoles, the account needs its Twitch stream key ([CONSOLE-STREAM-KEY.md](CONSOLE-STREAM-KEY.md)). |
 | Settings card says only the owner can change it | You aren't the host owner. Set `CASTNEXUS_OWNER_LOGIN` to your login, or sign in as the owner. |
-| 2-5 s delay | That's LL-HLS. Open `8189/udp` and set `webrtcAdditionalHosts` for WebRTC. |
+| 2-6 s delay | Normal for HLS. The Activity is HLS-only, because WebRTC can't get through Discord's sandbox. |
 | No sound | Tap **Tap to unmute**. Every viewer starts muted. |
 | Auto mode doesn't find me | Link Discord in Settings, and keep *Show me in the Discord Activity* on. You must be live on CastNexus and **in that voice channel** with the Discord account you linked. |
 | "Link Discord" fails / Discord says *Invalid OAuth2 redirect_uri* | Add the exact URL from Settings → Discord Activity under OAuth2 → Redirects in the Discord portal. Set `DISCORD_REDIRECT_URI` if your public domain differs. |
 | Avatars are broken | Update CastNexus. Avatars are now served by your server, because Discord blocks outside images. |
-| Stuck on *Reconnecting…* | Run `docker logs castnexus-dashboard \| grep "discord-activity] viewer"`. The Activity reports which transport it used, or why each one failed, and also shows the reason under the spinner. It tries **WebRTC → low-latency HLS → classic HLS** (the VRChat remuxer on `:8898`), then remembers what worked. |
-| WebRTC always fails, HLS works | Expected if your domain is behind Cloudflare's proxy (orange cloud) or UDP `8189` isn't open: WebRTC media can't reach the server. Playback uses HLS automatically. Set `DISCORD_ACTIVITY_WEBRTC=false` to skip the WebRTC attempt, or point `webrtcAdditionalHosts` at the server's real IP and open `8189/udp`. |
+| Stuck on *Reconnecting…* | Run `docker logs castnexus-dashboard \| grep "discord-activity] viewer"`. The Activity reports which transport it used, or why each one failed, and also shows the reason under the spinner. It tries **low-latency HLS → classic HLS** (the VRChat remuxer on `:8898`) **→ the browser's native HLS player**. It counts a method as working only once the video is actually moving, demotes any method that stalls for 12 s, and shows the method in use in the player bar (e.g. *LIVE · Console · HLS*). |
+| Works in a browser but not in Discord | Check the `viewer:` lines in `docker logs`. Classic HLS needs the `castnexus-mediamtx-vrchat` container running (it is in the default compose file). The native-HLS fallback avoids `blob:` URLs entirely, for Discord clients with a strict sandbox. |
