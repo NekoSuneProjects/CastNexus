@@ -23,7 +23,11 @@
 //   /api/config               client id, title, transport options
 //   /api/channel              the selected channel and whether it is live
 //   /hls/public/<login>/...   LL-HLS from MediaMTX - selected channel only
-//   /webrtc/public/<login>/whep  WebRTC/WHEP from MediaMTX - selected channel only
+//   /tshls/public/<login>/...  classic MPEG-TS HLS (VRChat remuxer) - same guard
+//
+// HLS only: everything goes over HTTPS through Discord's proxy. WebRTC is not
+// offered in the Activity (its UDP media can't pass Discord's sandbox or a
+// CDN proxy in front of the server).
 //
 // Any source works (console via the VPS gateway, PC/OBS, Music 24/7, VOD
 // rerun) because the page plays the same public/<login> program as the other
@@ -54,7 +58,6 @@ function activityConfig(env = process.env) {
     clientIdInvalid:!!clientId && !valid,
     lockedChannel:normaliseLogin(env.DISCORD_ACTIVITY_CHANNEL),
     title:String(env.DISCORD_ACTIVITY_TITLE || "CastNexus Live").trim().slice(0, 80) || "CastNexus Live",
-    webrtc:String(env.DISCORD_ACTIVITY_WEBRTC ?? "true").trim().toLowerCase() !== "false",
   };
 }
 
@@ -107,7 +110,6 @@ function createDiscordActivityRouter({
   fetchImpl = (...args) => global.fetch(...args),
   env = process.env,
   hlsTarget = process.env.MEDIAMTX_HLS_ORIGIN || "http://127.0.0.1:8888",
-  webrtcTarget = process.env.MEDIAMTX_WEBRTC_ORIGIN || "http://127.0.0.1:8889",
   // Classic MPEG-TS HLS from the VRChat remuxer: the most compatible fallback.
   tsHlsTarget = process.env.MEDIAMTX_VRCHAT_HLS_ORIGIN || "http://127.0.0.1:8898",
   log = (...args) => console.warn(...args),
@@ -149,7 +151,7 @@ function createDiscordActivityRouter({
 
   router.get("/api/config", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    res.json({ clientId:config.clientId || null, title:config.title, webrtc:config.webrtc, sdk:!!sdkDir, hls:!!hlsFile, autoDetect:autoDetect() });
+    res.json({ clientId:config.clientId || null, title:config.title, sdk:!!sdkDir, hls:!!hlsFile, autoDetect:autoDetect() });
   });
   router.get("/api/channel", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -231,7 +233,6 @@ function createDiscordActivityRouter({
     res.status(404).type("text/plain").send("not found");
   };
   router.use("/hls", guard, createProxyMiddleware({ target:hlsTarget, changeOrigin:true, pathRewrite:{ "^/activity/hls":"" }, logLevel:"warn" }));
-  router.use("/webrtc", guard, createProxyMiddleware({ target:webrtcTarget, changeOrigin:true, pathRewrite:{ "^/activity/webrtc":"" }, logLevel:"warn" }));
   router.use("/tshls", guard, createProxyMiddleware({ target:tsHlsTarget, changeOrigin:true, pathRewrite:{ "^/activity/tshls":"" }, logLevel:"warn" }));
 
   router.use((_req, res) => res.status(404).type("text/plain").send("not found"));
