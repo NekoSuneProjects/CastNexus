@@ -23,7 +23,6 @@
 //   /api/config               client id, title, transport options
 //   /api/channel              the selected channel and whether it is live
 //   /hls/public/<login>/...   LL-HLS from MediaMTX - selected channel only
-//   /tshls/public/<login>/...  classic MPEG-TS HLS (VRChat remuxer) - same guard
 //
 // HLS only: everything goes over HTTPS through Discord's proxy. WebRTC is not
 // offered in the Activity (its UDP media can't pass Discord's sandbox or a
@@ -110,8 +109,6 @@ function createDiscordActivityRouter({
   fetchImpl = (...args) => global.fetch(...args),
   env = process.env,
   hlsTarget = process.env.MEDIAMTX_HLS_ORIGIN || "http://127.0.0.1:8888",
-  // Classic MPEG-TS HLS from the VRChat remuxer: the most compatible fallback.
-  tsHlsTarget = process.env.MEDIAMTX_VRCHAT_HLS_ORIGIN || "http://127.0.0.1:8898",
   log = (...args) => console.warn(...args),
 } = {}) {
   if (typeof getChannel !== "function") throw new Error("getChannel is required");
@@ -249,7 +246,7 @@ function createDiscordActivityRouter({
     target, changeOrigin:true, pathRewrite:{ [`^(/activity)?/${prefix}`]:"" }, logLevel:"warn",
     onProxyRes:(proxyRes, req) => {
       proxyRes.headers["x-castnexus-activity"] = "proxied";
-      if (proxyRes.statusCode >= 400) diagLog(`MediaMTX (${target}) answered ${proxyRes.statusCode} for ${String(req.originalUrl || req.url).replace(new RegExp(`^(/activity)?/${prefix}`), "").split("?")[0]} - is that path live and is the ${prefix === "hls" ? "castnexus-mediamtx" : "castnexus-mediamtx-vrchat"} container running?`);
+      if (proxyRes.statusCode >= 400) diagLog(`MediaMTX (${target}) answered ${proxyRes.statusCode} for ${String(req.originalUrl || req.url).replace(new RegExp(`^(/activity)?/${prefix}`), "").split("?")[0]} - is that path live and is the castnexus-mediamtx container running?`);
     },
     onError:(err, req, res) => {
       diagLog(`MediaMTX (${target}) unreachable for ${req.originalUrl}: ${err.code || err.message}`);
@@ -257,8 +254,6 @@ function createDiscordActivityRouter({
     },
   });
   router.use("/hls", guard, proxyFor("hls", hlsTarget));
-  router.use("/tshls", guard, proxyFor("tshls", tsHlsTarget));
-  router.use("/vrchat-hls", guard, proxyFor("vrchat-hls", tsHlsTarget)); // same, under the public route's name
   router.use((_req, res) => res.status(404).type("text/plain").send("not found"));
   return router;
 }

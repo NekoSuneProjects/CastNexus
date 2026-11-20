@@ -43,7 +43,7 @@ async function withServer(channelRef, fn) {
   await new Promise(r => upstream.listen(0, "127.0.0.1", r));
   const target = `http://127.0.0.1:${upstream.address().port}`;
   const app = express();
-  const router = createDiscordActivityRouter({ getChannel:() => channelRef.current, env:{ DISCORD_CLIENT_ID:"123456789012345678" }, hlsTarget:target, tsHlsTarget:target });
+  const router = createDiscordActivityRouter({ getChannel:() => channelRef.current, env:{ DISCORD_CLIENT_ID:"123456789012345678" }, hlsTarget:target });
   app.use("/activity", router);
   app.get(["/activity-app.js", "/activity-app.css"], router);
   const server = app.listen(0, "127.0.0.1");
@@ -74,7 +74,8 @@ test("router serves the page, SDK and only the selected channel's stream", async
     assert.deepEqual(channel, { login:"nekosunevr", displayName:"NekoSuneVR", profileImageUrl:null, live:true, source:"console" });
 
     assert.equal(await (await fetch(base + "/activity/hls/public/nekosunevr/index.m3u8")).text(), "upstream:GET:/public/nekosunevr/index.m3u8");
-    assert.equal(await (await fetch(base + "/activity/tshls/public/nekosunevr/index.m3u8")).text(), "upstream:GET:/public/nekosunevr/index.m3u8");
+    assert.equal((await fetch(base + "/activity/tshls/public/nekosunevr/index.m3u8")).status, 404, "LL-HLS only: no classic/VRChat feed");
+    assert.equal((await fetch(base + "/activity/vrchat-hls/public/nekosunevr/index.m3u8")).status, 404);
     assert.equal((await fetch(base + "/activity/webrtc/public/nekosunevr/whep", { method:"POST", body:"v=0" })).status, 404, "the Activity offers no WebRTC");
     assert.equal("webrtc" in cfg, false);
     assert.equal((await fetch(base + "/activity/hls/public/friend/index.m3u8")).status, 404);
@@ -90,23 +91,23 @@ test("router serves the page, SDK and only the selected channel's stream", async
   });
 });
 
-test("classic TS HLS fallback is guarded like the other stream routes; viewer logs are sanitised", async () => {
+test("LL-HLS route marks proxied vs refused responses; viewer logs are sanitised", async () => {
   const upstream = http.createServer((req, res) => { res.end(`ts:${req.url}`); });
   await new Promise(r => upstream.listen(0, "127.0.0.1", r));
   const logs = [];
   const app = express();
   app.use("/activity", createDiscordActivityRouter({
     getChannel:() => ({ login:"neko", displayName:"Neko", source:"console" }),
-    env:{}, tsHlsTarget:`http://127.0.0.1:${upstream.address().port}`, log:line => logs.push(line),
+    env:{}, hlsTarget:`http://127.0.0.1:${upstream.address().port}`, log:line => logs.push(line),
   }));
   const server = app.listen(0, "127.0.0.1");
   await new Promise(r => server.once("listening", r));
   const base = `http://127.0.0.1:${server.address().port}/activity`;
   try {
-    assert.equal(await (await fetch(`${base}/tshls/public/neko/index.m3u8`)).text(), "ts:/public/neko/index.m3u8");
-    const proxied = await fetch(`${base}/tshls/public/neko/index.m3u8`);
+    assert.equal(await (await fetch(`${base}/hls/public/neko/index.m3u8`)).text(), "ts:/public/neko/index.m3u8");
+    const proxied = await fetch(`${base}/hls/public/neko/index.m3u8`);
     assert.equal(proxied.headers.get("x-castnexus-activity"), "proxied");
-    const refused = await fetch(`${base}/tshls/public/other/index.m3u8`);
+    const refused = await fetch(`${base}/hls/public/other/index.m3u8`);
     assert.equal(refused.status, 404);
     assert.equal(refused.headers.get("x-castnexus-activity"), "refused", "404s from the guard are identifiable");
     assert.match(logs.find(l => l.includes("refused")), /other is not the selected channel \(neko\)/);

@@ -68,13 +68,12 @@
   }
 
   function streamPath(login) { return "public/" + encodeURIComponent(login); }
-  // Streams use the SAME URLs as CastNexus' public playback links
-  // (/hls/public/<login>/index.m3u8 and /vrchat-hls/...), root-absolute.
-  // Inside Discord, add URL Mappings  /hls -> <domain>/hls  and
-  // /vrchat-hls -> <domain>/vrchat-hls  so they reach exactly those routes.
-  // Without them, Discord's root mapping sends them to <domain>/activity/hls
-  // and /activity/vrchat-hls, the Activity's own guarded copies.
-  function streamUrl(route, login) { return "/" + route + "/" + streamPath(login) + "/index.m3u8"; }
+  // LL-HLS only, on the SAME URL as CastNexus' public playback link
+  // (/hls/public/<login>/index.m3u8), root-absolute. Inside Discord, add the
+  // URL Mapping  /hls -> <domain>/hls  so it reaches exactly that route.
+  // Without it, Discord's root mapping sends it to <domain>/activity/hls, the
+  // Activity's own guarded copy.
+  function streamUrl(login) { return "/hls/" + streamPath(login) + "/index.m3u8"; }
 
   function updateUnmute() {
     var video = $("video");
@@ -127,11 +126,10 @@
 
   // hls.js playback (Media Source Extensions).
   //   "ll" = MediaMTX Low-Latency HLS (fMP4)          -> /activity/hls/...
-  //   "ts" = classic MPEG-TS HLS (the VRChat remuxer) -> /activity/tshls/...
   // The transmux worker is off: Discord's CSP may refuse blob: workers.
   function startHlsJs(login, mine, variant) {
     var video = $("video");
-    var src = streamUrl(variant === "ts" ? "vrchat-hls" : "hls", login);
+    var src = streamUrl(login);
     video.srcObject = null;
     if (!(window.MediaSource || window.ManagedMediaSource)) return Promise.reject(new Error(variant + "-hls: no Media Source Extensions"));
     if (mseBlocked) return Promise.reject(new Error(variant + "-hls: skipped, blob: media is blocked by this client's security policy"));
@@ -142,8 +140,8 @@
       if (!Hls.isSupported()) throw new Error(variant + "-hls: hls.js not supported here");
       hls = new Hls({
         enableWorker:false,
-        lowLatencyMode:variant === "ll",
-        liveSyncDurationCount:variant === "ll" ? 2 : 3,
+        lowLatencyMode:true,
+        liveSyncDurationCount:2,
         backBufferLength:10,
         manifestLoadingMaxRetry:4, levelLoadingMaxRetry:4, fragLoadingMaxRetry:4,
       });
@@ -167,14 +165,14 @@
     });
   }
 
-  // Browser-native HLS on the classic TS feed: no MediaSource, no blob: URLs
-  // at all, so it survives the strictest CSP. Last resort, and the normal
-  // path on iOS (Discord mobile), which has no MediaSource.
+  // Browser-native playback of the same LL-HLS URL: no MediaSource, no blob:
+  // URLs, so it survives the strictest CSP. The normal path on iOS (Discord
+  // mobile), which has no MediaSource and plays LL-HLS natively.
   function startNativeHls(login, mine) {
     var video = $("video");
     if (!video.canPlayType("application/vnd.apple.mpegurl")) return Promise.reject(new Error("native-hls: not supported"));
     video.srcObject = null;
-    video.src = streamUrl("vrchat-hls", login);
+    video.src = streamUrl(login);
     video.onerror = function () { if (mine === session && transportOk === "native") midStreamFailure("native", "native-hls: media error " + (video.error && video.error.code)); };
     playVideo();
     return waitForProgress(mine, "native-hls", 15000);
@@ -183,7 +181,7 @@
   // HLS only - every request goes over HTTPS through Discord's proxy, which is
   // the one path that reliably works inside the Activity sandbox.
   // Transports, best latency first; one that dies mid-stream is demoted.
-  var TRANSPORT_LABELS = { ll:"LL-HLS", ts:"HLS", native:"HLS (native)" };
+  var TRANSPORT_LABELS = { ll:"LL-HLS", native:"LL-HLS (native)" };
 
   // If the client's Content Security Policy blocks blob: media (MSE) the
   // hls.js transports can never work there: skip straight to native HLS.
@@ -200,7 +198,7 @@
   function transportsFor() {
     var list = [];
     var hasMse = !!(window.MediaSource || window.ManagedMediaSource);
-    if (hasMse) list.push("ll", "ts", "native"); else list.push("native");
+    if (hasMse) list.push("ll", "native"); else list.push("native");
     list.sort(function (a, b) { return (demoted[a] || 0) - (demoted[b] || 0); }); // stable: keeps latency order within a tier
     if (transportOk && list.indexOf(transportOk) > 0 && !demoted[transportOk]) { list.splice(list.indexOf(transportOk), 1); list.unshift(transportOk); }
     return list;
@@ -246,7 +244,7 @@
         // Fetch the playlist ourselves to see WHO answered: the CastNexus
         // guard ("refused"), MediaMTX ("proxied"), or - header missing -
         // something in front of CastNexus (reverse proxy / CDN / Discord).
-        return probe(streamUrl("hls", login)).then(function (p) {
+        return probe(streamUrl(login)).then(function (p) {
           if (mine !== session) return;
           report("all transports failed for " + login + ": probe: " + p + " | " + detail);
           detail = "probe: " + p + " | " + detail;
