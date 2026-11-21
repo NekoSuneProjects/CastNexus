@@ -1027,6 +1027,10 @@ app.use("/api/admin",requireAuth,createAdminRouter({
   buildInfo:()=>({version:process.env.CASTNEXUS_VERSION||"0.0.0-dev",channel:process.env.CASTNEXUS_CHANNEL||"dev",installType:process.env.CASTNEXUS_INSTALL_TYPE||"source"}),
   discordActivityStatus:()=>({enabled:featureFlags.features.discordActivity,clientIdSet:!!discordActivityConfig.clientId,channel:discordActivityLogin(),lockedByEnv:!!discordActivityConfig.lockedChannel}),
 }));
+// No Discord Activity / Discord account linking in the desktop app (Docker only).
+const DISCORD_UNAVAILABLE=process.env.CASTNEXUS_INSTALL_TYPE==="electron";
+const discordUnavailable=(req,res,next)=>DISCORD_UNAVAILABLE?res.status(404).json({error:"Discord Activity is only available on Docker installs",code:"DISCORD_UNAVAILABLE"}):next();
+app.use(["/api/discord-activity","/api/discord","/auth/discord"],discordUnavailable);
 app.get("/api/discord-activity",requireAuth,(req,res)=>res.json(discordActivityStatus(req)));
 app.post("/api/discord-activity",requireAuth,(req,res)=>{
   const owner=hostOwner();

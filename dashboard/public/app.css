@@ -215,6 +215,13 @@ input[type="checkbox"] { width:auto; accent-color:var(--purple); }
 .top-actions { display:flex; align-items:center; gap:10px; }
 .profile-switcher { display:flex; align-items:center; gap:8px; padding:5px 6px 5px 10px; border-radius:12px; border:1px solid var(--border); background:rgba(0,0,0,.18); }
 .profile-switcher select { width:175px; border:0; background:transparent; padding:5px 26px 5px 4px; box-shadow:none; }
+/* Native dropdown lists (Windows / Electron) don't inherit the dark theme from
+   a transparent <select>: they fell back to a white list with light text, so
+   unselected entries were unreadable. Give every option list explicit colours. */
+select { color-scheme: dark; }
+select option, select optgroup { background-color:#10131f; color:#f4f6ff; }
+select option:checked { background-color:#7c5cff; color:#ffffff; }
+select option:disabled { color:#687187; }
 .profile-dot { width:8px; height:8px; border-radius:50%; background:var(--purple); box-shadow:0 0 10px rgba(124,92,255,.55); }
 .live-pill { display:flex; align-items:center; gap:8px; padding:9px 12px; border-radius:999px; border:1px solid var(--border); background:rgba(255,255,255,.025); color:var(--muted); font-size:.75rem; font-weight:750; }
 .live-pill.live { color:#bff8d0; border-color:rgba(74,222,128,.18); background:rgba(74,222,128,.07); }

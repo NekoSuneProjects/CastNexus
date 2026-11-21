@@ -7,6 +7,9 @@
   const DOCS = "https://github.com/NekoSuneProjects/CastNexus/blob/docker/docs/DISCORD-ACTIVITY.md";
   const SOURCE_LABELS = { console:"Console", pc:"PC", music:"24/7 Music", rerun:"Rerun" };
 
+  // Docker-only: the desktop app has no Discord Activity / Discord account.
+  if ((window.CASTNEXUS_BUILD || {}).installType === "electron") return;
+
   const baseRenderSettings = window.renderSettings;
   window.renderSettings = function renderSettingsWithDiscordActivity() {
     return baseRenderSettings() + `<section class="grid grid-2" style="margin-top:16px">

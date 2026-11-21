@@ -30,3 +30,10 @@ test("profile modes and sources follow their switch; reruns follow the VOD switc
   assert.equal(_sourceAllowed("rerun", pcOff), true, "reruns no longer depend on PC streaming");
   assert.deepEqual(_enabledProfileModes(pcOff), ["console", "music", "vod"]);
 });
+
+test("Discord Activity is Docker-only: always off in the desktop app", () => {
+  const { readFeatures } = require("./features");
+  assert.equal(readFeatures({ CASTNEXUS_DISCORD_ACTIVITY:"true", CASTNEXUS_INSTALL_TYPE:"electron" }).discordActivity, false);
+  assert.equal(readFeatures({ CASTNEXUS_DISCORD_ACTIVITY:"true", CASTNEXUS_INSTALL_TYPE:"docker" }).discordActivity, true);
+  assert.equal(readFeatures({ CASTNEXUS_INSTALL_TYPE:"docker" }).discordActivity, false);
+});

@@ -29,7 +29,10 @@ function readFeatures(env = process.env) {
     pcStreaming:envBool(env, "CASTNEXUS_PC_STREAMING", true),
     consoleStreaming:envBool(env, "CASTNEXUS_CONSOLE_STREAMING", true),
     vodReruns:envBool(env, "CASTNEXUS_VOD", true),
-    discordActivity:envBool(env, "CASTNEXUS_DISCORD_ACTIVITY", false),
+    // Discord Activity + Discord account linking are server (Docker) features:
+    // Discord has to reach the install over the internet, which a desktop PC
+    // normally can't offer. Always off in the desktop app.
+    discordActivity:String(env.CASTNEXUS_INSTALL_TYPE || "").toLowerCase() === "electron" ? false : envBool(env, "CASTNEXUS_DISCORD_ACTIVITY", false),
   });
 }
 
