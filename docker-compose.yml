@@ -84,7 +84,7 @@ services:
 
       # Encoder selection and advanced encoder preset controls.
       CASTNEXUS_VIDEO_ENCODER: ${CASTNEXUS_VIDEO_ENCODER:-auto}
-      VAAPI_DEVICE: ${VAAPI_DEVICE:-/dev/dri/renderD128}
+      VAAPI_DEVICE: ${VAAPI_DEVICE:-}
       X264_PRESET: ${X264_PRESET:-}
       NVENC_PRESET: ${NVENC_PRESET:-}
       QSV_PRESET: ${QSV_PRESET:-}
@@ -92,7 +92,7 @@ services:
 
       # VOD / rerun encoding.
       VOD_MAX_GB: ${VOD_MAX_GB:-20}
-      VOD_X264_PRESET: ${VOD_X264_PRESET:-veryfast}
+      VOD_X264_PRESET: ${VOD_X264_PRESET:-}
       VOD_VIDEO_BITRATE: ${VOD_VIDEO_BITRATE:-6000k}
       VOD_VIDEO_MAXRATE: ${VOD_VIDEO_MAXRATE:-6500k}
       VOD_VIDEO_BUFSIZE: ${VOD_VIDEO_BUFSIZE:-12000k}

@@ -195,6 +195,8 @@ A GPU is **not required**.
 
 CastNexus uses `libx264` when no working hardware encoder is available.
 
+On a CPU-only host CastNexus sizes the CPU encode to the machine from its one-time hardware test (CPU speed and core count): a Raspberry Pi or small VPS stays on x264 `ultrafast` at 540p, while a strong desktop CPU gets `veryfast`/`faster`, more threads and 720p-1080p destination output. `X264_PRESET`, `X264_THREADS` or non-default `CASTNEXUS_CPU_SAFE_*` values override this; `CASTNEXUS_CPU_AUTO_TUNE=false` turns it off.
+
 Recommended automatic behavior:
 
 ```dotenv
@@ -238,6 +240,8 @@ Full CPU tuning guide:
 ---
 
 # 4. Docker GPU acceleration — optional
+
+`./install.sh` detects the host GPU and adds the right override for you (saved as `COMPOSE_FILE` in `.env`): NVIDIA + NVIDIA Container Toolkit → `docker-compose.gpu-nvidia.yml`, otherwise any `/dev/dri/renderD*` (Intel / AMD) → `docker-compose.gpu-vaapi.yml`, otherwise CPU only. Set `CASTNEXUS_GPU=nvidia|vaapi|none` in `.env` to choose yourself. The manual commands below still work.
 
 Hardware acceleration reduces H.264 encode load but **does not make CPU usage zero**. Chromium scene rendering, audio processing, filters, Node.js, MediaMTX and network handling still use CPU/RAM.
 
