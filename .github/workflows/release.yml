@@ -15,6 +15,14 @@ on:
         description: Version (example 1.2.0 or 1.2.0-beta.1)
         required: true
         type: string
+      runner:
+        description: Build servers (global = GitHub-hosted, self-hosted = neko-build)
+        required: true
+        type: choice
+        options:
+          - global
+          - self-hosted
+        default: global
 
 permissions:
   contents: write
@@ -22,7 +30,7 @@ permissions:
 
 jobs:
   meta:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner == 'self-hosted' && fromJSON('["self-hosted","neko-build"]') || 'ubuntu-latest' }}
     outputs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
@@ -83,9 +91,10 @@ jobs:
         include:
           - os: windows-latest
             target: win
-          - os: ubuntu-latest
+          - os: linux
             target: linux
-    runs-on: ${{ matrix.os }}
+    # Windows always uses GitHub's windows-latest; Linux follows the runner input.
+    runs-on: ${{ matrix.os == 'linux' && (inputs.runner == 'self-hosted' && fromJSON('["self-hosted","neko-build"]') || 'ubuntu-latest') || matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -140,9 +149,10 @@ jobs:
         include:
           - os: windows-latest
             target: win-x64
-          - os: ubuntu-latest
+          - os: linux
             target: linux-x64
-    runs-on: ${{ matrix.os }}
+    # Windows always uses GitHub's windows-latest; Linux follows the runner input.
+    runs-on: ${{ matrix.os == 'linux' && (inputs.runner == 'self-hosted' && fromJSON('["self-hosted","neko-build"]') || 'ubuntu-latest') || matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -177,7 +187,7 @@ jobs:
       fail-fast: false
       matrix:
         service: [dashboard, dns, intercept, oauth-broker, vrchat-relay, relaystream]
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner == 'self-hosted' && fromJSON('["self-hosted","neko-build"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
       packages: write
@@ -224,7 +234,7 @@ jobs:
 
   release:
     needs: [meta, build-electron, build-cli, docker-publish]
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner == 'self-hosted' && fromJSON('["self-hosted","neko-build"]') || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
