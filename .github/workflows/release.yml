@@ -15,6 +15,11 @@ on:
         description: Version (example 1.2.0 or 1.2.0-beta.1)
         required: true
         type: string
+      highlights:
+        description: Optional highlights at the top of the release notes (the changelog itself is generated from commits)
+        required: false
+        type: string
+        default: ""
       runner:
         description: Build servers (global = GitHub-hosted, self-hosted = neko-build)
         required: true
@@ -251,7 +256,21 @@ jobs:
     permissions:
       contents: write
     steps:
+      # fetch-depth 0 brings every branch (dashboard, desktopapp, cli, ...),
+      # which the changelog reads.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Generate changelog from commits on every branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HIGHLIGHTS: ${{ inputs.highlights }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          CHANNEL: ${{ needs.meta.outputs.channel }}
+        run: node .github/scripts/release-notes.mjs --version "$VERSION" --channel "$CHANNEL" --repo "$GITHUB_REPOSITORY" --highlights "$HIGHLIGHTS" --out changes.md
       - name: Download Electron Windows artifacts
         uses: actions/download-artifact@v4
         with:
@@ -287,6 +306,8 @@ jobs:
 
           **Channel:** ${{ needs.meta.outputs.channel }}
 
+          __CHANGES__
+
           ### Downloads
 
           #### Desktop App (Electron)
@@ -300,7 +321,7 @@ jobs:
           #### Docker
           Each service publishes its own image:
           ```bash
-          docker pull ghcr.io/${{ github.repository }}-dashboard:${{ needs.meta.outputs.version }}
+          docker pull ghcr.io/__REPO_LC__-dashboard:${{ needs.meta.outputs.version }}
           docker compose pull
           docker compose up -d
           ```
@@ -319,9 +340,10 @@ jobs:
 
           - [README](https://github.com/${{ github.repository }}/blob/main/README.md) — Project overview
           - [INSTALL.md](https://github.com/${{ github.repository }}/blob/main/INSTALL.md) — Docker, Desktop, and CLI setup
-
-          GitHub's automatically generated notes below list the code changes included since the previous release.
           EOF
+          # Insert the generated changelog; Docker image names must be lowercase.
+          node -e 'const fs=require("fs");const notes=fs.readFileSync("release-notes.md","utf8");fs.writeFileSync("release-notes.md",notes.replace("__CHANGES__",()=>fs.readFileSync("changes.md","utf8").trim()).replace(/__REPO_LC__/g,process.env.GITHUB_REPOSITORY.toLowerCase()));'
+          cat release-notes.md
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
@@ -329,7 +351,9 @@ jobs:
           name: CastNexus ${{ needs.meta.outputs.version }}
           prerelease: ${{ needs.meta.outputs.prerelease }}
           make_latest: ${{ needs.meta.outputs.channel == 'stable' }}
-          generate_release_notes: true
+          # The changelog above replaces GitHub's generated notes, which only
+          # list pull requests and so were always empty here.
+          generate_release_notes: false
           body_path: release-notes.md
           files: |
             electron-*/*.exe
