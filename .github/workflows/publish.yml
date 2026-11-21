@@ -106,6 +106,25 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Changelog from commits on every CastNexus branch (script lives on
+      # main). GitHub's generated notes only list pull requests, so they were
+      # always empty for these direct pushes.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: _notes
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Generate changelog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          CHANNEL=stable; case "$VERSION" in *-*) CHANNEL=beta;; esac
+          node _notes/.github/scripts/release-notes.mjs --version "$VERSION" --channel "$CHANNEL" --repo "$GITHUB_REPOSITORY" --git-dir _notes --out release-notes.md
+          cat release-notes.md
       - uses: actions/download-artifact@v4
         with:
           name: electron-win
@@ -120,7 +139,8 @@ jobs:
           tag_name: ${{ needs.meta.outputs.tag }}
           name: CastNexus Desktop ${{ needs.meta.outputs.version }}
           prerelease: ${{ contains(needs.meta.outputs.version, '-') }}
-          generate_release_notes: true
+          generate_release_notes: false
+          body_path: release-notes.md
           files: |
             electron-win/*.exe
             electron-linux/*.AppImage
