@@ -118,14 +118,15 @@ function setupEnvironment() {
   process.env.RELAYSTREAM_URL =
     process.env.RELAYSTREAM_URL || store.get("relaystream_url") || OFFICIAL_RELAYSTREAM;
 
-  // Prefer the bundled tool, unless its NVENC API is newer than the installed
-  // NVIDIA driver and the system FFmpeg can encode successfully. This is
-  // common on older Maxwell cards that remain perfectly capable of H.264.
+  // Prefer the bundled tool, unless it cannot drive this PC's GPU (NVENC /
+  // Quick Sync / AMF) and the system FFmpeg can - e.g. a bundled NVENC API
+  // newer than an older NVIDIA driver. No GPU at all keeps the bundled build
+  // and the dashboard falls back to CPU x264 sized to the measured CPU.
   if (downloadManager.hasUsableBinary(tools.ffmpeg)) {
     const selectedFfmpeg = selectFfmpeg({ bundled:tools.ffmpeg });
     process.env.FFMPEG_BIN = selectedFfmpeg.binary;
-    console.log(`[electron] FFmpeg: ${selectedFfmpeg.source}${selectedFfmpeg.nvenc ? " · NVENC ready" : " · hardware probe deferred"}`);
-    if (selectedFfmpeg.fallbackReason && selectedFfmpeg.source === "system") console.warn("[electron] bundled FFmpeg NVENC incompatible; using working system FFmpeg");
+    console.log(`[electron] FFmpeg: ${selectedFfmpeg.source} · ${selectedFfmpeg.hardware ? `GPU encoder ${selectedFfmpeg.encoder} ready` : "no GPU encoder found - CPU x264 (auto-tuned to this PC)"}`);
+    if (selectedFfmpeg.fallbackReason && selectedFfmpeg.source === "system") console.warn("[electron] bundled FFmpeg cannot drive this GPU; using working system FFmpeg");
   }
   if (downloadManager.hasUsableBinary(tools.ffprobe)) process.env.FFPROBE_BIN = tools.ffprobe;
   if (downloadManager.hasUsableBinary(tools.ytdlp)) process.env.YTDLP_BIN = tools.ytdlp;
