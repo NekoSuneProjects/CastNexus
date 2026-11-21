@@ -41,3 +41,16 @@ test("branch marker round-trips and changes are deduplicated across branches", (
   assert.doesNotMatch(md, /bump version/);
   assert.match(buildChanges([], { repo:"o/r", previousTag:"v1" }), /No code changes/);
 });
+
+test("commits are labelled by the folder they changed, not the (shared) branch", async () => {
+  const { componentFor } = await import("./release-notes.mjs");
+  assert.equal(componentFor(["dashboard/compositor.js", "dashboard/package-lock.json"], ["cli", "dashboard"]), "Studio");
+  assert.equal(componentFor(["electron/main.js"], ["desktopapp"]), "Desktop app");
+  assert.equal(componentFor(["docker-compose.yml", "install.sh"], ["docker"]), "Docker");
+  assert.equal(componentFor(["README.md"], ["cli", "dashboard", "docker"]), "General");
+});
+
+test("an empty --highlights stays empty", async () => {
+  const { parseArgs } = await import("./release-notes.mjs");
+  assert.deepEqual(parseArgs(["--version", "1.0.0", "--highlights", "", "--out", "x.md"]), { version:"1.0.0", highlights:"", out:"x.md" });
+});

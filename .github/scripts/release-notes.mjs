@@ -41,7 +41,7 @@ export function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     if (!argv[i].startsWith("--")) continue;
     const key = argv[i].slice(2);
-    out[key] = argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[++i] : "true";
+    out[key] = i + 1 < argv.length && !String(argv[i + 1]).startsWith("--") ? argv[++i] : "true";
   }
   return out;
 }
@@ -77,10 +77,12 @@ export function compareVersions(a, b) {
 // The release this one is compared against.
 export function previousRelease(releases, { version, channel }) {
   const current = `v${String(version).replace(/^v/i, "")}`;
-  return (releases || [])
+  const older = (releases || [])
     .filter(r => !r.draft && parseVersion(r.tag_name) && r.tag_name !== current && compareVersions(r.tag_name, current) < 0)
-    .filter(r => channel === "stable" ? !r.prerelease : true)
-    .sort((a, b) => compareVersions(b.tag_name, a.tag_name))[0] || null;
+    .sort((a, b) => compareVersions(b.tag_name, a.tag_name));
+  // Stable collects everything since the previous stable; the very first
+  // stable falls back to the release just before it.
+  return (channel === "stable" ? older.find(r => !r.prerelease) : null) || older[0] || null;
 }
 
 export function readMarker(body) {
@@ -139,11 +141,28 @@ export function commitsFor(cwd, branch, { since = null, fromSha = null, until = 
   const ref = until ? headAt(cwd, branch, until) : `origin/${branch}`;
   if (!ref) return [];
   const range = fromSha && isAncestor(cwd, fromSha, ref) ? [`${fromSha}..${ref}`] : [ref, ...(since ? [`--since=${since}`] : ["-n", "0"])];
-  const raw = git(["log", "--no-merges", "--format=%H%x1f%s%x1e", ...range], cwd);
-  return raw.split("\x1e").map(s => s.trim()).filter(Boolean).map(line => {
-    const [sha, subject] = line.split("\x1f");
-    return { sha, subject:subject || "" };
+  const raw = git(["log", "--no-merges", "--name-only", "--format=%x1e%H%x1f%s", ...range], cwd);
+  return raw.split("\x1e").map(s => s.trim()).filter(Boolean).map(chunk => {
+    const [head, ...files] = chunk.split("\n");
+    const [sha, subject] = head.split("\x1f");
+    return { sha, subject:subject || "", files:files.map(f => f.trim()).filter(Boolean) };
   });
+}
+
+// Which part of CastNexus a commit changed, from its files. Before the
+// branch split every branch shared history, so the branch a commit is found
+// on says nothing; the folder it touched does.
+const PATH_COMPONENTS = { dashboard:"Studio", electron:"Desktop app", cli:"CLI", "oauth-broker":"OAuth broker", dns:"Console DNS", intercept:"Console intercept", relaystream:"Relaystream", "vrchat-relay":"VRChat relay", ".github":"Release & packaging" };
+export function componentFor(files = [], branches = []) {
+  const counts = {};
+  for (const f of files) {
+    const label = PATH_COMPONENTS[String(f).split("/")[0]];
+    if (label) counts[label] = (counts[label] || 0) + 1;
+  }
+  const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  if (best) return best[0];
+  if (branches.length === 1) return COMPONENTS[branches[0]] || branches[0];
+  return "General";
 }
 
 // ---------------------------------------------------------- markdown
@@ -156,7 +175,7 @@ export function buildChanges(entries, { repo, previousTag = null }) {
     const key = text.toLowerCase();
     if (seen.has(key)) continue; // same change pushed to several branches
     seen.add(key);
-    groups[section].push(`- **${COMPONENTS[e.branch] || e.branch}:** ${text} ([\`${e.sha.slice(0, 7)}\`](https://github.com/${repo}/commit/${e.sha}))`);
+    groups[section].push(`- **${e.component || COMPONENTS[e.branch] || e.branch}:** ${text} ([\`${e.sha.slice(0, 7)}\`](https://github.com/${repo}/commit/${e.sha}))`);
   }
   const out = [];
   const total = SECTIONS.reduce((n, [k]) => n + groups[k].length, 0);
@@ -185,15 +204,21 @@ export async function generate({ version, channel = "beta", repo, cwd = process.
   const marker = prev ? readMarker(prev.body) : null;
   const since = prev ? (prev.published_at || prev.created_at) : null;
   const branches = listBranches(cwd);
-  const entries = [];
+  const bySha = new Map();
   const heads = {};
   for (const branch of branches) {
     const head = headAt(cwd, branch, until);
     if (!head) continue; // branch did not exist yet
     heads[branch] = head;
     if (!prev) continue; // first release ever: no history to diff against
-    for (const c of commitsFor(cwd, branch, { since, fromSha:marker?.[branch] || null, until })) entries.push({ ...c, branch });
+    for (const c of commitsFor(cwd, branch, { since, fromSha:marker?.[branch] || null, until })) {
+      const seen = bySha.get(c.sha);
+      if (seen) seen.branches.push(branch);
+      else bySha.set(c.sha, { ...c, branches:[branch] });
+    }
   }
+  // One entry per commit, however many branches share it.
+  const entries = [...bySha.values()].map(c => ({ ...c, branch:c.branches[0], component:componentFor(c.files, c.branches) }));
   const parts = [];
   if (String(highlights || "").trim()) parts.push("## Highlights", "", String(highlights).trim().replace(/\\n/g, "\n"), "");
   parts.push(prev ? buildChanges(entries, { repo, previousTag:prev.tag_name }) : "## What's changed\n\n_First release._\n");
