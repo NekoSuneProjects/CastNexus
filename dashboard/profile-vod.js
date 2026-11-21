@@ -117,29 +117,44 @@ async function resolveRemote(kind, url) {
   }
 }
 
+// Twitch live HLS is stream-copied (cheap, and it must keep up with the live
+// edge). Twitch VODs used to be copied too, but Twitch archives are H.264
+// High profile with B-frames: MediaMTX's WebRTC player (the Studio preview /
+// public web player) cannot decode B-frames, so a Twitch VOD rerun showed a
+// black preview with no sound even though FFmpeg was relaying fine. VODs are
+// now re-encoded like uploads (zero-latency, no B-frames). Set
+// VOD_TWITCH_VOD_COPY=true to go back to copying.
+function copiesVideo(kind) {
+  if (kind === "twitch-live") return String(process.env.VOD_TWITCH_LIVE_COPY || "true").toLowerCase() !== "false";
+  if (kind === "twitch-vod") return String(process.env.VOD_TWITCH_VOD_COPY || "false").toLowerCase() === "true";
+  return false;
+}
+
 function ffmpegArgsFor(source, outputUrl, options = {}) {
   const selected = options.forceCpu ? { id:"libx264", encoder:"libx264", hardware:false, label:"CPU · x264" } : detectEncoder();
   const isLive = source.kind === "twitch-live";
-  const isTwitch = source.kind === "twitch-live" || source.kind === "twitch-vod";
+  // Remote HLS (Twitch) inputs need the live/HLS input options; local files do not.
+  const isHls = source.kind === "twitch-live" || source.kind === "twitch-vod";
+  const copy = copiesVideo(source.kind);
   const inputs = source.inputs || [];
   const args = ["-hide_banner", "-loglevel", "warning", "-nostats"];
-  if (!isTwitch) args.push(...globalEncoderArgs(selected));
+  if (!copy) args.push(...globalEncoderArgs(selected));
 
   for (const input of inputs) {
     if (!isLive) args.push("-re");
-    if (isTwitch) args.push(...liveInputArgs());
+    if (isHls) args.push(...liveInputArgs());
     args.push("-i", input);
   }
 
   args.push("-map", "0:v:0");
-  if (inputs.length > 1) args.push("-map", isTwitch ? "1:a:0" : "1:a:0?");
-  else args.push("-map", isTwitch ? "0:a:0" : "0:a:0?");
+  if (inputs.length > 1) args.push("-map", isHls ? "1:a:0" : "1:a:0?");
+  else args.push("-map", isHls ? "0:a:0" : "0:a:0?");
 
-  // Twitch HLS is kept copy-light for video, but audio is always decoded and
-  // rebuilt as a continuous AAC stereo stream before MediaMTX sees it. Some
-  // Twitch HLS relays looked fine on video while copied audio disappeared or
-  // arrived with unusable timestamps at downstream YouTube RTMP ingest.
-  if (isTwitch) {
+  // Copied Twitch video keeps the source frames, but audio is always decoded
+  // and rebuilt as a continuous AAC stereo stream before MediaMTX sees it.
+  // Some Twitch HLS relays looked fine on video while copied audio
+  // disappeared or arrived with unusable timestamps at downstream ingest.
+  if (copy) {
     args.push(
       "-c:v", "copy",
       ...stableAudioArgs({
@@ -152,6 +167,7 @@ function ffmpegArgsFor(source, outputUrl, options = {}) {
     let vf = "scale=1920:1080:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2";
     if (selected.id === "vaapi") vf += ",format=nv12,hwupload";
     else vf += ",format=yuv420p";
+    const tuned = cpuX264Tuning({ hardwareEncoder:selected.hardware, width:1920, height:1080, fps, kind:"transcode" });
     args.push(
       "-vf", vf,
       "-r", String(fps),
@@ -161,12 +177,12 @@ function ffmpegArgsFor(source, outputUrl, options = {}) {
         maxrate:process.env.VOD_VIDEO_MAXRATE || "6500k",
         bufsize:process.env.VOD_VIDEO_BUFSIZE || "12000k",
         // Measured CPU-only hosts get a preset that fits; otherwise veryfast.
-        ...(() => { const t = cpuX264Tuning({ hardwareEncoder:selected.hardware, width:1920, height:1080, fps, kind:"transcode" }); return { x264Preset:process.env.VOD_X264_PRESET || (t.auto ? t.preset : "veryfast"), x264Threads:t.threads }; })(),
+        x264Preset:process.env.VOD_X264_PRESET || (tuned.auto ? tuned.preset : "veryfast"),
+        x264Threads:tuned.threads,
       }),
-      "-c:a", "aac",
-      "-b:a", process.env.VOD_AUDIO_BITRATE || "160k",
-      "-ar", "48000",
-      "-ac", "2"
+      ...(isHls
+        ? stableAudioArgs({ bitrate:process.env.VOD_AUDIO_BITRATE || "160k", sampleRate:"48000" })
+        : ["-c:a", "aac", "-b:a", process.env.VOD_AUDIO_BITRATE || "160k", "-ar", "48000", "-ac", "2"])
     );
   }
 
@@ -174,7 +190,7 @@ function ffmpegArgsFor(source, outputUrl, options = {}) {
   return args;
 }
 
-function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDurationSeconds, rtmpOrigin = "rtmp://127.0.0.1:1935", twitchApi = null }) {
+function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDurationSeconds, rtmpOrigin = "rtmp://127.0.0.1:1935", twitchApi = null, allowCustomDownloadDir = false }) {
   const sessions = new Map();
 
   function ensureCollections(account) {
@@ -222,6 +238,9 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
       kind:session.kind,
       title:session.title,
       loop:!!session.loop,
+      shuffle:!!session.queue?.shuffle,
+      queue:session.queue ? { index:session.queue.index, length:session.queue.ids.length, ids:session.queue.ids } : null,
+      local:!!session.local,
       startedAt:session.startedAt,
       error:session.error || null,
       encoder:session.encoder || null,
@@ -241,29 +260,66 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
     sessions.delete(accountId);
   }
 
+  // ------------------------------------------------ optional local copies
+  // Remote VODs (YouTube / Twitch) normally stream straight from the site.
+  // A user can also download one: playback then prefers the local file and
+  // falls back to the website if the file is gone.
+  function downloadDirFor(account, info) {
+    const custom = allowCustomDownloadDir ? String(account.vodSettings?.downloadDir || "").trim() : "";
+    return custom ? path.join(custom, safeSegment(info.profileId)) : path.join(diskDir(account, info.profileId), "downloads");
+  }
+
+  function localFileFor(item) {
+    const file = item?.download?.file;
+    return file && item.download.state === "done" && fs.existsSync(file) ? file : null;
+  }
+
+  function preferLocal(account) {
+    return account.vodSettings?.preferLocal !== false;
+  }
+
   async function sourceForItem(account, info, item) {
     if (item.kind === "upload") {
       const filePath = uploadedFilePath(account, info, item);
       if (!filePath || !fs.existsSync(filePath)) throw new Error("uploaded VOD file is missing");
       return { kind:"upload", inputs:[filePath] };
     }
-    if (item.kind === "youtube" || item.kind === "twitch-vod") return { kind:item.kind, inputs:await resolveRemote(item.kind, item.url) };
+    if (item.kind === "youtube" || item.kind === "twitch-vod") {
+      const local = preferLocal(account) ? localFileFor(item) : null;
+      if (local) return { kind:"file", inputs:[local], local:true };
+      return { kind:item.kind, inputs:await resolveRemote(item.kind, item.url) };
+    }
     throw new Error("unsupported VOD source");
   }
 
+  function shuffled(list) {
+    const out = [...list];
+    for (let i = out.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [out[i], out[j]] = [out[j], out[i]]; }
+    return out;
+  }
+
+  function encoderLabelFor(source) {
+    return copiesVideo(source.kind) ? { label:"Video copy · AAC audio", hardware:false } : detectEncoder();
+  }
+
+  // One running rerun per account. meta.queue = { ids, index, shuffle, loop }
+  // plays a playlist: each item is resolved when its turn comes.
   async function startResolved(account, info, source, meta) {
     await stop(account.twitchUserId);
     const relayPath = profilePublishPath(info.profile, RELAY_APP);
     if (!relayPath) throw new Error("profile RTMP key is unavailable; reload the profile and try again");
     const outputUrl = `${rtmpOrigin}/${relayPath}`;
-    const encoder = (source.kind === "twitch-live" || source.kind === "twitch-vod") ? { label:"Video copy · AAC audio", hardware:false } : detectEncoder();
+    let current = source;
+    let encoder = encoderLabelFor(current);
     const session = {
       state:"starting",
       profileId:info.profile.id,
       itemId:meta.itemId || null,
-      kind:source.kind,
+      kind:current.kind,
       title:meta.title || "Rerun",
       loop:!!meta.loop,
+      queue:meta.queue || null,
+      local:!!current.local,
       startedAt:new Date().toISOString(),
       error:null,
       encoder:encoder.label,
@@ -271,14 +327,43 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
       child:null,
       manualStop:false,
       forceCpu:false,
+      failures:0,
     };
     sessions.set(account.twitchUserId, session);
+    const alive = () => !session.manualStop && sessions.get(account.twitchUserId) === session;
+
+    // Next playlist entry; skips items that were deleted or fail to resolve.
+    const advance = async () => {
+      const q = session.queue;
+      while (alive()) {
+        q.index += 1;
+        if (q.index >= q.ids.length) {
+          if (!q.loop) { session.state = "completed"; return; }
+          q.index = 0;
+          if (q.shuffle) q.ids = shuffled(q.ids);
+        }
+        if (session.failures >= q.ids.length) { session.state = "error"; session.error = `every playlist item failed${session.error ? ` (last: ${session.error})` : ""}`; return; }
+        const item = info.items.find(i => i.id === q.ids[q.index]);
+        if (!item) { session.failures += 1; continue; }
+        try {
+          session.state = "restarting";
+          current = await sourceForItem(account, info, item);
+          if (!alive()) return;
+          encoder = encoderLabelFor(current);
+          Object.assign(session, { itemId:item.id, title:item.title, kind:current.kind, local:!!current.local, encoder:encoder.label, forceCpu:false });
+          return launch();
+        } catch (err) {
+          session.failures += 1;
+          session.error = `${item.title}: ${err.message}`;
+        }
+      }
+    };
 
     const launch = () => {
-      if (session.manualStop || sessions.get(account.twitchUserId) !== session) return;
+      if (!alive()) return;
       session.state = "starting";
       const started = Date.now();
-      const child = spawn(FFMPEG_BIN, ffmpegArgsFor(source, outputUrl, { forceCpu:session.forceCpu }), { stdio:["ignore", "ignore", "pipe"] });
+      const child = spawn(FFMPEG_BIN, ffmpegArgsFor(current, outputUrl, { forceCpu:session.forceCpu }), { stdio:["ignore", "ignore", "pipe"] });
       session.child = child;
       let stderrTail = "";
       child.stderr.on("data", chunk => { stderrTail = (stderrTail + chunk.toString()).slice(-6000); });
@@ -286,15 +371,20 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
       child.once("spawn", () => { session.state = "playing"; });
       child.once("close", code => {
         if (session.child === child) session.child = null;
-        if (session.manualStop || sessions.get(account.twitchUserId) !== session) return;
+        if (!alive()) return;
         const fastFailure = code !== 0 && Date.now() - started < 8000;
-        if (fastFailure && encoder.hardware && source.kind !== "twitch-live" && source.kind !== "twitch-vod" && !session.forceCpu) {
+        if (fastFailure && encoder.hardware && !copiesVideo(current.kind) && !session.forceCpu) {
           session.forceCpu = true;
           session.encoder = "CPU · x264 fallback";
           session.state = "restarting";
           return setTimeout(launch, 500);
         }
-        if (code === 0 && session.loop && source.kind !== "twitch-live") {
+        if (session.queue) {
+          if (code === 0) session.failures = 0;
+          else { session.failures += 1; session.error = stderrTail.split(/\r?\n/).filter(Boolean).slice(-3).join(" · ") || `FFmpeg exited with code ${code}`; }
+          return setTimeout(() => { advance().catch(err => { session.state = "error"; session.error = err.message; }); }, 750);
+        }
+        if (code === 0 && session.loop && current.kind !== "twitch-live") {
           session.state = "restarting";
           return setTimeout(launch, 750);
         }
@@ -314,6 +404,181 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
     if (!item) throw new Error("unknown VOD item in this profile");
     const source = await sourceForItem(account, info, item);
     return startResolved(account, info, source, { itemId:item.id, title:item.title, loop });
+  }
+
+  // ------------------------------------------------------------ playlist
+  function playlistFor(info) {
+    const ids = Array.isArray(info.bucket?.playlist) ? info.bucket.playlist : [];
+    const known = new Set(info.items.map(i => i.id));
+    return ids.filter(id => known.has(id));
+  }
+
+  function setPlaylist(account, profileId, itemIds) {
+    const info = bucketFor(account, profileId);
+    if (!info) throw Object.assign(new Error("unknown profile"), { status:404 });
+    const known = new Set(info.items.map(i => i.id));
+    const ids = [...new Set((Array.isArray(itemIds) ? itemIds : []).map(String))].filter(id => known.has(id)).slice(0, 500);
+    info.bucket.playlist = ids;
+    saveState(state);
+    return ids;
+  }
+
+  // Adds a library item, or a Twitch cloud VOD (copied into the library
+  // first), to the end of the playlist.
+  async function addToPlaylist(account, profileId, { itemId = null, twitchVideoId = null } = {}) {
+    const info = bucketFor(account, profileId);
+    if (!info) throw Object.assign(new Error("unknown profile"), { status:404 });
+    let item = itemId ? info.items.find(i => i.id === String(itemId)) : null;
+    if (!item && twitchVideoId) {
+      const catalog = await getTwitchCatalog(account);
+      const video = (catalog.items || []).find(v => String(v.id) === String(twitchVideoId));
+      if (!video) throw Object.assign(new Error("Twitch VOD was not found in your account catalog"), { status:404 });
+      item = info.items.find(i => i.kind === "twitch-vod" && i.twitchVideoId === String(video.id));
+      if (!item) {
+        item = { id:crypto.randomUUID(), kind:"twitch-vod", twitchVideoId:String(video.id), title:video.title, uploader:video.userName || "", thumbnail:video.thumbnail || "", url:video.url, durationS:video.durationS ?? null, addedAt:new Date().toISOString() };
+        info.items.push(item);
+      }
+    }
+    if (!item) throw Object.assign(new Error("unknown VOD item in this profile"), { status:404 });
+    const ids = playlistFor(info);
+    ids.push(item.id);
+    info.bucket.playlist = ids;
+    saveState(state);
+    return { playlist:ids, item };
+  }
+
+  async function playPlaylist(account, profileId, { shuffle = false, loop = false, startItemId = null } = {}) {
+    const info = bucketFor(account, profileId, false);
+    if (!info) throw new Error("unknown profile");
+    // An empty playlist plays the whole library (e.g. "shuffle everything").
+    let ids = playlistFor(info);
+    if (!ids.length) ids = info.items.map(i => i.id);
+    if (!ids.length) throw new Error("add some VODs to the library or playlist first");
+    if (shuffle) ids = shuffled(ids);
+    let index = startItemId ? Math.max(0, ids.indexOf(String(startItemId))) : 0;
+    const queue = { ids, index, shuffle:!!shuffle, loop:!!loop };
+    // Resolve the first playable entry; later ones are resolved on their turn.
+    let lastError = null;
+    for (let tries = 0; tries < ids.length; tries++, index = (index + 1) % ids.length) {
+      const item = info.items.find(i => i.id === ids[index]);
+      if (!item) continue;
+      try {
+        const source = await sourceForItem(account, info, item);
+        queue.index = index;
+        return startResolved(account, info, source, { itemId:item.id, title:item.title, loop:!!loop, queue });
+      } catch (err) { lastError = err; }
+    }
+    throw lastError || new Error("no playable VOD in the playlist");
+  }
+
+  // ------------------------------------------------------------ downloads
+  const downloads = new Map(); // `${accountId}:${itemId}` -> yt-dlp child
+
+  function ffmpegLocation() {
+    return path.isAbsolute(FFMPEG_BIN) ? path.dirname(FFMPEG_BIN) : null;
+  }
+
+  function startDownload(account, profileId, itemId) {
+    const info = bucketFor(account, profileId, false);
+    if (!info) throw Object.assign(new Error("unknown profile"), { status:404 });
+    const item = info.items.find(i => i.id === String(itemId));
+    if (!item) throw Object.assign(new Error("unknown VOD item in this profile"), { status:404 });
+    if (item.kind !== "youtube" && item.kind !== "twitch-vod") throw new Error("only YouTube / Twitch VODs can be downloaded; uploads are already local");
+    const key = `${account.twitchUserId}:${item.id}`;
+    if (downloads.has(key)) return item.download;
+    const dir = downloadDirFor(account, info);
+    fs.mkdirSync(dir, { recursive:true });
+    const location = ffmpegLocation();
+    const args = [...ytDlpBase(item.kind), "-f", remoteFormatFor(item.kind), "--merge-output-format", "mp4", "--newline", "--no-part",
+      ...(location ? ["--ffmpeg-location", location] : []),
+      "--print", "after_move:filepath", "-o", path.join(dir, `${item.id}.%(ext)s`), item.url];
+    const child = spawn(YTDLP_BIN, args, { stdio:["ignore", "pipe", "pipe"] });
+    downloads.set(key, child);
+    item.download = { state:"downloading", progress:0, dir, startedAt:new Date().toISOString(), error:null, file:null };
+    saveState(state);
+    let out = "", err = "";
+    child.stdout.on("data", chunk => {
+      const text = chunk.toString();
+      out = (out + text).slice(-8000);
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      for (const line of lines) { const m = /\[download\]\s+([\d.]+)%/.exec(line); if (m) item.download.progress = Math.min(100, Number(m[1])); }
+    });
+    child.stderr.on("data", chunk => { err = (err + chunk.toString()).slice(-4000); });
+    let finished = false;
+    const finish = (ok, message) => {
+      if (finished) return;
+      finished = true;
+      downloads.delete(key);
+      if (!item.download) return; // cancelled and removed
+      const printed = out.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith("[")).pop();
+      const file = ok && printed && fs.existsSync(printed) ? printed : null;
+      item.download = {
+        ...item.download,
+        state:file ? "done" : "error",
+        progress:file ? 100 : item.download.progress,
+        file,
+        finishedAt:new Date().toISOString(),
+        sizeBytes:file ? fs.statSync(file).size : null,
+        error:file ? null : (message || friendlyResolverError(item.kind, err, "download failed").message),
+      };
+      saveState(state);
+    };
+    child.on("error", e => finish(false, e.message));
+    child.on("close", code => finish(code === 0));
+    return item.download;
+  }
+
+  function removeDownload(account, profileId, itemId) {
+    const info = bucketFor(account, profileId, false);
+    if (!info) throw Object.assign(new Error("unknown profile"), { status:404 });
+    const item = info.items.find(i => i.id === String(itemId));
+    if (!item) throw Object.assign(new Error("unknown VOD item in this profile"), { status:404 });
+    const key = `${account.twitchUserId}:${item.id}`;
+    const child = downloads.get(key);
+    const download = item.download;
+    delete item.download;
+    saveState(state);
+    if (child) { try { child.kill("SIGTERM"); } catch {} }
+    removeLocalFiles(download, item.id);
+  }
+
+  // The finished file, plus any partial file a cancelled download left.
+  function removeLocalFiles(download, itemId) {
+    if (!download) return;
+    if (download.file) fs.unlink(download.file, () => {});
+    if (download.dir) {
+      fs.readdir(download.dir, (err, names) => {
+        if (err) return;
+        for (const name of names) if (name.startsWith(`${itemId}.`)) fs.unlink(path.join(download.dir, name), () => {});
+      });
+    }
+  }
+
+  function getSettings(account) {
+    return {
+      downloadDir:allowCustomDownloadDir ? String(account.vodSettings?.downloadDir || "") : "",
+      preferLocal:preferLocal(account),
+      customDirAllowed:allowCustomDownloadDir,
+      defaultDir:allowCustomDownloadDir ? path.join(vodDir, safeSegment(account.twitchUserId)) : null,
+    };
+  }
+
+  function updateSettings(account, body = {}) {
+    const next = { ...(account.vodSettings || {}) };
+    if (body.preferLocal !== undefined) next.preferLocal = Boolean(body.preferLocal);
+    if (body.downloadDir !== undefined) {
+      if (!allowCustomDownloadDir) throw Object.assign(new Error("a custom download folder is only available in the desktop app"), { status:403 });
+      const dir = String(body.downloadDir || "").trim();
+      if (dir && !path.isAbsolute(dir)) throw new Error("choose a full folder path");
+      if (dir) {
+        try { fs.mkdirSync(dir, { recursive:true }); fs.accessSync(dir, fs.constants.W_OK); }
+        catch { throw new Error("CastNexus cannot write to that folder"); }
+      }
+      next.downloadDir = dir;
+    }
+    account.vodSettings = next;
+    saveState(state);
+    return getSettings(account);
   }
 
   async function refreshTwitchCatalog(account) {
@@ -388,7 +653,38 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
     router.get("/items", (req, res) => {
       const info = bucketFor(req.account, req.query.profileId);
       if (!info) return res.status(404).json({ error:"unknown profile" });
-      res.json({ profileId:info.profile.id, items:info.items });
+      res.json({ profileId:info.profile.id, items:info.items, playlist:playlistFor(info), settings:getSettings(req.account) });
+    });
+
+    // Playlist: ordered item ids; plays in order or shuffled, optionally looping.
+    const fail = (res, err, code) => res.status(err.status || (err.code === "YOUTUBE_CHALLENGE" ? 422 : 400)).json({ error:err.message, code:err.code || code });
+    router.put("/playlist", (req, res) => {
+      try { res.json({ ok:true, playlist:setPlaylist(req.account, req.body?.profileId, req.body?.itemIds) }); }
+      catch (err) { fail(res, err, "PLAYLIST_FAILED"); }
+    });
+    router.post("/playlist/add", async (req, res) => {
+      try { res.json({ ok:true, ...(await addToPlaylist(req.account, req.body?.profileId, { itemId:req.body?.itemId, twitchVideoId:req.body?.twitchVideoId })) }); }
+      catch (err) { fail(res, err, "PLAYLIST_FAILED"); }
+    });
+    router.post("/playlist/play", async (req, res) => {
+      const { profileId, shuffle, loop, startItemId } = req.body || {};
+      try { res.json({ ok:true, status:await playPlaylist(req.account, profileId, { shuffle:Boolean(shuffle), loop:Boolean(loop), startItemId:startItemId || null }) }); }
+      catch (err) { fail(res, err, "PLAY_FAILED"); }
+    });
+
+    // Optional local copies of remote VODs.
+    router.post("/items/:id/download", (req, res) => {
+      try { res.json({ ok:true, download:startDownload(req.account, req.body?.profileId || req.query.profileId, req.params.id) }); }
+      catch (err) { fail(res, err, "DOWNLOAD_FAILED"); }
+    });
+    router.delete("/items/:id/download", (req, res) => {
+      try { removeDownload(req.account, req.query.profileId, req.params.id); res.json({ ok:true }); }
+      catch (err) { fail(res, err, "DOWNLOAD_FAILED"); }
+    });
+    router.get("/settings", (req, res) => res.json(getSettings(req.account)));
+    router.put("/settings", (req, res) => {
+      try { res.json({ ok:true, settings:updateSettings(req.account, req.body || {}) }); }
+      catch (err) { fail(res, err, "SETTINGS_FAILED"); }
     });
 
     router.get("/twitch-vods", async (req, res) => {
@@ -460,6 +756,12 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
       const running = sessions.get(req.account.twitchUserId);
       if (running?.itemId === item.id) await stop(req.account.twitchUserId);
       info.bucket.items = info.items.filter(i => i.id !== item.id);
+      if (Array.isArray(info.bucket.playlist)) info.bucket.playlist = info.bucket.playlist.filter(id => id !== item.id);
+      const download = item.download;
+      delete item.download;
+      const child = downloads.get(`${req.account.twitchUserId}:${item.id}`);
+      if (child) { try { child.kill("SIGTERM"); } catch {} }
+      removeLocalFiles(download, item.id);
       saveState(state);
       if (item.kind === "upload") {
         const filePath = uploadedFilePath(req.account, info, item);
@@ -551,9 +853,10 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
 
   return {
     createApiRouter, bucketFor, diskDir, publicStatus, stop, playItem, startTwitchLive, libraries, moveLibrary,
+    playlistFor, setPlaylist, addToPlaylist, playPlaylist, startDownload, removeDownload, getSettings, updateSettings,
     refreshTwitchCatalog, getTwitchCatalog, playTwitchCatalogItem, ownLiveStatus,
     normalizeRemoteUrl, resolveRemote, inspectRemote, ffmpegArgsFor, remoteFormatFor,
   };
 }
 
-module.exports = { createProfileVodService, normalizeRemoteUrl, isYouTubeChallenge, ffmpegArgsFor, remoteFormatFor };
+module.exports = { createProfileVodService, normalizeRemoteUrl, isYouTubeChallenge, ffmpegArgsFor, remoteFormatFor, copiesVideo };

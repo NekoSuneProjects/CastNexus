@@ -378,3 +378,5 @@ input[type="checkbox"] { width:auto; accent-color:var(--purple); }
 .stream-key-choice .radio-row { display:flex; align-items:center; gap:8px; margin:4px 0; text-transform:none; letter-spacing:0; font-size:.9rem; color:inherit; cursor:pointer; }
 .stream-key-choice .radio-row input { width:auto; margin:0; flex:none; }
 .stream-key-choice [hidden], #pf-key-wrap[hidden] { display:none !important; }
+/* .nav-item sets display:flex, which would otherwise beat the hidden attribute. */
+.nav-item[hidden] { display:none !important; }

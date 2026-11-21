@@ -42,7 +42,17 @@ function createHostedOauth({ brokerUrl, fetchImpl = global.fetch } = {}) {
     const { data } = await request("/v1/youtube/refresh", { method:"POST", body:JSON.stringify({ refreshToken }) });
     return data;
   }
-  return { start, exchange, twitchHelix, youtubeRefresh, baseUrl:base };
+  // Stream title / game tokens (purpose channel_manage). The broker only adds
+  // its client secret; the refreshed tokens come straight back here.
+  async function twitchRefresh(refreshToken) {
+    const { data } = await request("/v1/twitch/refresh", { method:"POST", body:JSON.stringify({ refreshToken }) });
+    return data;
+  }
+  async function kickRefresh(refreshToken) {
+    const { data } = await request("/v1/kick/refresh", { method:"POST", body:JSON.stringify({ refreshToken }) });
+    return data;
+  }
+  return { start, exchange, twitchHelix, youtubeRefresh, twitchRefresh, kickRefresh, baseUrl:base };
 }
 
 module.exports = { createHostedOauth, createPkce, base64url };

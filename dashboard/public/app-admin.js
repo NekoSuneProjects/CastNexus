@@ -20,7 +20,8 @@
     const nav = document.getElementById("main-nav");
     if (!nav) return;
     let item = nav.querySelector('[data-page="admin"]');
-    const owner = !!S.status?.isOwner;
+    // Desktop app: no admin side (the server reports adminAvailable:false).
+    const owner = !!S.status?.isOwner && S.status?.adminAvailable !== false;
     if (owner && !item) {
       item = document.createElement("button");
       item.className = "nav-item";

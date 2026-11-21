@@ -44,6 +44,7 @@
     image:{ icon:"🖼", label:"Image", desc:"PNG / JPG / WebP by URL." },
     gif:{ icon:"✨", label:"Animated GIF", desc:"GIF by URL." },
     video:{ icon:"🎞", label:"Video", desc:"MP4 / WebM by URL, loops, optional audio." },
+    youtube:{ icon:"▶", label:"YouTube video", desc:"YouTube video, Short, live or playlist. Autoplays, loops, optional audio." },
     text:{ icon:"T", label:"Text", desc:"Static text." },
     clock:{ icon:"🕒", label:"Clock", desc:"Local time, updates once a second." },
     countdown:{ icon:"⏳", label:"Countdown", desc:"Countdown to a time." },
@@ -56,9 +57,19 @@
     html:{ icon:"</>", label:"Custom HTML", desc:"Your own HTML/CSS/JS in a sandbox." },
     css:{ icon:"#", label:"Custom CSS", desc:"Extra CSS applied to the program page." },
   };
-  const ADD_ORDER = ["streamelements", "browser", "streamlabs", "alertbox", "chat", "program", "image", "gif", "video", "text", "html", "css", "music", "nowplaying", "clock", "countdown", "webcam", "background", "color", "gradient", "webpage", "iframe"];
+  const ADD_ORDER = ["streamelements", "browser", "streamlabs", "alertbox", "chat", "program", "image", "gif", "video", "youtube", "text", "html", "css", "music", "nowplaying", "clock", "countdown", "webcam", "background", "color", "gradient", "webpage", "iframe"];
   const BROWSER = ["browser", "streamelements", "streamlabs", "webpage", "iframe", "chat", "alertbox"];
-  const AUDIO = [...BROWSER, "video", "html"];
+  const AUDIO = [...BROWSER, "video", "youtube", "html"];
+  // Client copy of scene-model.parseYouTubeUrl (thumbnails + form validation).
+  function youTubeIds(value) {
+    let u; try { u = new URL(String(value || "").trim()); } catch { return null; }
+    const host = u.hostname.toLowerCase().replace(/^(www|m|music)\./, "");
+    if (!["youtube.com", "youtu.be", "youtube-nocookie.com"].includes(host)) return null;
+    const parts = u.pathname.split("/").filter(Boolean);
+    const id = host === "youtu.be" ? parts[0] : ["shorts", "live", "embed", "v"].includes(parts[0]) ? parts[1] : parts[0] === "watch" ? u.searchParams.get("v") : "";
+    const out = { videoId:/^[A-Za-z0-9_-]{11}$/.test(id || "") ? id : "", playlistId:/^[A-Za-z0-9_-]{10,64}$/.test(u.searchParams.get("list") || "") ? u.searchParams.get("list") : "" };
+    return out.videoId || out.playlistId ? out : null;
+  }
   const SLOT_LABELS = { startingSoon:"Starting Soon", brb:"BRB", ending:"Ending", offline:"Offline" };
   const SLOT_MODE_LABELS = { builtin:"Built-in CastNexus scene", scene:"Overlay Studio scene", url:"StreamElements / browser URL", html:"Custom HTML scene", media:"Image / video background" };
 
@@ -316,6 +327,7 @@
       case "background": return `<div style="width:100%;height:100%;background:${esc(c.color || "#05060a")}">${c.src ? `<img src="${esc(c.src)}" style="object-fit:${esc(c.fit || "cover")}" alt="">` : ""}</div>`;
       case "image": case "gif": return c.src ? `<img src="${esc(c.src)}" style="object-fit:${esc(c.fit || "cover")}" alt="">` : ph("No image URL");
       case "video": return c.src && ST.live ? `<video src="${esc(c.src)}" muted autoplay loop playsinline style="object-fit:${esc(c.fit || "cover")}"></video>` : ph(c.src ? safeHost(c.src) : "No video URL");
+      case "youtube": { const ids = youTubeIds(c.url); return ids?.videoId ? `<div style="position:relative;width:100%;height:100%;background:#000"><img src="https://i.ytimg.com/vi/${esc(ids.videoId)}/hqdefault.jpg" style="object-fit:cover;opacity:.85" alt=""><span class="st-icon" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:${Math.max(18, Math.min(layer.width, layer.height) / 6)}px;color:#ff3d3d">▶</span></div>` : ph(ids?.playlistId ? "YouTube playlist" : "No YouTube URL"); }
       case "text": return text("");
       case "clock": return text(`<span data-st-clock>${new Date().toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" })}</span>`);
       case "countdown": return text("<span>05:00</span>");
@@ -627,6 +639,7 @@
         <div class="full callout" style="margin:0">No StreamElements API key is needed - CastNexus renders the overlay URL like an OBS browser source.</div>`;
     }
     if (["image", "gif", "background"].includes(layer.type)) html += `<div class="props-section full">Image</div>${field("Image URL", cfgInput("src", c.src, "url", 'placeholder="https://…"'), true)}${field("Fit", `<select data-cfg="fit">${["cover", "contain", "fill"].map(v => `<option ${c.fit === v ? "selected" : ""}>${v}</option>`).join("")}</select>`)}${layer.type === "background" ? field("Colour", cfgInput("color", c.color || "#05060a", "color")) : ""}`;
+    if (layer.type === "youtube") html += `<div class="props-section full">YouTube</div>${field("YouTube URL", cfgInput("url", c.url, "url", 'placeholder="https://www.youtube.com/watch?v=… (add &t=90 to start later)"'), true)}<label class="check-inline"><input type="checkbox" data-cfg-bool="loop" ${c.loop !== false ? "checked" : ""}> Loop</label><label class="check-inline"><input type="checkbox" data-cfg-bool="controls" ${c.controls ? "checked" : ""}> Show player controls</label><label class="check-inline"><input type="checkbox" data-cfg-bool="captions" ${c.captions ? "checked" : ""}> Captions</label><div class="stat-sub full">Turn audio on in Mixer to put the video's sound into the stream (otherwise it plays muted). Only use videos you have the rights to broadcast.</div>`;
     if (layer.type === "video") html += `<div class="props-section full">Video</div>${field("Video URL", cfgInput("src", c.src, "url", 'placeholder="https://…/loop.mp4"'), true)}${field("Fit", `<select data-cfg="fit">${["cover", "contain", "fill"].map(v => `<option ${c.fit === v ? "selected" : ""}>${v}</option>`).join("")}</select>`)}<label class="check-inline"><input type="checkbox" data-cfg-bool="loop" ${c.loop !== false ? "checked" : ""}> Loop</label>`;
     if (["text", "clock", "countdown"].includes(layer.type)) {
       html += `<div class="props-section full">Text</div>${field(layer.type === "text" ? "Text" : "Prefix text", `<textarea data-cfg="text" style="min-height:54px">${esc(c.text || "")}</textarea>`, true)}
@@ -901,7 +914,7 @@
     const s = scene();
     const W = s.canvas.width, H = s.canvas.height;
     const full = ["program", "background", "css", "streamelements", "alertbox"].includes(type) || (type === "music");
-    const sizes = { text:[W * .5, H * .12], clock:[W * .2, H * .08], countdown:[W * .3, H * .12], chat:[W * .28, H * .5], webcam:[W * .3, W * .3 * 9 / 16], nowplaying:[W * .22, W * .22 * .24], color:[W * .25, H * .25], gradient:[W * .3, H * .3], image:[W * .25, H * .25], gif:[W * .2, W * .2], video:[W * .4, W * .4 * 9 / 16], browser:[W * .4, H * .4], streamlabs:[W, H], webpage:[W * .5, H * .5], iframe:[W * .5, H * .5], html:[W * .4, H * .3] };
+    const sizes = { text:[W * .5, H * .12], clock:[W * .2, H * .08], countdown:[W * .3, H * .12], chat:[W * .28, H * .5], webcam:[W * .3, W * .3 * 9 / 16], nowplaying:[W * .22, W * .22 * .24], color:[W * .25, H * .25], gradient:[W * .3, H * .3], image:[W * .25, H * .25], gif:[W * .2, W * .2], video:[W * .4, W * .4 * 9 / 16], youtube:[W * .4, W * .4 * 9 / 16], browser:[W * .4, H * .4], streamlabs:[W, H], webpage:[W * .5, H * .5], iframe:[W * .5, H * .5], html:[W * .4, H * .3] };
     let [w, h] = full ? [W, H] : (sizes[type] || [W * .3, H * .3]);
     // StreamElements / Streamlabs / alert overlays are designed at 1920x1080:
     // render them at that size; on a 9:16 canvas start as a scaled band.
@@ -931,6 +944,7 @@
       <div class="full"><label>Name</label><input id="src-name" value="${esc(base.name)}"></div>
       ${needsUrl ? `<div class="full"><label>${type === "streamelements" ? "StreamElements overlay URL" : type === "streamlabs" ? "Streamlabs widget URL" : "URL"}</label><input id="src-url" type="url" placeholder="${type === "streamelements" ? "https://streamelements.com/overlay/xxxxxxxx/yyyyyyyy" : "https://…"}"></div>` : ""}
       ${needsSrc ? `<div class="full"><label>${type === "video" ? "Video URL (mp4/webm)" : "Image URL"}</label><input id="src-src" type="url" placeholder="https://…"></div>` : ""}
+      ${type === "youtube" ? `<div class="full"><label>YouTube video, Short, live or playlist URL</label><input id="src-yt" type="url" placeholder="https://www.youtube.com/watch?v=…"></div>` : ""}
       ${type === "text" ? `<div class="full"><label>Text</label><textarea id="src-text">Your text</textarea></div>` : ""}
       ${type === "html" ? `<div class="full"><label>HTML</label><textarea id="src-html" placeholder="<div class='box'>Hello</div>"></textarea></div><div class="full"><label>CSS</label><textarea id="src-css"></textarea></div>` : ""}
       ${type === "css" ? `<div class="full"><label>CSS</label><textarea id="src-css"></textarea></div>` : ""}
@@ -949,6 +963,7 @@
       const url = $("#src-url")?.value.trim(), src = $("#src-src")?.value.trim();
       if (needsUrl) { if (!/^https?:\/\//i.test(url || "")) { $("#modal-error").textContent = "Enter an http(s) URL"; return; } layer.config.url = url; }
       if (needsSrc) { if (!/^https?:\/\//i.test(src || "")) { $("#modal-error").textContent = "Enter an http(s) URL"; return; } layer.config.src = src; }
+      if (type === "youtube") { const yt = $("#src-yt").value.trim(); if (!youTubeIds(yt)) { $("#modal-error").textContent = "Enter a YouTube video, Shorts, live or playlist link"; return; } layer.config.url = yt; }
       if (type === "text") layer.config.text = $("#src-text").value;
       if (type === "html") { layer.config.html = $("#src-html").value; layer.config.css = $("#src-css").value; }
       if (type === "css") layer.config.css = $("#src-css").value;

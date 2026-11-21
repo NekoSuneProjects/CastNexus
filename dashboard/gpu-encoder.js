@@ -133,15 +133,18 @@ function videoEncoderArgs(profile = detectEncoder(), options = {}) {
   const gop = String(Math.max(1, Number(options.gop || fps * 2)));
 
   const commonRate = ["-b:v", bitrate, "-maxrate", maxrate, "-bufsize", bufsize, "-g", gop];
+  // WebRTC playback (Studio preview, public web player, WHIP) cannot decode
+  // B-frames, and some GPU encoders/presets emit them by default.
+  const noBFrames = ["-bf", "0"];
   switch (profile.id) {
     case "nvenc":
-      return ["-c:v", "h264_nvenc", "-preset", process.env.NVENC_PRESET || "p4", "-tune", "ll", "-rc", "cbr", ...commonRate, "-profile:v", "high", "-pix_fmt", "yuv420p"];
+      return ["-c:v", "h264_nvenc", "-preset", process.env.NVENC_PRESET || "p4", "-tune", "ll", "-rc", "cbr", ...commonRate, ...noBFrames, "-profile:v", "high", "-pix_fmt", "yuv420p"];
     case "qsv":
-      return ["-c:v", "h264_qsv", "-preset", process.env.QSV_PRESET || "veryfast", ...commonRate, "-profile:v", "high", "-pix_fmt", "nv12"];
+      return ["-c:v", "h264_qsv", "-preset", process.env.QSV_PRESET || "veryfast", ...commonRate, ...noBFrames, "-profile:v", "high", "-pix_fmt", "nv12"];
     case "vaapi":
-      return ["-c:v", "h264_vaapi", ...commonRate, "-profile:v", "high"];
+      return ["-c:v", "h264_vaapi", ...commonRate, ...noBFrames, "-profile:v", "high"];
     case "amf":
-      return ["-c:v", "h264_amf", "-usage", "lowlatency", "-quality", process.env.AMF_QUALITY || "speed", "-rc", "cbr", ...commonRate, "-profile:v", "high"];
+      return ["-c:v", "h264_amf", "-usage", "lowlatency", "-quality", process.env.AMF_QUALITY || "speed", "-rc", "cbr", ...commonRate, ...noBFrames, "-profile:v", "high"];
     case "videotoolbox":
       return ["-c:v", "h264_videotoolbox", "-realtime", "1", ...commonRate, "-profile:v", "high", "-pix_fmt", "yuv420p"];
     case "v4l2m2m":

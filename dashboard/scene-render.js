@@ -81,6 +81,15 @@ function layerContent(layer, ctx) {
       return `<div class="cn-fill" style="background:${attr(c.color || "#05060a")}">${c.src ? `<img class="cn-media" src="${attr(c.src)}" alt="" style="object-fit:${attr(c.fit || "cover")}">` : ""}</div>`;
     case "video":
       return c.src ? `<video class="cn-media" src="${attr(c.src)}" autoplay playsinline ${c.loop !== false ? "loop" : ""} ${layer.audio?.enabled && !layer.audio?.muted ? "" : "muted"} style="object-fit:${attr(c.fit || "cover")}"${audioAttrs(layer)}></video>` : (preview ? `<div class="cn-placeholder">${attr(layer.name)}<small>No video URL</small></div>` : "");
+    case "youtube": {
+      const audible = !!(layer.audio?.enabled && !layer.audio?.muted);
+      const src = sceneModel.youtubeEmbedUrl(c, { muted:!audible });
+      if (!src) return preview ? `<div class="cn-placeholder">${attr(layer.name)}<small>No YouTube URL</small></div>` : "";
+      if (!liveContent) return `<div class="cn-placeholder">${attr(layer.name)}<small>YouTube</small></div>`;
+      // YouTube refuses to play embeds that send no Referer ("Error 153"),
+      // so this frame keeps the default referrer policy.
+      return `<iframe class="cn-frame" src="${attr(src)}" title="${attr(layer.name)}" sandbox="allow-scripts allow-same-origin allow-presentation" allow="autoplay; encrypted-media; picture-in-picture" referrerpolicy="strict-origin-when-cross-origin" loading="eager" style="background:#000"${audioAttrs(layer)}></iframe>`;
+    }
     case "text":
       return `<div class="cn-text" style="${textStyle(c)}">${escapeHtml(c.text || "")}</div>`;
     case "clock":
@@ -121,7 +130,7 @@ function layerContent(layer, ctx) {
 function contentHash(layer) {
   // Box, audio levels and program framing are applied live; only a content
   // change (URL, HTML, text, type) re-creates the element.
-  return hashOf({ t:layer.type, c:layer.config, a:layer.type === "video" ? !!(layer.audio?.enabled && !layer.audio?.muted) : undefined });
+  return hashOf({ t:layer.type, c:layer.config, a:layer.type === "video" || layer.type === "youtube" ? !!(layer.audio?.enabled && !layer.audio?.muted) : undefined });
 }
 
 function renderLayer(layer, index, ctx) {

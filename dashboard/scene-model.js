@@ -30,13 +30,13 @@ const CANVAS_PRESETS = Object.freeze({
 });
 const LAYER_TYPES = Object.freeze([
   "program", "browser", "streamelements", "streamlabs", "webpage", "iframe", "chat", "alertbox",
-  "image", "gif", "video", "text", "clock", "countdown", "music", "nowplaying",
+  "image", "gif", "video", "youtube", "text", "clock", "countdown", "music", "nowplaying",
   "webcam", "background", "color", "gradient", "html", "css",
 ]);
 // Types rendered as sandboxed third-party browser sources.
 const BROWSER_TYPES = Object.freeze(["browser", "streamelements", "streamlabs", "webpage", "iframe", "chat", "alertbox"]);
 // Types whose sound can be captured into the broadcast.
-const AUDIO_TYPES = Object.freeze([...BROWSER_TYPES, "video", "html"]);
+const AUDIO_TYPES = Object.freeze([...BROWSER_TYPES, "video", "youtube", "html"]);
 const SLOT_NAMES = Object.freeze(["startingSoon", "brb", "ending", "offline"]);
 const SLOT_MODES = Object.freeze(["builtin", "scene", "url", "html", "media"]);
 const SCENE_KINDS = Object.freeze(["gameplay", "chatting", "music", "intermission", "custom"]);
@@ -75,6 +75,43 @@ function safeUrl(value) {
 // Loopback / unspecified hosts. A browser source pointing at them would share
 // the renderer's own origin (127.0.0.1:8090), so it is never given
 // allow-same-origin, and the renderer additionally blocks local network access.
+// YouTube layer: watch / youtu.be / shorts / live / embed links and playlists.
+const YT_ID = /^[A-Za-z0-9_-]{11}$/;
+const YT_LIST = /^[A-Za-z0-9_-]{10,64}$/;
+function parseYouTubeUrl(value) {
+  let url;
+  try { url = new URL(String(value || "").trim()); } catch { return null; }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  const host = url.hostname.toLowerCase().replace(/^(www|m|music)\./, "");
+  if (!["youtube.com", "youtu.be", "youtube-nocookie.com"].includes(host)) return null;
+  const parts = url.pathname.split("/").filter(Boolean);
+  let videoId = "";
+  if (host === "youtu.be") videoId = parts[0] || "";
+  else if (["shorts", "live", "embed", "v"].includes(parts[0])) videoId = parts[1] || "";
+  else if (parts[0] === "watch") videoId = url.searchParams.get("v") || "";
+  const list = url.searchParams.get("list") || "";
+  const t = String(url.searchParams.get("t") || url.searchParams.get("start") || "");
+  const tm = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/.exec(t);
+  const start = tm ? (Number(tm[1] || 0) * 3600 + Number(tm[2] || 0) * 60 + Number(tm[3] || 0)) : 0;
+  const out = { videoId:YT_ID.test(videoId) ? videoId : "", playlistId:YT_LIST.test(list) ? list : "", start };
+  return out.videoId || out.playlistId ? out : null;
+}
+
+// Embed URL for a sanitised youtube layer config. Autoplays; muted unless the
+// layer's audio is on (its sound is then mixed into the broadcast).
+function youtubeEmbedUrl(config = {}, { muted = true } = {}) {
+  const id = YT_ID.test(String(config.videoId || "")) ? config.videoId : "";
+  const list = YT_LIST.test(String(config.playlistId || "")) ? config.playlistId : "";
+  if (!id && !list) return "";
+  const params = new URLSearchParams({ autoplay:"1", mute:muted ? "1" : "0", controls:config.controls ? "1" : "0", playsinline:"1", rel:"0", modestbranding:"1", iv_load_policy:"3", disablekb:"1", fs:"0" });
+  if (config.captions) params.set("cc_load_policy", "1");
+  if (Number(config.start) > 0) params.set("start", String(Math.round(Number(config.start))));
+  if (list) params.set("list", list);
+  // A single video only loops when it is also its own playlist.
+  if (config.loop !== false) { params.set("loop", "1"); if (id && !list) params.set("playlist", id); }
+  return `https://www.youtube.com/embed/${id || "videoseries"}?${params}`;
+}
+
 function isLoopbackUrl(value) {
   try {
     const host = new URL(value).hostname.replace(/^\[|\]$/g, "").toLowerCase();
@@ -159,6 +196,18 @@ function sanitiseConfig(type, raw = {}) {
     out.fit = ["cover", "contain", "fill"].includes(c.fit) ? c.fit : "cover";
     out.loop = bool(c.loop, true);
   }
+  if (type === "youtube") {
+    const parsed = parseYouTubeUrl(c.url);
+    out.url = parsed ? safeUrl(c.url) : "";
+    out.videoId = parsed?.videoId || "";
+    out.playlistId = parsed?.playlistId || "";
+    // Start time comes from the link (?t=1m30s), so editing the URL never
+    // leaves a stale start behind.
+    out.start = Math.round(num(parsed?.start, 0, 0, 24 * 3600));
+    out.loop = bool(c.loop, true);
+    out.controls = bool(c.controls, false);
+    out.captions = bool(c.captions, false);
+  }
   if (["text", "clock", "countdown"].includes(type)) {
     out.text = str(c.text, type === "text" ? "Text" : "", 2000);
     out.fontSize = num(c.fontSize, 48, 6, 600);
@@ -228,7 +277,7 @@ function defaultLayerName(type) {
   return ({
     program:"Gameplay / OBS", browser:"Browser source", streamelements:"StreamElements", streamlabs:"Streamlabs",
     webpage:"Web page", iframe:"iframe", chat:"Chat", alertbox:"Alert box", image:"Image", gif:"Animated GIF",
-    video:"Video", text:"Text", clock:"Clock", countdown:"Countdown", music:"Music widget", nowplaying:"Now Playing",
+    video:"Video", youtube:"YouTube video", text:"Text", clock:"Clock", countdown:"Countdown", music:"Music widget", nowplaying:"Now Playing",
     webcam:"Webcam frame", background:"Background", color:"Colour block", gradient:"Gradient", html:"Custom HTML", css:"Custom CSS",
   })[type] || "Layer";
 }
@@ -606,6 +655,8 @@ module.exports = {
   uid,
   safeUrl,
   isLoopbackUrl,
+  parseYouTubeUrl,
+  youtubeEmbedUrl,
   safeColor,
   canvasFor,
   sanitiseLayer,

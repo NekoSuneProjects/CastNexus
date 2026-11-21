@@ -16,6 +16,7 @@ const { createTwitchApi } = require("./twitch-api");
 const { createMediaMtxRecordings } = require("./mediamtx-recordings");
 const { createYoutubeUploadService } = require("./youtube-upload");
 const { createHostedOauth } = require("./hosted-oauth");
+const { createChannelInfoService } = require("./channel-info");
 const { homePage, loginPage, privacyPage, termsPage } = require("./site-pages");
 const profileRtmp = require("./profile-rtmp");
 const gpuEncoder = require("./gpu-encoder");
@@ -131,8 +132,13 @@ function getAccountByLogin(login) {
 const twitchApi = createTwitchApi({ hostedOauth });
 const recordings = createMediaMtxRecordings({ apiBase:MEDIAMTX_API, playbackBase:MEDIAMTX_PLAYBACK, recordingsDir:RECORDINGS_DIR, state, saveState });
 const youtubeUploads = createYoutubeUploadService({ state, saveState, recordings, hostedOauth });
+// Stream title / game on Twitch + Kick (Settings -> Stream info).
+const channelInfo = createChannelInfoService({ state, saveState, hostedOauth });
 const profileMusic = createProfileMusicService({ state, saveState, musicDir:MUSIC_DIR, maxBytes:MUSIC_MAX_BYTES, musicEngine, events });
-const profileVod = createProfileVodService({ state, saveState, vodDir:VOD_DIR, maxBytes:VOD_MAX_BYTES, probeDurationSeconds:musicEngine.probeDurationSeconds, rtmpOrigin:RTMP_ORIGIN, twitchApi });
+// A custom VOD download folder is only offered where the dashboard runs on
+// the user's own PC (desktop app); on a shared Docker host downloads stay
+// inside VOD_DIR.
+const profileVod = createProfileVodService({ state, saveState, vodDir:VOD_DIR, maxBytes:VOD_MAX_BYTES, probeDurationSeconds:musicEngine.probeDurationSeconds, rtmpOrigin:RTMP_ORIGIN, twitchApi, allowCustomDownloadDir:process.env.CASTNEXUS_INSTALL_TYPE === "electron" || process.env.CASTNEXUS_VOD_CUSTOM_DIR === "true" });
 
 function findDestination(account, id) {
   if (id === relayPush.RELAY_DESTINATION_ID) return relayPush.cachedRelayDestination(account);
@@ -854,7 +860,7 @@ function loginTwitchUser(req, twitchUser) {
   return account;
 }
 function hostedWaitPage(provider, authorizationUrl, purpose="login") {
-  const label=purpose==="stream_key"?"Twitch to import your stream key":provider==="youtube"?"YouTube":"Twitch";
+  const label=purpose==="stream_key"?"Twitch to import your stream key":provider==="kick"?"Kick":purpose==="channel_manage"?"Twitch stream info":provider==="youtube"?"YouTube":"Twitch";
   const safeUrl=JSON.stringify(authorizationUrl);
   return `<!doctype html><meta charset="utf-8"><title>Connect ${label}</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#080a12;color:#f4f6ff;font:16px system-ui}.card{max-width:560px;padding:38px;border:1px solid #292d3b;border-radius:24px;background:#10131f;text-align:center}p{color:#adb5ca;line-height:1.6}.spin{width:34px;height:34px;margin:20px auto;border:3px solid #292d3b;border-top-color:#7c5cff;border-radius:50%;animation:s 1s linear infinite}@keyframes s{to{transform:rotate(360deg)}}button{padding:12px 18px;border:0;border-radius:10px;background:#7c5cff;color:white;font-weight:700}</style><div class="card"><h1>Connect ${label}</h1><p id="message">Complete authorization in the secure browser window. This page will finish automatically.</p><div class="spin"></div><button id="open">Open authorization</button></div><script>const auth=${safeUrl};let opened=false;function openAuth(){opened=true;window.open(auth,"_blank","noopener");}document.getElementById("open").onclick=openAuth;openAuth();async function poll(){try{const r=await fetch("/auth/hosted/${provider}/status",{cache:"no-store"});const d=await r.json();if(r.status===202)return setTimeout(poll,1200);if(!r.ok)throw new Error(d.error||"Authorization failed");location.href=d.redirect||"/";}catch(e){document.getElementById("message").textContent=e.message;document.querySelector(".spin").style.display="none";const back=document.getElementById("open");back.textContent="Back to CastNexus";back.onclick=function(){location.href="/dashboard";};}}setTimeout(poll,1000);</script>`;
 }
@@ -894,12 +900,20 @@ app.get("/auth/hosted/:provider/status",async(req,res)=>{
   if(Date.now()>flow.expiresAt){delete req.session.hostedOauth;return res.status(410).json({error:"authorization request expired"});}
   try{const result=await hostedOauth.exchange(flow);if(result.pending)return res.status(202).json({status:"pending"});delete req.session.hostedOauth;
     if(provider==="twitch"&&flow.purpose==="stream_key")return res.json(importTwitchStreamKey(req,result.result));
+    if(flow.purpose==="channel_manage"){const account=sessionAccount(req);if(!account)return res.status(401).json({error:"Your CastNexus session ended - sign in again, then connect the platform."});channelInfo.storeConnection(account,provider,result.result);console.log(`[dashboard] ${account.twitchLogin} connected ${provider} for stream title / game`);return res.json({ok:true,redirect:"/dashboard?channel=connected"});}
     if(provider==="twitch"){const account=loginTwitchUser(req,result.result.user);account.oauthBrokerToken=result.result.brokerToken;saveState(state);return res.json({ok:true,redirect:"/dashboard"});}
     const account=getAccount(req.session.accountId);if(!account)return res.status(401).json({error:"Sign in with Twitch first"});youtubeUploads.storeTokens(account,result.result);res.json({ok:true,redirect:"/dashboard?youtube=connected"});
   }catch(err){delete req.session.hostedOauth;res.status(err.status||400).json({error:err.message});}
 });
 
 app.get("/auth/twitch",(req,res)=>beginHostedOauth(req,res,"twitch"));
+// Connect a platform so CastNexus can set its stream title / game.
+app.get("/auth/channel/:provider",(req,res)=>{
+  if(!sessionAccount(req))return res.redirect("/login");
+  const provider=String(req.params.provider||"");
+  if(!channelInfo.PROVIDERS[provider])return res.status(404).send("Unknown platform");
+  beginHostedOauth(req,res,provider,{purpose:"channel_manage"});
+});
 app.get("/auth/youtube",requireAuth,(req,res)=>beginHostedOauth(req,res,"youtube"));
 
 app.post("/api/logout",(req,res)=>req.session.destroy(()=>res.json({ok:true})));
@@ -908,6 +922,13 @@ app.post("/api/source-mode",requireAuth,(req,res)=>{const{sourceMode}=req.body||
 app.post("/api/pckey/regenerate",requireAuth,(req,res)=>{const profile=activeProfile(req.account);if(!profile)return res.status(404).json({error:"no active profile"});profile.rtmpKey=profileRtmp.generateProfileRtmpKey();saveState(state);for(const[pathName,live]of[...liveSessions.entries()])if(live.accountId===req.account.twitchUserId&&live.profileId===profile.id)liveSessions.delete(pathName);if(activeSessionFor(req.account.twitchUserId)?.profileId===profile.id)stopOutputsFor(req.account.twitchUserId);res.json({ok:true,profileId:profile.id,pcKey:profile.rtmpKey,profileRtmp:profileRtmp.profileRtmpInfo(req.account,MEDIA_HOST,profile.id)});});
 app.post("/api/profiles/:profileId/rtmp-key/regenerate",requireAuth,(req,res)=>{const profile=profileRtmp.profileById(req.account,req.params.profileId);if(!profile)return res.status(404).json({error:"unknown profile"});profile.rtmpKey=profileRtmp.generateProfileRtmpKey();saveState(state);for(const[pathName,live]of[...liveSessions.entries()])if(live.accountId===req.account.twitchUserId&&live.profileId===profile.id)liveSessions.delete(pathName);if(activeSessionFor(req.account.twitchUserId)?.profileId===profile.id)stopOutputsFor(req.account.twitchUserId);res.json({ok:true,profileRtmp:profileRtmp.profileRtmpInfo(req.account,MEDIA_HOST,profile.id)});});
 app.get("/api/system/encoder",requireAuth,(req,res)=>res.json(gpuEncoder.status()));
+
+// Stream title / game on connected platforms.
+const channelInfoError=(res,err)=>res.status(err.status||400).json({error:err.message,code:err.code||"CHANNEL_INFO_FAILED",provider:err.provider||null});
+app.get("/api/channel-info",requireAuth,async(req,res)=>{try{res.json({connections:channelInfo.status(req.account),current:await channelInfo.current(req.account)});}catch(err){channelInfoError(res,err);}});
+app.get("/api/channel-info/categories",requireAuth,async(req,res)=>{try{res.json({items:await channelInfo.searchCategories(req.account,String(req.query.provider||""),req.query.q)});}catch(err){channelInfoError(res,err);}});
+app.put("/api/channel-info",requireAuth,async(req,res)=>{try{const results=await channelInfo.update(req.account,req.body?.updates||{});res.status(Object.values(results).some(r=>r.ok)||!Object.keys(results).length?200:400).json({results});}catch(err){channelInfoError(res,err);}});
+app.delete("/api/channel-info/:provider",requireAuth,(req,res)=>{try{channelInfo.disconnect(req.account,String(req.params.provider||""));res.json({ok:true,connections:channelInfo.status(req.account)});}catch(err){channelInfoError(res,err);}});
 
 app.get("/api/recordings",requireAuth,async(req,res)=>{try{res.json(await recordings.list(req.account));}catch(err){res.status(503).json({error:err.message});}});
 app.post("/api/recordings/toggle",requireAuth,async(req,res)=>{try{const enabled=await recordings.setEnabled(req.account,Boolean(req.body?.enabled));res.json({ok:true,enabled,recordings:await recordings.list(req.account)});}catch(err){res.status(503).json({error:err.message});}});
@@ -933,7 +954,7 @@ app.use("/api/music",requireAuth,profileMusic.createApiRouter());
 // VOD reruns live in their own "VOD" profiles. With CASTNEXUS_VOD=false the
 // library can still be listed, but nothing can be started or uploaded. Any
 // request that adds to or plays from a library must target a VOD profile.
-const VOD_PROFILE_ROUTES=/^\/(play|upload|remote|twitch-live|twitch-vods\/[^/]+\/play)$/;
+const VOD_PROFILE_ROUTES=/^\/(play|upload|remote|twitch-live|twitch-vods\/[^/]+\/play|playlist(\/add|\/play)?|items\/[^/]+\/download)$/;
 function vodGuard(req,res,next){
   if(req.method==="GET")return next();
   if(!featureFlags.features.vodReruns)return res.status(403).json({error:"VOD reruns are switched off on this install (CASTNEXUS_VOD=false)",code:"FEATURE_DISABLED"});
@@ -966,7 +987,7 @@ function configuredPublicBaseUrl(){return PUBLIC_BASE_URL_ENV||normalisePublicBa
 function publicPlaybackBase(req){return publicBaseUrl(req,{explicitBase:configuredPublicBaseUrl()});}
 function playbackUrlsFor(req,account){if(!activeSourceFor(account.twitchUserId))return null;return playbackTargets({base:publicPlaybackBase(req),safePath:safePathFor(account),mediaHost:PUBLIC_MEDIA_HOST});}
 function sourcesStatusFor(account){const selected=activeProfile(account);const sources={console:{enabled:selected?.mode==="console",live:false},pc:{enabled:selected?.mode==="pc",live:false},music:{enabled:selected?.mode==="music",live:false},rerun:{enabled:selected?.mode==="vod",live:false},vod:{enabled:selected?.mode==="vod",live:false}};const connectedProfiles=[];for(const[pathName,live]of liveSessions.entries()){if(live.accountId!==account.twitchUserId)continue;connectedProfiles.push({profileId:live.profileId,source:live.source,path:pathName,active:activeFeedPath.get(account.twitchUserId)===pathName});if(live.profileId===selected?.id&&sources[live.source])sources[live.source].live=true;}return{sources,activeSource:activeSourceFor(account.twitchUserId),connectedProfiles};}
-app.get("/api/status",requireAuth,(req,res)=>{const account=req.account;ensureAccountProfileKeys(account);const selected=activeProfile(account),rtmp=profileRtmp.profileRtmpInfo(account,MEDIA_HOST,selected?.id);const{sources,activeSource,connectedProfiles}=sourcesStatusFor(account);res.json({features:featureFlags.publicFeatures(),isOwner:String(hostOwner()?.twitchUserId||"")===String(account.twitchUserId),twitchLogin:account.twitchLogin,displayName:account.displayName,profileImageUrl:account.profileImageUrl,needsSourceMode:!account.sourceMode,needsStreamKey:needsStreamKeyFor(account),streamKeyMasked:account.streamKey?maskSecret(account.streamKey):null,streamKeySource:account.streamKey?(account.streamKeySource||"manual"):null,sourceMode:account.sourceMode||null,activeProfileId:selected?.id||null,profileRtmp:rtmp,live:!!activeSource,sources,activeSource,connectedProfiles,rerun:profileVod.publicStatus(account.twitchUserId),recordingEnabled:!!account.recordingEnabled,encoder:gpuEncoder.status(),graceUntil:graceState.get(account.twitchUserId)?.deadline??null,pcServer:rtmp?.server||`rtmp://${MEDIA_HOST}:1935/${PC_APP}`,pcKey:rtmp?.key||account.pcKey,mediaHost:MEDIA_HOST,publicBaseUrl:{value:state.publicBaseUrl||"",effective:publicPlaybackBase(req),lockedByEnv:!!PUBLIC_BASE_URL_ENV},playback:playbackUrlsFor(req,account),destinations:account.destinations.map(d=>({id:d.id,name:d.name,platform:normaliseDestinationPlatform(d.platform),urlMasked:maskUrl(d.url),layout:normaliseLayout(d.layout),output:effectiveOutput(d),outputConfigured:!!d.output,route:planDestination(d,programContext(account)).reason,enabled:d.enabled,active:activeDestinations.has(`${account.twitchUserId}:${d.id}`),health:destinationHealth(account.twitchUserId,d.id)})),programs:programStatusFor(account),music24:music24Status(account),relayPush:{available:!!relayPush.relaystreamBaseUrl(),enabled:!!account.relayPushEnabled,mode:account.relayPushMode,nodeId:account.relayNodeId,active:activeDestinations.has(`${account.twitchUserId}:${relayPush.RELAY_DESTINATION_ID}`),watchUrl:relayPush.cachedRelayDestination(account)?.watchUrl||null}});});
+app.get("/api/status",requireAuth,(req,res)=>{const account=req.account;ensureAccountProfileKeys(account);const selected=activeProfile(account),rtmp=profileRtmp.profileRtmpInfo(account,MEDIA_HOST,selected?.id);const{sources,activeSource,connectedProfiles}=sourcesStatusFor(account);res.json({features:featureFlags.publicFeatures(),isOwner:String(hostOwner()?.twitchUserId||"")===String(account.twitchUserId),adminAvailable:ADMIN_AVAILABLE,twitchLogin:account.twitchLogin,displayName:account.displayName,profileImageUrl:account.profileImageUrl,needsSourceMode:!account.sourceMode,needsStreamKey:needsStreamKeyFor(account),streamKeyMasked:account.streamKey?maskSecret(account.streamKey):null,streamKeySource:account.streamKey?(account.streamKeySource||"manual"):null,sourceMode:account.sourceMode||null,activeProfileId:selected?.id||null,profileRtmp:rtmp,live:!!activeSource,sources,activeSource,connectedProfiles,rerun:profileVod.publicStatus(account.twitchUserId),recordingEnabled:!!account.recordingEnabled,encoder:gpuEncoder.status(),graceUntil:graceState.get(account.twitchUserId)?.deadline??null,pcServer:rtmp?.server||`rtmp://${MEDIA_HOST}:1935/${PC_APP}`,pcKey:rtmp?.key||account.pcKey,mediaHost:MEDIA_HOST,publicBaseUrl:{value:state.publicBaseUrl||"",effective:publicPlaybackBase(req),lockedByEnv:!!PUBLIC_BASE_URL_ENV},playback:playbackUrlsFor(req,account),destinations:account.destinations.map(d=>({id:d.id,name:d.name,platform:normaliseDestinationPlatform(d.platform),urlMasked:maskUrl(d.url),layout:normaliseLayout(d.layout),output:effectiveOutput(d),outputConfigured:!!d.output,route:planDestination(d,programContext(account)).reason,enabled:d.enabled,active:activeDestinations.has(`${account.twitchUserId}:${d.id}`),health:destinationHealth(account.twitchUserId,d.id)})),programs:programStatusFor(account),music24:music24Status(account),relayPush:{available:!!relayPush.relaystreamBaseUrl(),enabled:!!account.relayPushEnabled,mode:account.relayPushMode,nodeId:account.relayNodeId,active:activeDestinations.has(`${account.twitchUserId}:${relayPush.RELAY_DESTINATION_ID}`),watchUrl:relayPush.cachedRelayDestination(account)?.watchUrl||null}});});
 // Discord Activity settings. Everyone signed in can see what the Activity
 // plays; only the host owner can change it (and only to an account on this
 // install), and DISCORD_ACTIVITY_CHANNEL locks it entirely.
@@ -992,6 +1013,11 @@ function discordActivityStatus(req){
     choices:isOwner?Object.values(state.accounts).filter(a=>a.twitchLogin).map(a=>({login:String(a.twitchLogin).toLowerCase(),displayName:a.displayName||a.twitchLogin})).sort((a,b)=>a.displayName.localeCompare(b.displayName)):[],
   };
 }
+// The Admin dashboard (multi-user host management) only exists on server
+// installs (Docker / source). The desktop app is one person's own PC, so it
+// has no admin side; CASTNEXUS_ADMIN=true/false overrides either way.
+const ADMIN_AVAILABLE=process.env.CASTNEXUS_ADMIN?process.env.CASTNEXUS_ADMIN==="true":process.env.CASTNEXUS_INSTALL_TYPE!=="electron";
+app.use("/api/admin",(req,res,next)=>ADMIN_AVAILABLE?next():res.status(404).json({error:"the admin dashboard is not available in the desktop app",code:"ADMIN_UNAVAILABLE"}));
 app.use("/api/admin",requireAuth,createAdminRouter({
   state,saveState,getAccount,hostOwner,activeSourceFor,activeProfileFor:activeProfile,
   stopAccount:holdAccountStreams,
