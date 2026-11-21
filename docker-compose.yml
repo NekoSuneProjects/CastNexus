@@ -19,3 +19,7 @@ services:
       TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET:?Twitch client secret required on the public broker}
       YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:?Google client id required on the public broker}
       YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:?Google client secret required on the public broker}
+      # Optional: lets CastNexus set the Kick stream title / category. Leave
+      # blank to hide Kick. Redirect URI: <OAUTH_BROKER_PUBLIC_URL>/callback/kick
+      KICK_CLIENT_ID: ${KICK_CLIENT_ID:-}
+      KICK_CLIENT_SECRET: ${KICK_CLIENT_SECRET:-}

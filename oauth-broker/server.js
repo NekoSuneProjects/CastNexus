@@ -21,6 +21,11 @@ const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID || "";
 const TWITCH_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET || "";
 const GOOGLE_CLIENT_ID = process.env.YOUTUBE_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET || "";
+// Kick (https://docs.kick.com): OAuth 2.1 with PKCE. Used to let CastNexus set
+// the Kick stream title / category for the connected channel.
+const KICK_CLIENT_ID = process.env.KICK_CLIENT_ID || "";
+const KICK_CLIENT_SECRET = process.env.KICK_CLIENT_SECRET || "";
+const KICK_SCOPE = "user:read channel:read channel:write";
 const TRANSACTION_TTL_MS = Math.max(60_000, Number(process.env.OAUTH_TRANSACTION_TTL_MS || 10 * 60_000));
 const TRUST_PROXY = process.env.OAUTH_TRUST_PROXY === "true" ? 1 : false;
 
@@ -65,7 +70,10 @@ function verifyBrokerToken(value) {
 }
 function validChallenge(value) { return /^[A-Za-z0-9_-]{43}$/.test(String(value || "")); }
 function providerConfigured(provider) {
-  return provider === "twitch" ? !!(TWITCH_CLIENT_ID && TWITCH_CLIENT_SECRET) : provider === "youtube" ? !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) : false;
+  if (provider === "twitch") return !!(TWITCH_CLIENT_ID && TWITCH_CLIENT_SECRET);
+  if (provider === "youtube") return !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
+  if (provider === "kick") return !!(KICK_CLIENT_ID && KICK_CLIENT_SECRET);
+  return false;
 }
 function callbackUrl(provider) { return `${PUBLIC_URL}/callback/${provider}`; }
 function pruneTransactions(now = Date.now()) {
@@ -90,7 +98,7 @@ function rateLimit({ windowMs = 60_000, limit = 30 } = {}) {
 }
 function securityHeaders(_req, res, next) {
   res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action https://id.twitch.tv https://accounts.google.com");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action https://id.twitch.tv https://accounts.google.com https://id.kick.com");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
@@ -114,9 +122,15 @@ async function jsonRequest(url, options = {}) {
 //   stream_key - one-time read of the broadcaster's stream key for Console
 //                profiles (scope channel:read:stream_key). The user token is
 //                used once, revoked immediately and never stored or returned.
+//   channel_manage - lets CastNexus set the stream title / game (scope
+//                channel:manage:broadcast). Like YouTube, the user's access +
+//                refresh token go back to that user's CastNexus install, which
+//                refreshes them through /v1/twitch/refresh. The broker keeps
+//                nothing.
 const TWITCH_PURPOSES = Object.freeze({
   login:{ scope:"" },
   stream_key:{ scope:"channel:read:stream_key", forceVerify:true },
+  channel_manage:{ scope:"channel:manage:broadcast", forceVerify:true },
 });
 function twitchPurpose(value) {
   const purpose = String(value || "login");
@@ -147,6 +161,10 @@ async function exchangeTwitch(code, purpose = "login") {
       if (!streamKey) throw new Error("Twitch did not return a stream key");
       return { purpose, user:profile, streamKey };
     }
+    if (purpose === "channel_manage") {
+      // Client-Id is public; the dashboard needs it to call Helix with this token.
+      return { purpose, user:profile, clientId:TWITCH_CLIENT_ID, accessToken:token.access_token, refreshToken:token.refresh_token, expiresIn:token.expires_in, scope:token.scope };
+    }
     return { user:profile, brokerToken:signBrokerToken({ sub:user.id, login:user.login, scope:"twitch:read" }) };
   } finally {
     if (purpose === "stream_key") await revokeTwitchToken(token.access_token);
@@ -157,6 +175,30 @@ async function exchangeYoutube(code) {
     method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" },
     body:new URLSearchParams({ client_id:GOOGLE_CLIENT_ID, client_secret:GOOGLE_CLIENT_SECRET, code, grant_type:"authorization_code", redirect_uri:callbackUrl("youtube") }),
   });
+}
+async function exchangeKick(code, codeVerifier) {
+  const token = await jsonRequest("https://id.kick.com/oauth/token", {
+    method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" },
+    body:new URLSearchParams({ grant_type:"authorization_code", client_id:KICK_CLIENT_ID, client_secret:KICK_CLIENT_SECRET, redirect_uri:callbackUrl("kick"), code_verifier:codeVerifier, code }),
+  });
+  const users = await jsonRequest("https://api.kick.com/public/v1/users", { headers:{ Authorization:`Bearer ${token.access_token}`, Accept:"application/json" } });
+  const user = users.data?.[0];
+  if (!user) throw new Error("Kick did not return an account");
+  return {
+    purpose:"channel_manage",
+    user:{ id:String(user.user_id), login:String(user.name || ""), displayName:String(user.name || ""), profileImageUrl:user.profile_picture || "" },
+    accessToken:token.access_token, refreshToken:token.refresh_token, expiresIn:token.expires_in, scope:token.scope,
+  };
+}
+async function refreshToken(url, clientId, clientSecret, refresh) {
+  return jsonRequest(url, {
+    method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" },
+    body:new URLSearchParams({ grant_type:"refresh_token", refresh_token:refresh, client_id:clientId, client_secret:clientSecret }),
+  });
+}
+function validRefreshToken(value) {
+  const token = String(value || "");
+  return token.length >= 20 && token.length <= 4096 ? token : null;
 }
 async function twitchApplicationToken() {
   if (twitchAppToken && Date.now() < twitchAppTokenExpiresAt - 60_000) return twitchAppToken;
@@ -187,14 +229,14 @@ function createApp() {
   app.use(express.json({ limit:"16kb", strict:true }));
 
   app.get("/", (_req, res) => res.json({ service:"CastNexus OAuth broker", ok:true, homepage:SITE_URL, privacy:`${SITE_URL}/privacy`, terms:`${SITE_URL}/terms` }));
-  app.get("/health", (_req, res) => res.json({ ok:true, providers:{ twitch:providerConfigured("twitch"), youtube:providerConfigured("youtube") }, legal:{ privacy:`${SITE_URL}/privacy`, terms:`${SITE_URL}/terms` } }));
+  app.get("/health", (_req, res) => res.json({ ok:true, providers:{ twitch:providerConfigured("twitch"), youtube:providerConfigured("youtube"), kick:providerConfigured("kick") }, legal:{ privacy:`${SITE_URL}/privacy`, terms:`${SITE_URL}/terms` } }));
   app.post("/v1/transactions", rateLimit({ limit:20 }), (req, res) => {
     pruneTransactions();
     const provider = String(req.body?.provider || "");
     const codeChallenge = String(req.body?.codeChallenge || "");
     if (!providerConfigured(provider)) return res.status(503).json({ error:`${provider || "provider"} OAuth is not configured` });
     if (!validChallenge(codeChallenge)) return res.status(400).json({ error:"a valid S256 PKCE challenge is required" });
-    const purpose = provider === "twitch" ? twitchPurpose(req.body?.purpose) : (req.body?.purpose ? null : "login");
+    const purpose = provider === "twitch" ? twitchPurpose(req.body?.purpose) : provider === "kick" ? "channel_manage" : (req.body?.purpose ? null : "login");
     if (!purpose) return res.status(400).json({ error:`unsupported purpose for ${provider}` });
     const id = transactionId();
     transactions.set(id, { id, provider, purpose, codeChallenge, createdAt:Date.now(), status:"pending", result:null, attempts:0 });
@@ -211,6 +253,14 @@ function createApp() {
       const url = new URL("https://id.twitch.tv/oauth2/authorize");
       const purpose = TWITCH_PURPOSES[tx.purpose] || TWITCH_PURPOSES.login;
       url.search = new URLSearchParams({ client_id:TWITCH_CLIENT_ID, redirect_uri:callbackUrl("twitch"), response_type:"code", scope:purpose.scope, state, ...(purpose.forceVerify ? { force_verify:"true" } : {}) }).toString();
+      return res.redirect(302, url.toString());
+    }
+    if (tx.provider === "kick") {
+      // Kick requires PKCE between the broker and Kick (separate from the
+      // dashboard <-> broker PKCE pair).
+      tx.kickVerifier = base64url(crypto.randomBytes(32));
+      const url = new URL("https://id.kick.com/oauth/authorize");
+      url.search = new URLSearchParams({ client_id:KICK_CLIENT_ID, redirect_uri:callbackUrl("kick"), response_type:"code", scope:KICK_SCOPE, state, code_challenge:base64url(sha256(tx.kickVerifier)), code_challenge_method:"S256" }).toString();
       return res.redirect(302, url.toString());
     }
     const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -230,7 +280,9 @@ function createApp() {
     }
     if (!req.query.code) return res.status(400).send(resultPage("Sign-in rejected", "The provider did not return an authorization code.", false));
     try {
-      tx.result = provider === "twitch" ? await exchangeTwitch(String(req.query.code), tx.purpose) : await exchangeYoutube(String(req.query.code));
+      tx.result = provider === "twitch" ? await exchangeTwitch(String(req.query.code), tx.purpose)
+        : provider === "kick" ? await exchangeKick(String(req.query.code), tx.kickVerifier)
+        : await exchangeYoutube(String(req.query.code));
       tx.status = "complete";
       res.send(resultPage("Connected to CastNexus", "Authorization is complete. Return to your CastNexus window; it will finish automatically."));
     } catch (error) {
@@ -242,6 +294,7 @@ function createApp() {
   }
   app.get("/callback/twitch", rateLimit({ limit:60 }), (req, res) => providerCallback(req, res, "twitch"));
   app.get("/callback/youtube", rateLimit({ limit:60 }), (req, res) => providerCallback(req, res, "youtube"));
+  app.get("/callback/kick", rateLimit({ limit:60 }), (req, res) => providerCallback(req, res, "kick"));
 
   app.post("/v1/transactions/:id/exchange", rateLimit({ limit:60 }), (req, res) => {
     pruneTransactions();
@@ -276,6 +329,27 @@ function createApp() {
     } catch (error) { res.status(502).json({ error:error.message }); }
   });
 
+  // Refresh a user's channel_manage token (Twitch rotates refresh tokens, so
+  // the response includes the new one).
+  app.post("/v1/twitch/refresh", rateLimit({ limit:30 }), async (req, res) => {
+    if (!providerConfigured("twitch")) return res.status(503).json({ error:"Twitch is unavailable" });
+    const refresh = validRefreshToken(req.body?.refreshToken);
+    if (!refresh) return res.status(400).json({ error:"a valid refresh token is required" });
+    try {
+      const data = await refreshToken("https://id.twitch.tv/oauth2/token", TWITCH_CLIENT_ID, TWITCH_CLIENT_SECRET, refresh);
+      res.json({ access_token:data.access_token, refresh_token:data.refresh_token, expires_in:data.expires_in, scope:data.scope, client_id:TWITCH_CLIENT_ID });
+    } catch (error) { res.status(400).json({ error:error.message }); }
+  });
+  app.post("/v1/kick/refresh", rateLimit({ limit:30 }), async (req, res) => {
+    if (!providerConfigured("kick")) return res.status(503).json({ error:"Kick is unavailable" });
+    const refresh = validRefreshToken(req.body?.refreshToken);
+    if (!refresh) return res.status(400).json({ error:"a valid refresh token is required" });
+    try {
+      const data = await refreshToken("https://id.kick.com/oauth/token", KICK_CLIENT_ID, KICK_CLIENT_SECRET, refresh);
+      res.json({ access_token:data.access_token, refresh_token:data.refresh_token, expires_in:data.expires_in, scope:data.scope });
+    } catch (error) { res.status(400).json({ error:error.message }); }
+  });
+
   app.post("/v1/youtube/refresh", rateLimit({ limit:30 }), async (req, res) => {
     if (!providerConfigured("youtube")) return res.status(503).json({ error:"YouTube is unavailable" });
     const refreshToken = String(req.body?.refreshToken || "");
@@ -302,4 +376,4 @@ if (require.main === module) {
   catch (error) { console.error(`[oauth-broker] ${error.message}`); process.exit(1); }
 }
 
-module.exports = { createApp, twitchPurpose, TWITCH_PURPOSES, base64url, sha256, safeEqual, verifyOauthState, validChallenge, signBrokerToken, verifyBrokerToken, brokerMountPath, stripBrokerMount };
+module.exports = { createApp, twitchPurpose, TWITCH_PURPOSES, providerConfigured, KICK_SCOPE, base64url, sha256, safeEqual, verifyOauthState, validChallenge, signBrokerToken, verifyBrokerToken, brokerMountPath, stripBrokerMount };

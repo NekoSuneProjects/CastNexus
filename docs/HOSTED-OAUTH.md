@@ -110,3 +110,21 @@ For Docker, set `CASTNEXUS_OAUTH_BROKER_URL` to an empty value. For Desktop or
 CLI, set `CASTNEXUS_OAUTH_MODE=local`. Then configure the existing
 Twitch/YouTube client ID, secret and callback variables to restore the local
 bring-your-own-credentials flow.
+
+## Stream title / game (Twitch and Kick)
+
+CastNexus can set the stream title and game/category on Twitch and Kick from
+**Settings -> Stream info**. Each platform is connected separately with its own
+consent screen:
+
+- **Twitch** uses the purpose `channel_manage` (scope `channel:manage:broadcast`).
+- **Kick** is an OAuth 2.1 + PKCE provider (scopes `user:read channel:read channel:write`).
+  Create an app at <https://kick.com/settings/developer>, set its redirect URI to
+  `<OAUTH_BROKER_PUBLIC_URL>/callback/kick`, then set `KICK_CLIENT_ID` and
+  `KICK_CLIENT_SECRET` on the broker. Without them Kick is simply unavailable.
+
+As with YouTube, the broker stores nothing: the user's access and refresh
+tokens are returned once to that user's CastNexus install, which refreshes them
+through `POST /v1/twitch/refresh` and `POST /v1/kick/refresh` (these only add the
+client secret; they never see or keep anything else).
+

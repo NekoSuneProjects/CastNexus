@@ -16,6 +16,7 @@ surface and security properties.
 cp .env.example .env
 # fill in OAUTH_BROKER_SIGNING_SECRET, TWITCH_CLIENT_ID/SECRET,
 # YOUTUBE_CLIENT_ID/SECRET, and your public URL
+# optional: KICK_CLIENT_ID/SECRET (stream title / category on Kick)
 docker compose up -d
 ```
 
