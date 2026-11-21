@@ -129,8 +129,15 @@ function isAncestor(cwd, sha, ref) {
   try { git(["merge-base", "--is-ancestor", sha, ref], cwd); return true; } catch { return false; }
 }
 
-export function commitsFor(cwd, branch, { since = null, fromSha = null } = {}) {
-  const ref = `origin/${branch}`;
+// Branch tip, or its last commit before `until` (rebuilding an old release).
+function headAt(cwd, branch, until = null) {
+  const out = git(["rev-list", "-1", ...(until ? [`--before=${until}`] : []), `origin/${branch}`], cwd).trim();
+  return out || null;
+}
+
+export function commitsFor(cwd, branch, { since = null, fromSha = null, until = null } = {}) {
+  const ref = until ? headAt(cwd, branch, until) : `origin/${branch}`;
+  if (!ref) return [];
   const range = fromSha && isAncestor(cwd, fromSha, ref) ? [`${fromSha}..${ref}`] : [ref, ...(since ? [`--since=${since}`] : ["-n", "0"])];
   const raw = git(["log", "--no-merges", "--format=%H%x1f%s%x1e", ...range], cwd);
   return raw.split("\x1e").map(s => s.trim()).filter(Boolean).map(line => {
@@ -170,7 +177,9 @@ async function fetchReleases(repo, token) {
   return res.json();
 }
 
-export async function generate({ version, channel = "beta", repo, cwd = process.cwd(), highlights = "", releases = null, token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN }) {
+// `until` (ISO date) rebuilds the notes of an already-published release:
+// commits and recorded branch heads stop at that moment.
+export async function generate({ version, channel = "beta", repo, cwd = process.cwd(), highlights = "", until = null, releases = null, token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN }) {
   const all = releases || await fetchReleases(repo, token);
   const prev = previousRelease(all, { version, channel });
   const marker = prev ? readMarker(prev.body) : null;
@@ -179,9 +188,11 @@ export async function generate({ version, channel = "beta", repo, cwd = process.
   const entries = [];
   const heads = {};
   for (const branch of branches) {
-    heads[branch] = git(["rev-parse", `origin/${branch}`], cwd).trim();
+    const head = headAt(cwd, branch, until);
+    if (!head) continue; // branch did not exist yet
+    heads[branch] = head;
     if (!prev) continue; // first release ever: no history to diff against
-    for (const c of commitsFor(cwd, branch, { since, fromSha:marker?.[branch] || null })) entries.push({ ...c, branch });
+    for (const c of commitsFor(cwd, branch, { since, fromSha:marker?.[branch] || null, until })) entries.push({ ...c, branch });
   }
   const parts = [];
   if (String(highlights || "").trim()) parts.push("## Highlights", "", String(highlights).trim().replace(/\\n/g, "\n"), "");
@@ -194,7 +205,7 @@ export async function generate({ version, channel = "beta", repo, cwd = process.
 if (String(process.argv[1] || "").replace(/\\/g, "/").endsWith("/release-notes.mjs")) {
   const args = parseArgs(process.argv.slice(2));
   if (!args.version || !args.repo) { console.error("usage: --version X --repo owner/name [--channel beta|stable] [--git-dir path] [--highlights text] [--out file]"); process.exit(2); }
-  generate({ version:args.version, channel:args.channel || "beta", repo:args.repo, cwd:args["git-dir"] || process.cwd(), highlights:args.highlights || "" })
+  generate({ version:args.version, channel:args.channel || "beta", repo:args.repo, cwd:args["git-dir"] || process.cwd(), highlights:args.highlights || "", until:args.until || null })
     .then(({ markdown, previous, count }) => {
       if (args.out) writeFileSync(args.out, markdown + "\n");
       else process.stdout.write(markdown + "\n");
