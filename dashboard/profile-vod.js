@@ -489,7 +489,10 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
     const dir = downloadDirFor(account, info);
     fs.mkdirSync(dir, { recursive:true });
     const location = ffmpegLocation();
-    const args = [...ytDlpBase(item.kind), "-f", remoteFormatFor(item.kind), "--merge-output-format", "mp4", "--newline", "--no-part",
+    // --print implies --quiet, which hides yt-dlp's "[download] x%" lines, so
+    // --progress is required or the UI sits at 0% for the whole download.
+    // -N 4 fetches four HLS/DASH fragments at once (Twitch VODs are HLS).
+    const args = [...ytDlpBase(item.kind), "-f", remoteFormatFor(item.kind), "--merge-output-format", "mp4", "--newline", "--no-part", "--progress", "-N", "4",
       ...(location ? ["--ffmpeg-location", location] : []),
       "--print", "after_move:filepath", "-o", path.join(dir, `${item.id}.%(ext)s`), item.url];
     const child = spawn(YTDLP_BIN, args, { stdio:["ignore", "pipe", "pipe"] });
@@ -497,13 +500,14 @@ function createProfileVodService({ state, saveState, vodDir, maxBytes, probeDura
     item.download = { state:"downloading", progress:0, dir, startedAt:new Date().toISOString(), error:null, file:null };
     saveState(state);
     let out = "", err = "";
-    child.stdout.on("data", chunk => {
-      const text = chunk.toString();
-      out = (out + text).slice(-8000);
-      const lines = text.split(/\r?\n/).filter(Boolean);
-      for (const line of lines) { const m = /\[download\]\s+([\d.]+)%/.exec(line); if (m) item.download.progress = Math.min(100, Number(m[1])); }
-    });
-    child.stderr.on("data", chunk => { err = (err + chunk.toString()).slice(-4000); });
+    const readProgress = text => {
+      for (const line of text.split(/\r?\n/)) {
+        const m = /\[download\]\s+([\d.]+)%/.exec(line);
+        if (m && item.download) item.download.progress = Math.min(100, Number(m[1]));
+      }
+    };
+    child.stdout.on("data", chunk => { const text = chunk.toString(); out = (out + text).slice(-8000); readProgress(text); });
+    child.stderr.on("data", chunk => { const text = chunk.toString(); err = (err + text).slice(-4000); readProgress(text); });
     let finished = false;
     const finish = (ok, message) => {
       if (finished) return;

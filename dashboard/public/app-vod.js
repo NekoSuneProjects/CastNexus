@@ -175,7 +175,7 @@ function wireVodPage(){const p=activeProfile();
   $("#vod-pl-play")?.addEventListener("click",()=>startVodPlaylist());
   $("#vod-pl-clear")?.addEventListener("click",async()=>{if(!(VOD_UI.playlist||[]).length)return;if(!(await confirmAction("Clear playlist","Remove every VOD from the playlist? The videos stay in the library.")))return;vodSavePlaylist([]);});
   $("#vod-prefer-local")?.addEventListener("change",async e=>{try{const r=await api("/api/vod/settings",{method:"PUT",body:{preferLocal:e.target.checked}});VOD_UI.settings=r.settings;toast(e.target.checked?"Downloaded copies will be used":"Always streaming from the website","success");}catch(err){e.target.checked=!e.target.checked;toast(err.message,"error");}});
-  loadVodUi();clearInterval(VOD_UI.timer);VOD_UI.timer=setInterval(()=>{if(S.page==="reruns")loadVodUi();},10000);
+  loadVodUi();clearInterval(VOD_UI.timer);VOD_UI.tick=0;VOD_UI.timer=setInterval(()=>{if(S.page!=="reruns")return;VOD_UI.tick++;const downloading=(VOD_UI.items||[]).some(i=>i.download?.state==="downloading");if(downloading||VOD_UI.tick%4===0)loadVodUi();},2500);
 }
 
 function injectVodNav(){const nav=$("#main-nav");if(!nav||$("[data-page='reruns']",nav))return;const btn=document.createElement("button");btn.className="nav-item";btn.dataset.page="reruns";btn.innerHTML="<span>▶</span>Reruns / VOD";const profiles=$("[data-page='profiles']",nav);nav.insertBefore(btn,profiles||null);}
