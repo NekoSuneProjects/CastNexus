@@ -172,7 +172,14 @@
 
   if (typeof window.renderSettings === "function") {
     const baseRenderSettings = window.renderSettings;
-    window.renderSettings = function renderSettingsWithUpdates() { return baseRenderSettings() + settingsCard(); };
+    // First card on Settings (right under the page header) so the stable /
+    // beta choice is easy to find.
+    window.renderSettings = function renderSettingsWithUpdates() {
+      const html = baseRenderSettings();
+      const card = settingsCard().replace('style="margin-top:16px"', 'style="margin-bottom:16px"');
+      const headEnd = html.indexOf('<section');
+      return headEnd >= 0 ? html.slice(0, headEnd) + card + html.slice(headEnd) : card + html;
+    };
   }
   document.addEventListener("change", e => {
     if (e.target?.id !== "cn-update-channel") return;
