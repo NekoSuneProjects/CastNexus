@@ -29,8 +29,12 @@ function encoderCard() {
   return `<div class="card-panel"><div class="card-title-row"><h3>Video encoder</h3><span class="badge ${hardware?"green":""}">${hardware?"GPU":"CPU FALLBACK"}</span></div><div class="stat-value" style="font-size:1.25rem">${esc(enc.label||"Detecting…")}</div><p>${hardware?`CastNexus probed ${esc(enc.encoder||"")} successfully and will use it for compositor, layout transcodes and compatible VOD normalization.`:"No usable hardware encoder was detected. CastNexus uses libx264 automatically."}</p>${enc.fallbackReason?`<div class="callout warn">${esc(enc.fallbackReason)}</div>`:""}<div class="stat-sub">Desktop uses the host FFmpeg/GPU. Docker needs the optional NVIDIA or /dev/dri GPU override so the container can see the device.</div></div>`;
 }
 
+// PC / Console profiles get no rerun options: the page becomes "Recordings"
+// (MediaMTX program recordings + YouTube upload of those recordings).
+function vodRecordingsOnly(p=activeProfile()){return p?.mode==="pc"||p?.mode==="console";}
 function renderVodPage() {
   const p=activeProfile(),vodProfile=p?.mode==="vod",own=S.status?.twitchLogin||"";
+  if(vodRecordingsOnly(p))return renderRecordingsOnlyPage(own);
   const notVod=`<div class="callout warn" style="margin-top:12px">Reruns run in their own <strong>VOD Reruns</strong> profile. Switch to one (or create it in Profiles) to start Twitch HLS or a VOD rerun.${S.profiles.some(x=>x.mode==="vod")?"":` <button class="btn btn-primary btn-sm" data-add-vod-profile style="margin-left:8px">Create VOD profile</button>`}</div>`;
   return `
     ${pageHead("VOD RERUN + RECORDING ENGINE","Reruns / VOD","Automatically discover your Twitch VODs, relay Twitch live HLS only when Twitch reports you live, record the CastNexus program with MediaMTX, and upload recordings to YouTube.")}
@@ -77,6 +81,19 @@ function renderVodPage() {
 }
 
 function vodDownloadBadge(item){const d=item.download;if(item.kind==="upload")return"";if(!d)return `<button class="btn btn-ghost btn-sm" data-vod-download="${esc(item.id)}" title="Optional: keep a local copy">⬇ Download</button>`;if(d.state==="downloading")return `<span class="badge cyan" title="Downloading">⬇ ${Math.round(Number(d.progress)||0)}%</span><button class="icon-button" data-vod-undownload="${esc(item.id)}" title="Cancel download">■</button>`;if(d.state==="done")return `<span class="badge green" title="${esc(d.file||"")}">LOCAL${d.sizeBytes?` · ${vodFmtBytes(d.sizeBytes)}`:""}</span><button class="icon-button" data-vod-undownload="${esc(item.id)}" title="Delete local copy (keeps the VOD)">🗑</button>`;return `<span class="badge" title="${esc(d.error||"")}">DOWNLOAD FAILED</span><button class="btn btn-ghost btn-sm" data-vod-download="${esc(item.id)}">Retry</button>`;}
+function renderRecordingsOnlyPage(own){
+  return `
+    ${pageHead("PROGRAM RECORDING","Recordings","Record your CastNexus program with MediaMTX and upload the recordings to YouTube.")}
+    <div class="section-title">MediaMTX program recordings</div>
+    <section class="grid grid-2">
+      <div class="card-panel"><div class="card-title-row"><div><h3>Recording storage</h3><p>Records the stable <code>public/${esc(own)}</code> program path for this profile's live stream.</p></div><label class="toggle"><input id="recording-toggle" type="checkbox"><span class="toggle-track"></span></label></div><div class="grid grid-2" style="margin-top:12px"><div class="stat-card"><div class="stat-label">Disk used</div><div id="recording-bytes" class="stat-value">—</div></div><div class="stat-card"><div class="stat-label">Segments</div><div id="recording-count" class="stat-value">—</div></div></div><div class="callout" style="margin-top:12px">MediaMTX writes fMP4 segments to persistent CastNexus storage. Turning recording off stops future recording; existing files stay until you delete them.</div></div>
+      <div class="card-panel"><div class="card-title-row"><h3>YouTube upload</h3><span id="youtube-connect-badge" class="badge">LOADING</span></div><div id="youtube-status-body" class="callout">Checking YouTube API…</div><div class="page-actions" style="margin-top:12px"><button id="youtube-connect" class="btn btn-primary">Connect YouTube</button><button id="youtube-disconnect" class="btn btn-ghost btn-sm">Disconnect</button></div><div class="stat-sub" style="margin-top:10px">Uploads use the MediaMTX playback API to assemble MP4, then YouTube's resumable upload API.</div></div>
+    </section>
+    <section class="card-panel"><div class="card-title-row"><h3>Recordings</h3><button id="recording-delete-all" class="btn btn-danger btn-sm">Delete all recordings</button></div><div id="recording-library" class="list-stack"><div class="empty-state"><strong>Loading recordings…</strong></div></div></section>
+    <div class="section-title">YouTube upload jobs</div>
+    <section class="card-panel"><div id="youtube-job-library" class="list-stack"><div class="empty-state"><strong>No uploads yet</strong></div></div></section>`;
+}
+
 function vodItemRow(item){const remote=item.kind!=="upload";const inList=(VOD_UI.playlist||[]).includes(item.id);return `<div class="list-row vod-item"><div class="track-icon">▶</div><div class="item-main"><strong>${esc(item.title||"Untitled VOD")}</strong><span>${esc(vodKindLabel(item.kind))}${item.uploader?` · ${esc(item.uploader)}`:""} · ${vodFmtDuration(item.durationS)}${item.sizeBytes?` · ${vodFmtBytes(item.sizeBytes)}`:""}</span></div><span class="badge ${item.kind==="youtube"?"cyan":item.kind==="twitch-vod"?"purple":""}">${esc(vodKindLabel(item.kind).toUpperCase())}</span><div class="item-actions"><button class="btn btn-primary btn-sm" data-vod-play="${esc(item.id)}">Play</button><button class="btn btn-ghost btn-sm" data-vod-loop="${esc(item.id)}">Loop</button><button class="btn btn-ghost btn-sm" data-vod-pl-add="${esc(item.id)}" title="${inList?"Already in the playlist - adds it again":"Add to playlist"}">＋ Playlist${inList?" ✓":""}</button>${vodDownloadBadge(item)}${remote&&item.url?`<button class="icon-button" data-open-url="${esc(item.url)}" title="Open source">↗</button>`:""}<button class="icon-button" data-vod-delete="${esc(item.id)}" title="Delete">×</button></div></div>`;}
 function vodPlaylistRow(id,index,total){const item=VOD_UI.items.find(i=>i.id===id);const playing=VOD_UI.status?.queue&&VOD_UI.status.itemId===id;return `<div class="list-row"><div class="track-icon">${playing?"▶":index+1}</div><div class="item-main"><strong>${esc(item?.title||"Removed VOD")}</strong><span>${esc(vodKindLabel(item?.kind||""))} · ${vodFmtDuration(item?.durationS)}${item?.download?.state==="done"?" · LOCAL":""}</span></div>${playing?`<span class="badge green">NOW PLAYING</span>`:""}<div class="item-actions"><button class="icon-button" data-pl-up="${index}" ${index===0?"disabled":""} title="Move up">↑</button><button class="icon-button" data-pl-down="${index}" ${index===total-1?"disabled":""} title="Move down">↓</button><button class="btn btn-ghost btn-sm" data-pl-start="${esc(id)}">Play from here</button><button class="icon-button" data-pl-remove="${index}" title="Remove from playlist">×</button></div></div>`;}
 function twitchVodRow(item){return `<div class="list-row"><div class="track-icon">T</div><div class="item-main"><strong>${esc(item.title||"Twitch VOD")}</strong><span>${vodFmtDate(item.publishedAt||item.createdAt)} · ${vodFmtDuration(item.durationS)} · ${Number(item.viewCount||0).toLocaleString()} views</span></div><span class="badge purple">TWITCH CLOUD</span><div class="item-actions"><button class="btn btn-primary btn-sm" data-twitch-vod-play="${esc(item.id)}">Play</button><button class="btn btn-ghost btn-sm" data-twitch-vod-loop="${esc(item.id)}">Loop</button><button class="btn btn-ghost btn-sm" data-twitch-vod-pl="${esc(item.id)}" title="Add to the rerun playlist (and library)">＋ Playlist</button>${item.url?`<button class="icon-button" data-open-url="${esc(item.url)}">↗</button>`:""}</div></div>`;}
@@ -84,15 +101,16 @@ function recordingRow(seg){const start=String(seg.start||"");return `<div class=
 
 async function loadVodUi({refreshTwitch=false}={}) {
   const p=activeProfile(); if(!p?.id||S.page!=="reruns")return;
+  const rerunUi=!vodRecordingsOnly(p),skip=v=>Promise.resolve(v);
   const [library,status,catalog,live,recs,youtube,encoder]=await Promise.all([
-    vodSafeApi(`/api/vod/items?profileId=${encodeURIComponent(p.id)}`,{items:[]}),
-    vodSafeApi("/api/vod/status",{state:"idle"}),
-    vodSafeApi(`/api/vod/twitch-vods${refreshTwitch?"?refresh=1":""}`,{items:[]}),
-    vodSafeApi("/api/vod/twitch-live/status",{live:false}),
+    rerunUi?vodSafeApi(`/api/vod/items?profileId=${encodeURIComponent(p.id)}`,{items:[]}):skip({items:[]}),
+    rerunUi?vodSafeApi("/api/vod/status",{state:"idle"}):skip({state:"idle"}),
+    rerunUi?vodSafeApi(`/api/vod/twitch-vods${refreshTwitch?"?refresh=1":""}`,{items:[]}):skip({items:[]}),
+    rerunUi?vodSafeApi("/api/vod/twitch-live/status",{live:false}):skip({live:false}),
     vodSafeApi("/api/recordings",{enabled:false,bytes:0,segments:[]}),
     vodSafeApi("/api/youtube/status",{configured:false,connected:false,quota:{}}),
     vodSafeApi("/api/system/encoder",{selected:{label:"CPU · x264",hardware:false}}),
-    vodSafeApi("/api/vod/libraries",{libraries:[]}),
+    rerunUi?vodSafeApi("/api/vod/libraries",{libraries:[]}):skip({libraries:[]}),
   ]).then(r=>{VOD_UI.libraries=(r[7].libraries||[]);return r;});
   VOD_UI.items=library.items||[];VOD_UI.playlist=library.playlist||[];if(library.settings)VOD_UI.settings=library.settings;VOD_UI.status=status||{state:"idle"};VOD_UI.twitchCatalog=catalog;VOD_UI.twitchVods=catalog.items||[];VOD_UI.twitchLive=live;VOD_UI.recordings=recs;VOD_UI.youtube=youtube;VOD_UI.encoder=encoder;paintVodUi();
 }
@@ -162,13 +180,13 @@ function wireVodPage(){const p=activeProfile();
 
 function injectVodNav(){const nav=$("#main-nav");if(!nav||$("[data-page='reruns']",nav))return;const btn=document.createElement("button");btn.className="nav-item";btn.dataset.page="reruns";btn.innerHTML="<span>▶</span>Reruns / VOD";const profiles=$("[data-page='profiles']",nav);nav.insertBefore(btn,profiles||null);}
 const baseRenderPageForVod=renderPage;
-renderPage=function castNexusRenderPageWithVod(){clearInterval(VOD_UI.timer);VOD_UI.timer=null;if(S.page!=="reruns")return baseRenderPageForVod();const root=$("#page-content");if(!root)return;$("#page-title").textContent=PAGE_TITLES.reruns;$$('.nav-item').forEach(b=>b.classList.toggle("active",b.dataset.page==="reruns"));stopMusicNowPolling();root.innerHTML=renderVodPage();wireVodPage();};
+renderPage=function castNexusRenderPageWithVod(){clearInterval(VOD_UI.timer);VOD_UI.timer=null;if(S.page!=="reruns")return baseRenderPageForVod();const root=$("#page-content");if(!root)return;$("#page-title").textContent=PAGE_TITLES.reruns;$$('.nav-item').forEach(b=>b.classList.toggle("active",b.dataset.page==="reruns"));stopMusicNowPolling();$("#page-title").textContent=vodRecordingsOnly()?"Recordings":PAGE_TITLES.reruns;root.innerHTML=renderVodPage();wireVodPage();};
 injectVodNav();
 
 // VOD Reruns profiles have no Music 24/7: hide that page while one is active
 // (other profile types keep it). Only un-hides what this code hid, so the
 // feature switches in app-features.js still win.
-function syncVodProfileNav(){const nav=$("#main-nav");if(!nav)return;const music=$("[data-page='music']",nav);if(!music)return;const vod=activeProfile()?.mode==="vod";if(vod&&!music.hidden){music.hidden=true;music.dataset.vodHidden="1";}else if(!vod&&music.dataset.vodHidden){music.hidden=false;delete music.dataset.vodHidden;}}
+function syncVodProfileNav(){const nav=$("#main-nav");if(!nav)return;const reruns=$("[data-page='reruns']",nav);if(reruns){const label=vodRecordingsOnly()?"<span>●</span>Recordings":"<span>▶</span>Reruns / VOD";if(reruns.innerHTML!==label)reruns.innerHTML=label;}const music=$("[data-page='music']",nav);if(!music)return;const vod=activeProfile()?.mode==="vod";if(vod&&!music.hidden){music.hidden=true;music.dataset.vodHidden="1";}else if(!vod&&music.dataset.vodHidden){music.hidden=false;delete music.dataset.vodHidden;}}
 const baseRenderPageForVodNav=renderPage;
 renderPage=function castNexusRenderPageVodNav(){if(activeProfile()?.mode==="vod"&&S.page==="music")return navigate("reruns");syncVodProfileNav();return baseRenderPageForVodNav();};
 setInterval(syncVodProfileNav,1000);

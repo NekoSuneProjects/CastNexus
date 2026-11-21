@@ -168,17 +168,18 @@ function renderSources() {
   const pcEnabled = p?.mode === "pc";
   const musicEnabled = p?.mode === "music";
   const vodEnabled = p?.mode === "vod";
+  // PC / Console profiles have no VOD options: VOD reruns are their own profile type.
+  const showVod = !pcEnabled && !consoleEnabled;
   return `
-    ${pageHead("INPUT ROUTING", "Sources", "Purpose-built source modes. Each profile has exactly one: PC / OBS, console capture, 24/7 music or VOD reruns.")}
-    <section class="grid grid-4">
+    ${pageHead("INPUT ROUTING", "Sources", `Purpose-built source modes. Each profile has exactly one: PC / OBS, console capture${showVod ? ", 24/7 music or VOD reruns" : " or 24/7 music"}.`)}
+    <section class="grid ${showVod ? "grid-4" : "grid-3"}">
       ${sourceModeCard("pc", "◫", "PC Streaming", "OBS, Streamlabs or any RTMP encoder drives the destination fan-out.", pcEnabled)}
       ${sourceModeCard("console", "⌁", "Console Streaming", "Intercept console broadcasting, then add CastNexus overlays and destinations.", consoleEnabled)}
       ${sourceModeCard("music", "♫", "24/7 Music", "Docker renders your profile-isolated spectrum scene and publishes music continuously without OBS.", musicEnabled)}
-      ${sourceModeCard("vod", "▶", "VOD Reruns", "Rerun uploaded videos or Twitch / YouTube VODs, or relay a live Twitch channel, with scenes and destinations of its own.", vodEnabled)}
+      ${showVod ? sourceModeCard("vod", "▶", "VOD Reruns", "Rerun uploaded videos or Twitch / YouTube VODs, or relay a live Twitch channel, with scenes and destinations of its own.", vodEnabled) : ""}
     </section>
     <div class="section-title">Active source configuration</div>
     ${musicEnabled ? renderMusicSourceSetup() : consoleEnabled ? renderConsoleSourceSetup() : vodEnabled ? renderVodSourceSetup() : renderPcSourceSetup()}
-    ${pcEnabled && window.castnexusModeAllowed?.("vod") !== false ? `<div class="callout" style="margin-top:12px">VOD reruns and the Twitch HLS relay now have their own <strong>VOD Reruns</strong> profile type. Create one above to rerun videos while this PC profile stays ready for OBS.</div>` : ""}
     <div class="section-title">Overlay compositor</div>
     <section class="card-panel">
       <div class="card-title-row"><div><h3>Bake overlays into the outgoing video</h3><p>${musicEnabled ? "24/7 Music already uses its own headless renderer, so the normal live-feed compositor is disabled for this profile." : "Headless Chromium combines your active source with the master scene and widgets before fan-out to destinations."}</p></div>
