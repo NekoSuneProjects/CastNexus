@@ -30,6 +30,18 @@ function advertisedEncoders(text = encoderOutput()) {
   return found;
 }
 
+// Every DRM render node, so a multi-GPU Linux host / container (e.g. iGPU at
+// renderD128 + discrete card at renderD129) probes each card, not just the
+// first one. VAAPI_DEVICE pins a single device.
+function vaapiDevices({ dir = "/dev/dri", readdir = fs.readdirSync } = {}) {
+  if (process.env.VAAPI_DEVICE) return [process.env.VAAPI_DEVICE];
+  try {
+    const nodes = readdir(dir).filter(name => /^renderD\d+$/.test(name)).sort((a, b) => Number(a.slice(7)) - Number(b.slice(7)));
+    if (nodes.length) return nodes.map(name => `${dir}/${name}`);
+  } catch {}
+  return ["/dev/dri/renderD128"];
+}
+
 function candidateProfiles(platform = process.platform) {
   const common = [
     { id:"nvenc", encoder:"h264_nvenc", label:"NVIDIA NVENC", vendor:"nvidia", hardware:true },
@@ -39,7 +51,7 @@ function candidateProfiles(platform = process.platform) {
   if (platform === "darwin") return [{ id:"videotoolbox", encoder:"h264_videotoolbox", label:"Apple VideoToolbox", vendor:"apple", hardware:true }];
   return [
     ...common,
-    { id:"vaapi", encoder:"h264_vaapi", label:"VAAPI", vendor:"linux-gpu", hardware:true, device: process.env.VAAPI_DEVICE || "/dev/dri/renderD128" },
+    ...vaapiDevices().map(device => ({ id:"vaapi", encoder:"h264_vaapi", label:"VAAPI", vendor:"linux-gpu", hardware:true, device })),
     { id:"v4l2m2m", encoder:"h264_v4l2m2m", label:"V4L2 M2M", vendor:"linux-soc", hardware:true },
   ];
 }
@@ -85,9 +97,14 @@ function detectEncoder({ force = false, advertisedText = null, probe = probeProf
   const explicit = explicitProfile(requested, advertised);
   if (explicit) {
     if (!explicit.hardware) return (cached = { ...explicit, requested, detectedAt:new Date().toISOString() });
-    const result = probe(explicit);
-    if (result.ok) return (cached = { ...explicit, requested, detectedAt:new Date().toISOString() });
-    return (cached = { ...CPU_PROFILE, requested, fallbackReason: result.error || `${explicit.label} probe failed`, detectedAt:new Date().toISOString() });
+    // VAAPI can have one candidate per render node; try each card.
+    const same = candidateProfiles().filter(p => p.id === explicit.id);
+    let result = null;
+    for (const candidate of same.length ? same : [explicit]) {
+      result = probe(candidate);
+      if (result.ok) return (cached = { ...candidate, requested, detectedAt:new Date().toISOString() });
+    }
+    return (cached = { ...CPU_PROFILE, requested, fallbackReason: result?.error || `${explicit.label} probe failed`, detectedAt:new Date().toISOString() });
   }
 
   for (const profile of reorderCandidates(candidateProfiles())) {
@@ -135,8 +152,9 @@ function videoEncoderArgs(profile = detectEncoder(), options = {}) {
       // destination transcodes) each grabbing every core causes exactly the
       // oversubscription/context-switch thrashing that starves everything.
       // A small fixed count keeps one encode's footprint bounded; override
-      // with X264_THREADS on hosts that actually have cores to spare.
-      const threads = Math.max(1, Number(process.env.X264_THREADS) || 2);
+      // with X264_THREADS on hosts that actually have cores to spare; callers
+      // pass x264Threads from the measured host profile (cpuX264Tuning).
+      const threads = Math.max(1, Number(process.env.X264_THREADS) || Number(options.x264Threads) || 2);
       return ["-c:v", "libx264", "-preset", process.env.X264_PRESET || options.x264Preset || "veryfast", "-tune", "zerolatency", "-threads", String(threads), ...commonRate, "-profile:v", "high", "-level:v", "4.2", "-pix_fmt", "yuv420p"];
     }
   }
@@ -174,10 +192,11 @@ function advertisedSet(advertisedText = null) {
 
 function probeOnce(profile, probe = probeProfile) {
   if (probe !== probeProfile) return probe(profile);
-  const hit = probeCache.get(profile.id);
+  const key = `${profile.id}:${profile.device || ""}`;
+  const hit = probeCache.get(key);
   if (hit) return hit;
   const result = probe(profile);
-  probeCache.set(profile.id, result);
+  probeCache.set(key, result);
   return result;
 }
 
@@ -232,6 +251,7 @@ module.exports = {
   CPU_PROFILE,
   advertisedEncoders,
   candidateProfiles,
+  vaapiDevices,
   probeArgs,
   probeProfile,
   detectEncoder,

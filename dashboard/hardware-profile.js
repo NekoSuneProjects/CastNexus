@@ -227,6 +227,81 @@ function pick(tiers, estimate, host, kind) {
   return { ...chosen, budgetCores:Math.round(budget.cores * 100) / 100, budgetShare:budget.share, candidates:evaluated.map(({ id, cores }) => ({ id, cores })) };
 }
 
+// ------------------------------------------------- CPU (x264) auto-tuning
+// Without a GPU encoder every output used to get x264 ultrafast, 2 threads
+// and a 960x540@20 destination clamp - right for a Pi or a 2-vCPU VPS, but a
+// waste on a 12-16 core desktop. With a measured CPU we can do better: pick
+// the best-quality preset / output size that still fits the CPU budget.
+// Cost of each preset relative to ultrafast (x264 1080p, zerolatency).
+const X264_PRESET_COST = [
+  { preset:"faster", cost:3.4 },
+  { preset:"veryfast", cost:2.3 },
+  { preset:"superfast", cost:1.6 },
+  { preset:"ultrafast", cost:1 },
+];
+// Share of the host CPU budget one transcode (destination / VOD) may plan to
+// use - several can run at once.
+const TRANSCODE_SHARE = 0.5;
+
+function cpuAutoTuneEnabled(host) {
+  if (String(process.env.CASTNEXUS_CPU_AUTO_TUNE || "true").toLowerCase() === "false") return false;
+  // Only trust a real measurement; an unprobed or Pi host keeps the safe path.
+  return !!host?.probed && host.hostType?.type !== "pi" && Number(host.cpu?.coreSecondsPerFrame) > 0;
+}
+
+function threadsFor(cores, host) {
+  // Enough slice threads to hold realtime with some headroom, never all cores.
+  const max = Math.max(2, Math.min(8, (host.cores || 2) - 1));
+  return Math.max(2, Math.min(max, Math.ceil(cores * 1.5)));
+}
+
+// x264 preset + threads for one encode. kind "program" = compositor output
+// (Chromium render shares the budget), "transcode" = destination / VOD.
+// Returns null when auto-tuning does not apply (use the legacy defaults).
+function x264Tuning({ width = 1920, height = 1080, fps = 30, kind = "transcode", host = getHostProfile() } = {}) {
+  if (!cpuAutoTuneEnabled(host)) return null;
+  const E = host.cpu.coreSecondsPerFrame;
+  const px = pixelScale(width, height);
+  const budget = budgetFor(host).cores;
+  let available;
+  if (kind === "program") {
+    // Everything except the encode itself (render, decode, capture).
+    const rest = estimateProgramCores({ width, height, fps }, { ...host, hardwareEncoder:true });
+    available = budget - rest;
+  } else {
+    available = budget * TRANSCODE_SHARE;
+  }
+  for (const { preset, cost } of X264_PRESET_COST) {
+    const cores = E * px * fps * cost * 1.1;
+    if (cores <= available) return { preset, threads:threadsFor(cores, host), cores:Math.round(cores * 100) / 100, availableCores:Math.round(available * 100) / 100 };
+  }
+  const cores = E * px * fps * 1.1;
+  return { preset:"ultrafast", threads:threadsFor(cores, host), cores:Math.round(cores * 100) / 100, availableCores:Math.round(available * 100) / 100 };
+}
+
+// Largest destination transcode canvas this CPU-only host can encode in
+// realtime (x264 ultrafast), capped at the requested size. null = use the
+// legacy CPU-safe clamp.
+const TRANSCODE_TIERS = [
+  { width:1920, height:1080, fps:60 },
+  { width:1920, height:1080, fps:30 },
+  { width:1280, height:720, fps:60 },
+  { width:1280, height:720, fps:30 },
+  { width:960, height:540, fps:30 },
+  { width:960, height:540, fps:20 },
+];
+function cpuTranscodeCanvas(desired, { host = getHostProfile() } = {}) {
+  if (!cpuAutoTuneEnabled(host)) return null;
+  const vertical = desired.height > desired.width;
+  const long = Math.max(desired.width, desired.height), short = Math.min(desired.width, desired.height);
+  const available = budgetFor(host).cores * TRANSCODE_SHARE;
+  const fits = TRANSCODE_TIERS
+    .filter(t => t.width <= long && t.height <= short && t.fps <= desired.fps)
+    .find(t => host.cpu.coreSecondsPerFrame * pixelScale(t.width, t.height) * t.fps * 1.1 * 1.3 <= available);
+  if (!fits) return null;
+  return { width:vertical ? fits.height : fits.width, height:vertical ? fits.width : fits.height, fps:fits.fps };
+}
+
 // ---------------------------------------------------------- the profile
 function fallbackProfile(encoder) {
   // Used before the first probe finishes: the old behaviour (hardware
@@ -389,6 +464,8 @@ module.exports = {
   estimateMusicCores,
   estimateProgramCores,
   budgetFor,
+  x264Tuning,
+  cpuTranscodeCanvas,
   finalise,
   fallbackProfile,
   ensureHostProfile,

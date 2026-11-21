@@ -7,7 +7,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const { EventEmitter } = require("node:events");
 const puppeteer = require("puppeteer-core");
 const { CPU_PROFILE, detectEncoder, resolveEncoder, nextWorkingEncoder, normalisePreference, globalEncoderArgs, encoderFilterSuffix, videoEncoderArgs } = require("./gpu-encoder");
-const { cpuX264Preset, liveMuxArgs } = require("./rtmp-pipeline");
+const { cpuX264Tuning, inputThreadQueueArgs, liveMuxArgs } = require("./rtmp-pipeline");
 const { PcmAudioRelay } = require("./audio-relay");
 const { BrowserAudioCapture, layerVolumeScript } = require("./browser-audio");
 const monitor = require("./resource-monitor");
@@ -93,7 +93,7 @@ function watchdogActivityAt(electronOffscreen, lastPaintAt, lastFrameAt) {
 // PCM inputs are headerless s16le: there is nothing to probe, so skip the
 // default 5 s analysis (it delayed first audio and let video frames pile up).
 function pcmInputArgs(input) {
-  return ["-thread_queue_size","1024","-analyzeduration","0","-probesize","32","-f","s16le","-ar","48000","-ac","2","-i",input];
+  return [...inputThreadQueueArgs(1024),"-analyzeduration","0","-probesize","32","-f","s16le","-ar","48000","-ac","2","-i",input];
 }
 
 function audioInputPlan(includeLiveAudio, live, music, browser = null, firstIndex = 1) {
@@ -293,13 +293,13 @@ function pumpTimestampMode(value=process.env.COMPOSITOR_PUMP_TIMESTAMPS,major=nu
 function videoInputArgs({electronOffscreen,fps,width,height,inputFps=null,timestamps=pumpTimestampMode(),format="mjpeg"}){
   const rate=String(Math.max(1,Number(inputFps||fps)||30));
   // Hybrid overlay layer: transparent PNG frames (alpha channel kept).
-  if(!electronOffscreen&&format==="png")return ["-thread_queue_size","1024","-analyzeduration","0","-probesize",String(Math.max(2_000_000,width*height*4)),"-framerate",rate,...(timestamps==="wallclock"?["-use_wallclock_as_timestamps","1"]:[]),"-f","image2pipe","-vcodec","png","-i","-"];
-  if(electronOffscreen)return ["-thread_queue_size","1024","-framerate",rate,"-use_wallclock_as_timestamps","1","-f","rawvideo","-pixel_format","bgra","-video_size",`${width}x${height}`,"-i","-"];
+  if(!electronOffscreen&&format==="png")return [...inputThreadQueueArgs(1024),"-analyzeduration","0","-probesize",String(Math.max(2_000_000,width*height*4)),"-framerate",rate,...(timestamps==="wallclock"?["-use_wallclock_as_timestamps","1"]:[]),"-f","image2pipe","-vcodec","png","-i","-"];
+  if(electronOffscreen)return [...inputThreadQueueArgs(1024),"-framerate",rate,"-use_wallclock_as_timestamps","1","-f","rawvideo","-pixel_format","bgra","-video_size",`${width}x${height}`,"-i","-"];
   // Bounded probing: one JPEG is enough to learn the frame size. The default
   // (5 s of stream) kept FFmpeg from reading stdin for several seconds on
   // start/restart while the pump dropped every frame.
   const clock=timestamps==="wallclock"?["-use_wallclock_as_timestamps","1"]:[];
-  return ["-thread_queue_size","1024","-analyzeduration","0","-probesize",String(Math.max(2_000_000,width*height*2)),"-framerate",rate,...clock,"-f","image2pipe","-vcodec","mjpeg","-i","-"];
+  return [...inputThreadQueueArgs(1024),"-analyzeduration","0","-probesize",String(Math.max(2_000_000,width*height*2)),"-framerate",rate,...clock,"-f","image2pipe","-vcodec","mjpeg","-i","-"];
 }
 
 // CFR pump backlog: FFmpeg legitimately stops reading stdin for a second or
@@ -1037,7 +1037,7 @@ class Compositor extends EventEmitter {
     // tiny (~20KB/s). FFmpeg's default probesize (5MB) can take minutes to satisfy at
     // that bitrate, so this tap sits producing zero audio well past the compositor's
     // watchdog timeout unless probing is explicitly bounded to something it can hit fast.
-    const child=spawn(FFMPEG_BIN,["-hide_banner","-loglevel",this.debug?"info":"warning","-nostdin","-y","-analyzeduration","1000000","-probesize","32768","-thread_queue_size","1024","-i",resolveUrl(this.audioSourceUrl),"-vn","-af","aresample=async=1:first_pts=0","-f","s16le","-ar","48000","-ac","2",fifo]);
+    const child=spawn(FFMPEG_BIN,["-hide_banner","-loglevel",this.debug?"info":"warning","-nostdin","-y","-analyzeduration","1000000","-probesize","32768",...inputThreadQueueArgs(1024),"-i",resolveUrl(this.audioSourceUrl),"-vn","-af","aresample=async=1:first_pts=0","-f","s16le","-ar","48000","-ac","2",fifo]);
     child.stderr.on("data",chunk=>{if(this.debug){const line=chunk.toString().trim();if(line)this.logger.log(`[compositor:${this.accountId}] live-audio: ${line}`);}});
     child.on("exit",()=>{
       if(this.liveAudioTap===child)this.liveAudioTap=null;
@@ -1143,14 +1143,16 @@ class Compositor extends EventEmitter {
       this.zmq=this.zmqPort?new ZmqCommandClient({port:this.zmqPort,timeoutMs:4000}):null;
     }
     const lowPower=!enc.hardware&&(process.arch==="arm64"||process.arch==="arm");
+    const x264Auto=lowPower?{preset:"ultrafast",threads:null}:cpuX264Tuning({hardwareEncoder:enc.hardware,width:this.video.width,height:this.video.height,fps:this.video.fps,kind:"program"});
+    if(x264Auto.auto&&!this._x264AutoLogged){this._x264AutoLogged=true;console.log(`[compositor] CPU encode auto-tuned: x264 ${x264Auto.preset}, ${x264Auto.threads} threads (~${x264Auto.cores} of ${x264Auto.availableCores} spare cores)`);}
     const bitrate=this.video.bitrate||process.env.COMPOSITOR_VIDEO_BITRATE||(this.video.width<=1280&&this.video.height<=1280?"4000k":"6000k");
     const maxrate=this.video.maxrate||process.env.COMPOSITOR_VIDEO_MAXRATE||bitrate;
     const bufsize=this.video.bufsize||process.env.COMPOSITOR_VIDEO_BUFSIZE||(this.video.width<=1280&&this.video.height<=1280?"8000k":"12000k");
     const filter=hybrid
       ? [hybridVideoGraph({plan:this.hybridPlan,width:this.video.width,height:this.video.height,fps:this.video.fps,source:this.hybridSourceUsed,zmqPort:this.zmqPort,overlay:this._overlayFormat()}),encoderFilterSuffix(enc,"vbase","v"),audioPlan.filter].join(";")
       : compositorFilterGraph({fps:this.video.fps,width:this.video.width,height:this.video.height,encoder:enc,audioPlan,musicOnly:!this.includeLiveAudio});
-    const sourceArgs=hybrid?[...(this.hybrid.inputArgs||["-thread_queue_size","1024","-fflags","+genpts+discardcorrupt","-analyzeduration","1000000","-probesize","1000000"]),...(inlineAudio?[]:["-an"]),"-i",resolveUrl(this.hybrid.sourceUrl)]:[];
-    const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats","-progress","pipe:2","-stats_period","2",...globalEncoderArgs(enc),...sourceArgs,...videoInputArgs({electronOffscreen:this.electronOffscreen,fps:this.video.fps,inputFps:this.inputFps(),width:this.video.width,height:this.video.height,format:hybrid&&this._overlayFormat()==="png"?"png":"mjpeg"}),...audioPlan.args,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,gop:this.video.fps*(Number(this.video.gopSeconds)||1),bitrate,maxrate,bufsize,x264Preset:this.video.x264Preset||process.env.COMPOSITOR_X264_PRESET||cpuX264Preset({hardwareEncoder:enc.hardware,explicit:lowPower?"ultrafast":null})}),"-c:a","aac","-b:a",this.video.audioBitrate||process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
+    const sourceArgs=hybrid?[...(this.hybrid.inputArgs||[...inputThreadQueueArgs(1024),"-fflags","+genpts+discardcorrupt","-analyzeduration","1000000","-probesize","1000000"]),...(inlineAudio?[]:["-an"]),"-i",resolveUrl(this.hybrid.sourceUrl)]:[];
+    const args=["-hide_banner","-loglevel",this.debug?"info":"warning","-nostats","-progress","pipe:2","-stats_period","2",...globalEncoderArgs(enc),...sourceArgs,...videoInputArgs({electronOffscreen:this.electronOffscreen,fps:this.video.fps,inputFps:this.inputFps(),width:this.video.width,height:this.video.height,format:hybrid&&this._overlayFormat()==="png"?"png":"mjpeg"}),...audioPlan.args,"-filter_complex",filter,"-map","[v]","-map","[a]","-r",String(this.video.fps),"-fps_mode","cfr",...videoEncoderArgs(enc,{fps:this.video.fps,gop:this.video.fps*(Number(this.video.gopSeconds)||1),bitrate,maxrate,bufsize,x264Preset:this.video.x264Preset||process.env.COMPOSITOR_X264_PRESET||x264Auto.preset,x264Threads:x264Auto.threads}),"-c:a","aac","-b:a",this.video.audioBitrate||process.env.COMPOSITOR_AUDIO_BITRATE||"128k","-ar","48000","-ac","2",...liveMuxArgs(this.outputUrl,"flv"),this.outputUrl];
     if(this.debug)this.logger.log(`[compositor:${this.accountId}] ffmpeg command: ffmpeg ${args.join(" ")}`);
     const started=Date.now();
     this.ffmpeg=spawn(FFMPEG_BIN,args,{stdio:["pipe","ignore","pipe"]});

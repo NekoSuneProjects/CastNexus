@@ -1,6 +1,9 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+// The legacy CPU-safe assertions below must not depend on this machine's saved
+// hardware test; auto-tuning is covered with injected host profiles at the end.
+process.env.CASTNEXUS_CPU_AUTO_TUNE = "false";
 const { piSafeMode, safeCanvas, stableAudioArgs, liveMuxArgs, cpuX264Preset } = require("./rtmp-pipeline");
 const { destinationFfmpegArgs } = require("./destination-output");
 
@@ -85,3 +88,57 @@ assert.doesNotMatch(forcedFilter, /gblur=/, "CPU-safe VPS output must avoid the 
 assert.equal(forcedLandscape[forcedLandscape.indexOf("-preset") + 1], "ultrafast");
 
 console.log("CPU-safe RTMP pipeline tests passed");
+
+{
+  // FFmpeg builds where -thread_queue_size is output-only must not get it as an input option.
+  const { supportsInputThreadQueue } = require("./rtmp-pipeline");
+  const saved = process.env.FFMPEG_INPUT_THREAD_QUEUE;
+  delete process.env.FFMPEG_INPUT_THREAD_QUEUE;
+  const outputOnly = () => ({ status:1, stderr:"Option thread_queue_size (set the maximum number of queued packets per stream on the muxer) cannot be applied to input url anullsrc -- you are trying to apply an input option to an output file or vice versa." });
+  assert.equal(supportsInputThreadQueue("test-output-only-ffmpeg", outputOnly), false);
+  assert.equal(supportsInputThreadQueue("test-input-ok-ffmpeg", () => ({ status:0, stderr:"" })), true);
+  process.env.FFMPEG_INPUT_THREAD_QUEUE = "false";
+  assert.equal(supportsInputThreadQueue("test-input-ok-ffmpeg"), false);
+  if (saved == null) delete process.env.FFMPEG_INPUT_THREAD_QUEUE; else process.env.FFMPEG_INPUT_THREAD_QUEUE = saved;
+}
+
+{
+  // CPU-only auto-tuning: scale x264 preset / threads / output size to the measured CPU.
+  const { cpuX264Tuning, safeCanvas } = require("./rtmp-pipeline");
+  delete process.env.CASTNEXUS_CPU_AUTO_TUNE;
+  const host = (type, cores, ms, probed = true) => ({ probed, hostType:{ type }, cores, chromiumGpu:false, cpu:{ coreSecondsPerFrame:ms / 1000 }, tooHeavy:{} });
+  const strong = host("desktop", 16, 5);
+  const weakVps = host("vps", 2, 30);
+  const pi = host("pi", 4, 60);
+  const unprobed = host("desktop", 16, 5, false);
+
+  const strongEnc = cpuX264Tuning({ width:1920, height:1080, fps:30, kind:"transcode", host:strong, arch:"x64" });
+  assert.equal(strongEnc.preset, "faster", "16-core desktop should get a better-quality x264 preset");
+  assert.ok(strongEnc.threads >= 2 && strongEnc.threads <= 8, `threads bounded (${strongEnc.threads})`);
+  assert.equal(cpuX264Tuning({ width:1920, height:1080, fps:30, kind:"program", host:strong, arch:"x64" }).preset, "faster");
+
+  const weakEnc = cpuX264Tuning({ width:1920, height:1080, fps:30, host:weakVps, arch:"x64" });
+  assert.equal(weakEnc.preset, "ultrafast", "2-vCPU VPS stays on ultrafast");
+  assert.equal(weakEnc.threads, 2);
+  assert.equal(cpuX264Tuning({ width:1920, height:1080, fps:30, host:pi, arch:"arm64" }).preset, "ultrafast", "Pi keeps the safe path");
+  assert.equal(cpuX264Tuning({ width:1920, height:1080, fps:30, host:unprobed, arch:"x64" }).auto, false, "unmeasured host keeps legacy defaults");
+  assert.equal(cpuX264Tuning({ width:1920, height:1080, fps:30, host:strong, hardwareEncoder:true }).auto, false, "GPU encode is not x264-tuned");
+
+  assert.deepEqual(safeCanvas("landscape", { arch:"x64", hardwareEncoder:false, width:1920, height:1080, fps:30, transcode:true, host:strong }), { width:1920, height:1080, fps:30 });
+  assert.deepEqual(safeCanvas("vertical", { arch:"x64", hardwareEncoder:false, width:1080, height:1920, fps:30, transcode:true, host:strong }), { width:1080, height:1920, fps:30 });
+  const weakCanvas = safeCanvas("landscape", { arch:"x64", hardwareEncoder:false, width:1920, height:1080, fps:30, transcode:true, host:host("vps", 2, 60) });
+  assert.ok(weakCanvas.width <= 960 && weakCanvas.fps <= 30, `very weak VPS stays small (${JSON.stringify(weakCanvas)})`);
+  assert.deepEqual(safeCanvas("landscape", { arch:"x64", hardwareEncoder:false, width:1920, height:1080, fps:30, transcode:true, host:unprobed }), safeCanvas("landscape", { arch:"x64", hardwareEncoder:false, width:1920, height:1080, fps:30 }), "unmeasured host keeps the CPU-safe clamp");
+  process.env.CASTNEXUS_CPU_AUTO_TUNE = "false";
+}
+
+{
+  const { vaapiDevices } = require("./gpu-encoder");
+  const saved = process.env.VAAPI_DEVICE;
+  delete process.env.VAAPI_DEVICE;
+  assert.deepEqual(vaapiDevices({ readdir:() => ["card0", "renderD129", "renderD128", "card1"] }), ["/dev/dri/renderD128", "/dev/dri/renderD129"]);
+  assert.deepEqual(vaapiDevices({ readdir:() => { throw new Error("no /dev/dri"); } }), ["/dev/dri/renderD128"]);
+  process.env.VAAPI_DEVICE = "/dev/dri/renderD130";
+  assert.deepEqual(vaapiDevices(), ["/dev/dri/renderD130"]);
+  if (saved == null) delete process.env.VAAPI_DEVICE; else process.env.VAAPI_DEVICE = saved;
+}

@@ -1,5 +1,7 @@
 "use strict";
 
+const { spawnSync } = require("node:child_process");
+
 function isArmArch(arch = process.arch) {
   return arch === "arm64" || arch === "arm";
 }
@@ -31,9 +33,24 @@ function piSafeMode({ arch = process.arch, hardwareEncoder = false, setting = sa
   return !hardwareEncoder;
 }
 
-function cpuX264Preset({ arch = process.arch, hardwareEncoder = false, explicit = null } = {}) {
+function cpuX264Preset({ arch = process.arch, hardwareEncoder = false, explicit = null, width = null, height = null, fps = null, kind = "transcode", host = undefined } = {}) {
   if (explicit) return String(explicit);
-  return piSafeMode({ arch, hardwareEncoder }) ? "ultrafast" : "veryfast";
+  return cpuX264Tuning({ arch, hardwareEncoder, width, height, fps, kind, host }).preset;
+}
+
+// x264 preset + thread count for a CPU encode. With a measured host profile
+// (hardware-profile.js) a strong CPU gets a better-quality preset and more
+// threads; Pi / unmeasured / weak hosts keep ultrafast with 2 threads.
+function cpuX264Tuning({ arch = process.arch, hardwareEncoder = false, width = null, height = null, fps = null, kind = "transcode", host = undefined } = {}) {
+  const legacy = { preset:piSafeMode({ arch, hardwareEncoder }) ? "ultrafast" : "veryfast", threads:null, auto:false };
+  if (hardwareEncoder || !width || !height) return legacy;
+  try {
+    const hardwareProfile = require("./hardware-profile");
+    const tuned = hardwareProfile.x264Tuning({ width:Number(width), height:Number(height), fps:Number(fps) || 30, kind, ...(host ? { host } : {}) });
+    return tuned ? { ...tuned, auto:true } : legacy;
+  } catch {
+    return legacy;
+  }
 }
 
 function positiveInt(value, fallback) {
@@ -65,7 +82,7 @@ function piSafeRenderConfig(layout, desired) {
   return safeRenderConfig(layout, desired);
 }
 
-function safeCanvas(layout, { arch = process.arch, hardwareEncoder = false, width = null, height = null, fps = 30 } = {}) {
+function safeCanvas(layout, { arch = process.arch, hardwareEncoder = false, width = null, height = null, fps = 30, transcode = false, host = undefined } = {}) {
   const vertical = layout === "vertical";
   const desired = {
     width: Number(width) || (vertical ? 1080 : 1920),
@@ -74,14 +91,56 @@ function safeCanvas(layout, { arch = process.arch, hardwareEncoder = false, widt
   };
   if (!piSafeMode({ arch, hardwareEncoder })) return desired;
 
+  // A destination transcode on a measured CPU-only host: use the largest size
+  // that CPU can really encode (a 16-core desktop is not a Pi). Explicit
+  // CASTNEXUS_CPU_SAFE_* values still win.
+  // Docker/.env ship the defaults (960/540/20) explicitly, so only a value
+  // that differs from them counts as the user pinning the size.
+  const custom = (names, fallback) => names.some(name => process.env[name] && Number(process.env[name]) !== fallback);
+  const pinned = custom(["CASTNEXUS_CPU_SAFE_WIDTH", "CASTNEXUS_PI_SAFE_WIDTH"], 960)
+    || custom(["CASTNEXUS_CPU_SAFE_HEIGHT", "CASTNEXUS_PI_SAFE_HEIGHT"], 540)
+    || custom(["CASTNEXUS_CPU_SAFE_FPS", "CASTNEXUS_PI_SAFE_FPS"], 20);
+  if (transcode && !pinned && !isArmArch(arch)) {
+    try {
+      const fit = require("./hardware-profile").cpuTranscodeCanvas(desired, host ? { host } : {});
+      if (fit) return fit;
+    } catch {}
+  }
+
   // Browser screencast + software x264 can overload both small ARM boards and
   // CPU-only VPS instances. Clamp the render surface before Chromium starts so
   // the watchdog does not repeatedly kill the same 1080p30 workload.
   return safeRenderConfig(layout, desired);
 }
 
+// Newer FFmpeg master builds only know -thread_queue_size as an output
+// (muxer) option; passing it before -i aborts with "cannot be applied to
+// input url ... Error parsing options for input file". Probe the active
+// binary once (FFMPEG_BIN can be swapped at runtime by ffmpeg-select.js) and
+// drop the flag when the input form is unsupported.
+const inputThreadQueueSupport = new Map();
+
+function supportsInputThreadQueue(bin = process.env.FFMPEG_BIN || "ffmpeg", spawn = spawnSync) {
+  const forced = envBool(process.env.FFMPEG_INPUT_THREAD_QUEUE);
+  if (forced != null) return forced;
+  if (inputThreadQueueSupport.has(bin)) return inputThreadQueueSupport.get(bin);
+  let supported = true;
+  try {
+    const result = spawn(bin, ["-hide_banner", "-loglevel", "error", "-thread_queue_size", "8", "-f", "lavfi", "-i", "anullsrc", "-frames:a", "1", "-f", "null", "-"], { encoding:"utf8", timeout:10_000, windowsHide:true });
+    const output = `${result.stderr || ""}
+${result.stdout || ""}`;
+    if (/cannot be applied to input|Unrecognized option 'thread_queue_size'|Error parsing options for input/i.test(output)) supported = false;
+  } catch {}
+  inputThreadQueueSupport.set(bin, supported);
+  return supported;
+}
+
+function inputThreadQueueArgs(size = process.env.RTMP_INPUT_QUEUE || 1024) {
+  return supportsInputThreadQueue() ? ["-thread_queue_size", String(size)] : [];
+}
+
 function liveInputArgs({ lowLatency = false } = {}) {
-  const args=["-thread_queue_size", String(process.env.RTMP_INPUT_QUEUE || 1024), "-fflags", lowLatency?"+genpts+discardcorrupt+nobuffer":"+genpts+discardcorrupt"];
+  const args=[...inputThreadQueueArgs(), "-fflags", lowLatency?"+genpts+discardcorrupt+nobuffer":"+genpts+discardcorrupt"];
   if(lowLatency)args.push("-probesize","32768","-analyzeduration","0","-rtmp_live","live");
   return args;
 }
@@ -126,9 +185,12 @@ module.exports = {
   safeModeSetting,
   piSafeMode,
   cpuX264Preset,
+  cpuX264Tuning,
   safeRenderConfig,
   piSafeRenderConfig,
   safeCanvas,
+  supportsInputThreadQueue,
+  inputThreadQueueArgs,
   liveInputArgs,
   whipAudioArgs,
   stableAudioArgs,

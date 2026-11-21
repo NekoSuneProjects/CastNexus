@@ -1,7 +1,7 @@
 "use strict";
 
 const { detectEncoder, globalEncoderArgs, encoderFilterSuffix, videoEncoderArgs } = require("./gpu-encoder");
-const { cpuX264Preset, liveInputArgs, liveMuxArgs, piSafeMode, safeCanvas, stableAudioArgs, whipAudioArgs } = require("./rtmp-pipeline");
+const { cpuX264Tuning, liveInputArgs, liveMuxArgs, piSafeMode, safeCanvas, stableAudioArgs, whipAudioArgs } = require("./rtmp-pipeline");
 
 const OUTPUT_LAYOUTS = ["source", "landscape", "vertical"];
 
@@ -15,6 +15,13 @@ function outputFormatFor(url) {
 
 function isTwitchIngest(url){
   try{return new URL(String(url||"")).hostname.toLowerCase().endsWith("live-video.net");}catch{return false;}
+}
+
+// x264 preset/threads for a destination transcode; tuned to the measured CPU
+// when there is no hardware encoder (see cpuX264Tuning).
+function x264Options(profile, width, height, fps) {
+  const tuned = cpuX264Tuning({ hardwareEncoder:profile.hardware, width, height, fps, kind:"transcode" });
+  return { x264Preset:process.env.DESTINATION_X264_PRESET || tuned.preset, x264Threads:tuned.threads };
 }
 
 function destinationFfmpegArgs(sourceUrl, destination, options = {}) {
@@ -45,7 +52,7 @@ function destinationFfmpegArgs(sourceUrl, destination, options = {}) {
   }
 
   const requestedFps = Number(process.env.DESTINATION_FPS || 30);
-  const canvas = safeCanvas(layout, { hardwareEncoder:profile.hardware, fps:requestedFps });
+  const canvas = safeCanvas(layout, { hardwareEncoder:profile.hardware, fps:requestedFps, transcode:true });
   const width = canvas.width;
   const height = canvas.height;
   const fps = String(canvas.fps);
@@ -86,7 +93,7 @@ function destinationFfmpegArgs(sourceUrl, destination, options = {}) {
       bitrate,
       maxrate,
       bufsize,
-      x264Preset:process.env.DESTINATION_X264_PRESET || cpuX264Preset({ hardwareEncoder:profile.hardware }),
+      ...x264Options(profile, width, height, Number(fps)),
     }),
     ...(whip ? whipAudioArgs() : stableAudioArgs()),
     ...mux,
@@ -310,7 +317,7 @@ function plannedDestinationArgs(sourceUrl, dest, plan, { encoder = null, forceCp
     "-filter_complex", filter,
     "-map", "[v]", "-map", "0:a:0?", ...captions.maps,
     "-r", fps, "-fps_mode", "cfr",
-    ...videoEncoderArgs(profile, { fps:Number(fps), bitrate, maxrate:process.env.DESTINATION_VIDEO_MAXRATE || bitrate, bufsize, x264Preset:process.env.DESTINATION_X264_PRESET || cpuX264Preset({ hardwareEncoder:profile.hardware }) }),
+    ...videoEncoderArgs(profile, { fps:Number(fps), bitrate, maxrate:process.env.DESTINATION_VIDEO_MAXRATE || bitrate, bufsize, ...x264Options(profile, W, H, Number(fps)) }),
     ...captions.outputArgs,
     ...audio,
     ...mux,

@@ -2,6 +2,7 @@
 
 const path = require("node:path");
 const childProcess = require("node:child_process");
+const { inputThreadQueueArgs } = require("./rtmp-pipeline");
 
 const PATCH_FLAG = Symbol.for("castnexus.publicRepublishSpawnPolicy");
 
@@ -38,7 +39,7 @@ function publicRepublishInputArgs() {
   // already live. Keep enough probe bytes for the FLV headers, but start the
   // output immediately once those headers arrive.
   return [
-    "-thread_queue_size", String(process.env.RTMP_INPUT_QUEUE || 1024),
+    ...inputThreadQueueArgs(),
     "-fflags", "+genpts+discardcorrupt+nobuffer",
     "-probesize", String(process.env.PUBLIC_REPUBLISH_PROBESIZE || 32768),
     "-analyzeduration", String(process.env.PUBLIC_REPUBLISH_ANALYZE_US || 0),

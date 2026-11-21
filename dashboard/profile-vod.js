@@ -8,7 +8,7 @@ const express = require("express");
 const multer = require("multer");
 const { safeSegment, profileById, activeProfileFor } = require("./profile-music");
 const { detectEncoder, globalEncoderArgs, videoEncoderArgs } = require("./gpu-encoder");
-const { liveInputArgs, liveMuxArgs, stableAudioArgs } = require("./rtmp-pipeline");
+const { cpuX264Tuning, liveInputArgs, liveMuxArgs, stableAudioArgs } = require("./rtmp-pipeline");
 const { profilePublishPath, RELAY_APP } = require("./profile-rtmp");
 
 const REMOTE_KINDS = new Set(["youtube", "twitch-vod"]);
@@ -160,7 +160,8 @@ function ffmpegArgsFor(source, outputUrl, options = {}) {
         bitrate:process.env.VOD_VIDEO_BITRATE || "6000k",
         maxrate:process.env.VOD_VIDEO_MAXRATE || "6500k",
         bufsize:process.env.VOD_VIDEO_BUFSIZE || "12000k",
-        x264Preset:process.env.VOD_X264_PRESET || "veryfast",
+        // Measured CPU-only hosts get a preset that fits; otherwise veryfast.
+        ...(() => { const t = cpuX264Tuning({ hardwareEncoder:selected.hardware, width:1920, height:1080, fps, kind:"transcode" }); return { x264Preset:process.env.VOD_X264_PRESET || (t.auto ? t.preset : "veryfast"), x264Threads:t.threads }; })(),
       }),
       "-c:a", "aac",
       "-b:a", process.env.VOD_AUDIO_BITRATE || "160k",
