@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
 const Store = require("electron-store");
 const path = require("node:path");
 const os = require("node:os");
@@ -405,23 +405,41 @@ async function openMainWindow() {
   mainWindow.loadURL(`http://localhost:${port}/dashboard`);
   mainWindow.once("ready-to-show", () => mainWindow?.show());
 
-  // The dashboard's hosted-OAuth wait page opens the Twitch/Google consent
-  // screen with window.open(), and anything else pointing off-app should open
-  // in the user's real browser too rather than in a chrome-less Electron window.
-  const handleExternal = (url) => {
-    if (!url.startsWith(`http://localhost:${port}`)) {
-      shell.openExternal(url);
-      return true;
-    }
-    return false;
+  // Links. Anything off-app that opens a new window (target=_blank links,
+  // window.open from the dashboard or its iframes, the hosted-OAuth consent
+  // page, playback "Open" buttons) goes to the user's real browser. Electron
+  // popups used to open chrome-less with none of these handlers, so links
+  // inside them went nowhere useful. A link that tries to take a window off
+  // the dashboard (including an iframe using target=_top) opens externally.
+  const appOrigins = new Set([`http://localhost:${port}`, `http://127.0.0.1:${port}`]);
+  const isAppUrl = (url) => { try { return appOrigins.has(new URL(url).origin); } catch { return false; } };
+  const openExternal = (url) => {
+    try {
+      const protocol = new URL(url).protocol;
+      if (["http:", "https:", "mailto:"].includes(protocol)) shell.openExternal(url);
+      else console.warn(`[electron] blocked opening ${protocol} link`);
+    } catch {}
   };
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) =>
-    handleExternal(url) ? { action: "deny" } : { action: "allow" });
-
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (handleExternal(url)) event.preventDefault();
-  });
+  // Dashboard pages (recording playback, overlay previews, legal pages) need
+  // the CastNexus session cookie, so they open in an in-app window that gets
+  // these same rules; everything else opens in the default browser.
+  const guardLinks = (contents) => {
+    contents.setWindowOpenHandler(({ url }) => {
+      if (isAppUrl(url)) {
+        return { action: "allow", overrideBrowserWindowOptions: { icon: APP_ICON, width: 1280, height: 800, autoHideMenuBar: true, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } } };
+      }
+      openExternal(url);
+      return { action: "deny" };
+    });
+    contents.on("will-navigate", (event, url) => {
+      if (isAppUrl(url)) return;
+      event.preventDefault();
+      openExternal(url);
+    });
+    contents.on("did-create-window", (child) => guardLinks(child.webContents));
+  };
+  guardLinks(mainWindow.webContents);
 
   mainWindow.webContents.on("render-process-gone", (_e, details) => {
     console.error(`[electron] renderer process gone: ${details.reason}`);
@@ -577,6 +595,17 @@ ipcMain.handle("store:set", (_event, key, value) => {
 });
 
 ipcMain.handle("store:getAll", () => store.store);
+
+// VOD download folder picker (Reruns / VOD -> Local copies -> Browse).
+ipcMain.handle("dialog:pickFolder", async (event, options = {}) => {
+  const owner = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  const result = await dialog.showOpenDialog(owner, {
+    title: String(options?.title || "Choose a folder").slice(0, 200),
+    defaultPath: typeof options?.defaultPath === "string" ? options.defaultPath : undefined,
+    properties: ["openDirectory", "createDirectory"],
+  });
+  return result.canceled ? null : (result.filePaths[0] || null);
+});
 
 ipcMain.handle("app:getInfo", () => ({
   dataDir: getDataDir(),
