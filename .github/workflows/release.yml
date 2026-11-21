@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   meta:
-    runs-on: [self-hosted, neko-build]
+    runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
@@ -83,7 +83,7 @@ jobs:
         include:
           - os: windows-latest
             target: win
-          - os: [self-hosted, neko-build]
+          - os: ubuntu-latest
             target: linux
     runs-on: ${{ matrix.os }}
     steps:
@@ -140,7 +140,7 @@ jobs:
         include:
           - os: windows-latest
             target: win-x64
-          - os: [self-hosted, neko-build]
+          - os: ubuntu-latest
             target: linux-x64
     runs-on: ${{ matrix.os }}
     steps:
@@ -177,7 +177,7 @@ jobs:
       fail-fast: false
       matrix:
         service: [dashboard, dns, intercept, oauth-broker, vrchat-relay, relaystream]
-    runs-on: [self-hosted, neko-build]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -224,7 +224,7 @@ jobs:
 
   release:
     needs: [meta, build-electron, build-cli, docker-publish]
-    runs-on: [self-hosted, neko-build]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
