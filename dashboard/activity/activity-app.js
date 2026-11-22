@@ -57,6 +57,7 @@
   // --- Playback ---------------------------------------------------------------
   function stopPlayback() {
     session++;
+    clearInterval(compatKeepalive);
     playingLogin = null;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
@@ -127,9 +128,9 @@
   // hls.js playback (Media Source Extensions).
   //   "ll" = MediaMTX Low-Latency HLS (fMP4)          -> /activity/hls/...
   // The transmux worker is off: Discord's CSP may refuse blob: workers.
-  function startHlsJs(login, mine, variant) {
+  function startHlsJs(login, mine, variant, srcOverride) {
     var video = $("video");
-    var src = streamUrl(login);
+    var src = srcOverride || streamUrl(login);
     video.srcObject = null;
     if (!(window.MediaSource || window.ManagedMediaSource)) return Promise.reject(new Error(variant + "-hls: no Media Source Extensions"));
     if (mseBlocked) return Promise.reject(new Error(variant + "-hls: skipped, blob: media is blocked by this client's security policy"));
@@ -181,7 +182,48 @@
   // HLS only - every request goes over HTTPS through Discord's proxy, which is
   // the one path that reliably works inside the Activity sandbox.
   // Transports, best latency first; one that dies mid-stream is demoted.
-  var TRANSPORT_LABELS = { ll:"LL-HLS", native:"LL-HLS (native)" };
+  var TRANSPORT_LABELS = { ll:"LL-HLS", native:"LL-HLS (native)", compat:"VP9 compatibility" };
+
+  // --- H.264 decoder missing -> VP9 compatibility stream -------------------------
+  // Discord decodes H.264 only on the GPU. If this client can't (Hardware
+  // Acceleration off, driver problem), the server makes a VP9 + Opus copy on
+  // demand, which every Discord build decodes in software. Remembered on this
+  // device for a day so the next start goes straight to it.
+  var DECODER_ERROR = /DECODER_ERROR_NOT_SUPPORTED|kUnsupportedConfig|bufferAddCodecError|decoder initialization failed/i;
+  var H264_KEY = "castnexus-activity-h264-broken";
+  var h264Broken = false;
+  try { h264Broken = Date.now() - Number(localStorage.getItem(H264_KEY) || 0) < 24 * 3600 * 1000; } catch (e) {}
+  function markH264Broken() {
+    if (h264Broken) return;
+    h264Broken = true;
+    try { localStorage.setItem(H264_KEY, String(Date.now())); } catch (e) {}
+    report("this Discord client can't decode H.264 - switching to the VP9 compatibility stream");
+  }
+  var compatKeepalive = null;
+  function requestCompat(login) {
+    return fetch(url("api/compat"), { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ login:login }) })
+      .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error("compat: " + (d.error || ("HTTP " + r.status))); return d; }); });
+  }
+  function startCompat(login, mine) {
+    if (!config.compat) return Promise.reject(new Error("compat: switched off on this server"));
+    var began = Date.now();
+    return new Promise(function (resolve, reject) {
+      (function poll() {
+        if (mine !== session) return reject(new Error("superseded"));
+        overlay("Starting a compatible video stream for your Discord app…", "Your Discord can't decode H.264 (hardware acceleration is probably off), so CastNexus is making a VP9 copy. This takes a few seconds.");
+        requestCompat(login).then(function (d) {
+          if (d.ready) return resolve(d.url);
+          if (d.busy) throw new Error("compat: " + d.error);
+          if (Date.now() - began > 30000) throw new Error("compat: stream not ready after 30 s");
+          setTimeout(poll, 1500);
+        }).catch(reject);
+      })();
+    }).then(function (src) {
+      clearInterval(compatKeepalive);
+      compatKeepalive = setInterval(function () { if (mine === session && playingLogin === login) requestCompat(login).catch(function () {}); else clearInterval(compatKeepalive); }, 15000);
+      return startHlsJs(login, mine, "compat", src);
+    });
+  }
 
   // If the client's Content Security Policy blocks blob: media (MSE) the
   // hls.js transports can never work there: skip straight to native HLS.
@@ -199,12 +241,16 @@
     var list = [];
     var hasMse = !!(window.MediaSource || window.ManagedMediaSource);
     if (hasMse) list.push("ll", "native"); else list.push("native");
+    if (config.compat && hasMse) list.push("compat");
     list.sort(function (a, b) { return (demoted[a] || 0) - (demoted[b] || 0); }); // stable: keeps latency order within a tier
     if (transportOk && list.indexOf(transportOk) > 0 && !demoted[transportOk]) { list.splice(list.indexOf(transportOk), 1); list.unshift(transportOk); }
+    // H.264 known not to decode here: straight to VP9, skip the H.264 transports.
+    if (h264Broken && list.indexOf("compat") >= 0) list = ["compat"];
     return list;
   }
   function startTransport(name, login, mine) {
     if (name === "native") return startNativeHls(login, mine);
+    if (name === "compat") return startCompat(login, mine);
     return startHlsJs(login, mine, name);
   }
 
@@ -248,6 +294,11 @@
           if (mine !== session) return;
           report("all transports failed for " + login + ": probe: " + p + " | " + detail);
           detail = "probe: " + p + " | " + detail;
+          // The stream arrived but this Discord app can't decode it: a
+          // problem on this viewer's PC, not the server (it plays for others).
+          if (DECODER_ERROR.test(detail)) {
+            return decoderProblem(login, mine, detail);
+          }
           overlay("Can't play the stream in Discord right now - retrying…", detail);
           reconnectSoon(null, 8000, detail);
         });
@@ -266,14 +317,45 @@
         if (msg !== "superseded") lastErrors.push(msg);
         if (transportOk === name) transportOk = null;
         stopMediaOnly();
+        // H.264 can't be decoded on this client: jump to the VP9 stream now
+        // (the native player would fail the same way).
+        if (name !== "compat" && DECODER_ERROR.test(msg) && queue.indexOf("compat") >= 0) {
+          markH264Broken();
+          queue = ["compat"];
+        }
         next();
       });
     })();
   }
 
+  // This viewer's Discord app couldn't start a video decoder. Discord's
+  // desktop app has no software H.264 decoder and relies on the GPU, so this
+  // almost always means Hardware Acceleration is off (or a GPU driver issue).
+  // Show the fix, open Discord's own "enable hardware acceleration" prompt
+  // once, and retry slowly.
+  var hwPrompted = false;
+  function decoderProblem(login, mine, detail) {
+    return fetch(streamUrl(login), { cache:"no-store" }).then(function (r) { return r.text(); }).catch(function () { return ""; }).then(function (playlist) {
+      if (mine !== session) return;
+      var codecs = (playlist.match(/CODECS="([^"]+)"/) || [])[1] || (detail.match(/codecs=["']?([\w.]+)/i) || [])[1] || "H.264";
+      var video = codecs.split(",").map(function (c) { return c.trim(); }).filter(function (c) { return /^(avc|hvc|hev|av01|vp0?9)/i.test(c); })[0] || codecs;
+      var ms = window.MediaSource && window.MediaSource.isTypeSupported ? window.MediaSource.isTypeSupported('video/mp4; codecs="' + video + '"') : "n/a";
+      report("viewer cannot decode " + video + " (MediaSource.isTypeSupported=" + ms + ") - hardware acceleration is probably off in this Discord app");
+      overlay("Your Discord app can't decode this video (" + video + ").",
+        "Fix on your PC: Discord → User Settings → Advanced → turn ON Hardware Acceleration, let Discord restart, then open the Activity again. Still failing? Update your graphics driver. (Other viewers are not affected.) Details: " + detail);
+      if (!hwPrompted && discord && discord.commands && discord.commands.encourageHardwareAcceleration) {
+        hwPrompted = true;
+        discord.commands.encourageHardwareAcceleration().then(function (r) {
+          report("hardware acceleration prompt: enabled=" + !!(r && r.enabled));
+        }).catch(function () {});
+      }
+      reconnectSoon(null, 30000, null, true); // keep the fix on screen while retrying
+    });
+  }
+
   function probe(target) {
     return fetch(target, { cache:"no-store" }).then(function (r) {
-      var who = r.headers.get("x-castnexus-activity") || "header missing - answered by something in front of CastNexus";
+      var who = r.headers.get("x-castnexus-activity") || (r.headers.get("x-castnexus-route") ? "CastNexus public " + r.headers.get("x-castnexus-route") + " route" : "header missing - answered by something in front of CastNexus");
       return r.text().then(function (body) {
         return "GET " + target + " -> HTTP " + r.status + " (" + who + ")" + (r.ok ? "" : " body: " + body.replace(/\s+/g, " ").slice(0, 80));
       });
@@ -292,11 +374,11 @@
 
   function setTransportLabel(name) { $("now-meta").dataset.transport = TRANSPORT_LABELS[name] || ""; render(); }
 
-  function reconnectSoon(reason, delay, detail) {
+  function reconnectSoon(reason, delay, detail, keepOverlay) {
     if (reconnectTimer || !playingLogin) return;
     var login = playingLogin;
     if (reason) report("reconnecting " + login + ": " + reason);
-    overlay("Reconnecting…", detail || reason || "");
+    if (!keepOverlay) overlay("Reconnecting…", detail || reason || "");
     reconnectTimer = setTimeout(function () {
       reconnectTimer = null;
       if (channel && channel.live && channel.login === login) connect(login);

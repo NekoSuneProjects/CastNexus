@@ -771,7 +771,9 @@ app.post("/api/client-log",express.text({type:"*/*",limit:"8kb"}),(req,res)=>{
 function fixRedirectPrefix(prefix) { return proxyRes => { const location = proxyRes.headers.location; if (location && location.startsWith("/")) proxyRes.headers.location = prefix + location; }; }
 
 app.use("/setup", require("./setup-routes"));
-app.use("/hls", createProxyMiddleware({ target:"http://127.0.0.1:8888", changeOrigin:true, pathRewrite:{ "^/hls":"" }, ws:true, onProxyRes:fixRedirectPrefix("/hls") }));
+// X-CastNexus-Route lets the Discord Activity's diagnostics tell this route's
+// answers apart from a reverse proxy / CDN in front of CastNexus.
+app.use("/hls", createProxyMiddleware({ target:"http://127.0.0.1:8888", changeOrigin:true, pathRewrite:{ "^/hls":"" }, ws:true, onProxyRes:proxyRes => { fixRedirectPrefix("/hls")(proxyRes); proxyRes.headers["x-castnexus-route"] = "hls"; } }));
 app.use("/vrchat-hls", createProxyMiddleware({ target:"http://127.0.0.1:8898", changeOrigin:true, pathRewrite:{ "^/vrchat-hls":"" }, ws:true, onProxyRes:fixRedirectPrefix("/vrchat-hls") }));
 app.use("/webrtc", createProxyMiddleware({ target:"http://127.0.0.1:8889", changeOrigin:true, pathRewrite:{ "^/webrtc":"" }, ws:true, onProxyRes:fixRedirectPrefix("/webrtc") }));
 // Discord Activity watch page (CASTNEXUS_DISCORD_ACTIVITY=true). Mounted before
@@ -808,8 +810,11 @@ function discordActivityMode() { return discordActivityConfig.lockedChannel ? "f
 function discordLiveLinked(discordIds) {
   return liveLinkedChannels(state, discordIds, { isLive:account => !!activeSourceFor(account.twitchUserId), row:activityRow });
 }
+let activityCompat = null;
 if (featureFlags.features.discordActivity) {
+  activityCompat = require("./activity-compat").createCompatManager();
   const activityRouter = createDiscordActivityRouter({
+    compat:activityCompat,
     getChannel:discordActivityChannel,
     getMode:discordActivityMode,
     discordApi,
@@ -1283,6 +1288,7 @@ let dashboardShuttingDown=false;
 async function shutdown(){
   if(dashboardShuttingDown)return;
   dashboardShuttingDown=true;
+  try{activityCompat?.shutdown();}catch{}
   clearInterval(pollLiveTimer);
   for(const grace of graceState.values())clearTimeout(grace.timer);
   graceState.clear();activeFeedPath.clear();

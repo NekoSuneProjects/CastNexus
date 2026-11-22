@@ -110,6 +110,7 @@ function createDiscordActivityRouter({
   env = process.env,
   hlsTarget = process.env.MEDIAMTX_HLS_ORIGIN || "http://127.0.0.1:8888",
   log = (...args) => console.warn(...args),
+  compat = null,                      // createCompatManager(): VP9 rendition for viewers that can't decode H.264
 } = {}) {
   if (typeof getChannel !== "function") throw new Error("getChannel is required");
   const config = activityConfig(env);
@@ -148,7 +149,7 @@ function createDiscordActivityRouter({
 
   router.get("/api/config", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    res.json({ clientId:config.clientId || null, title:config.title, sdk:!!sdkDir, hls:!!hlsFile, autoDetect:autoDetect() });
+    res.json({ clientId:config.clientId || null, title:config.title, compat:!!compat?.config?.enabled, sdk:!!sdkDir, hls:!!hlsFile, autoDetect:autoDetect() });
   });
   router.get("/api/channel", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -254,6 +255,20 @@ function createDiscordActivityRouter({
     },
   });
   router.use("/hls", guard, proxyFor("hls", hlsTarget));
+
+  // VP9/Opus compatibility rendition for viewers whose Discord can't decode
+  // H.264 (hardware acceleration off). Started on demand; polling it is the
+  // keepalive. Same channel rules as the stream routes.
+  router.post("/api/compat", express.json({ limit:"4kb" }), async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    if (!compat?.config?.enabled) return res.status(404).json({ error:"the VP9 compatibility stream is switched off (DISCORD_ACTIVITY_COMPAT=false)" });
+    const login = normaliseLogin(req.body?.login);
+    if (!/^[a-z0-9_]{1,40}$/.test(login) || !allowed(login)) return res.status(404).json({ error:"not available for this channel" });
+    const live = getChannel()?.login && normaliseLogin(getChannel().login) === login ? !!getChannel().source : true;
+    if (!live) return res.status(409).json({ error:"channel is offline" });
+    try { res.json(await compat.ensure(login)); }
+    catch (err) { res.status(500).json({ error:err.message }); }
+  });
   router.use((_req, res) => res.status(404).type("text/plain").send("not found"));
   return router;
 }
