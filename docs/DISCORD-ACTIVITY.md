@@ -249,6 +249,43 @@ With these settings:
 - **Gone:** the Music 24/7 radio and PC/OBS options disappear from the Studio,
   and any PC/OBS or radio stream that arrives is ignored.
 
+### Discord Activity profiles (console → Discord only)
+
+To use the console only for Discord, with no restreaming at all, create a
+**Discord Activity** profile. It's a Docker-only profile type and is available
+whenever `CASTNEXUS_DISCORD_ACTIVITY=true`.
+
+- **How it works:** it captures the console exactly like a Console profile (DNS
+  gateway + your Twitch stream key). The stream's **only** output is the Discord
+  Activity.
+- **What the Studio shows** for this profile:
+  - **Discord Activity**: console capture (CastNexus / DNS host, masked Twitch
+    key), the stream key (import from Twitch with OAuth2, or enter manually),
+    your Discord link, and whether you're live in the Activity
+  - **Profiles** and **Settings**
+  - **Admin**, for the host owner
+- **What's hidden:** Overview, Sources, Destinations, Overlay Studio, Music
+  24/7, Reruns and recordings. The profile has no overlays (compositor off) and
+  no destinations.
+- **It works with console streaming off.** Discord Activity profiles follow
+  `CASTNEXUS_DISCORD_ACTIVITY`, not `CASTNEXUS_CONSOLE_STREAMING`.
+
+A Discord-only server:
+
+```dotenv
+CASTNEXUS_CONSOLE_STREAMING=false   # no normal Console profiles
+CASTNEXUS_PC_STREAMING=false
+CASTNEXUS_MUSIC24=false
+CASTNEXUS_VOD=false
+CASTNEXUS_DISCORD_ACTIVITY=true     # Discord Activity profiles still capture the console
+DISCORD_CLIENT_ID=123456789012345678
+DISCORD_CLIENT_SECRET=...
+```
+
+On this server the Studio only offers Discord Activity profiles, and the
+console stream shows up in the Activity as *LIVE · Console*. You still need the
+VPS console gateway (`--profile vps-console`) so the console reaches CastNexus.
+
 ## 8. Security and privacy
 
 - **No account list.** `/activity/api/channel` returns only the owner's
