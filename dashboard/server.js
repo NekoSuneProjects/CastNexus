@@ -79,6 +79,15 @@ function saveState(nextState) {
   fs.writeFileSync(STATE_FILE, JSON.stringify(nextState, null, 2));
 }
 const state = loadState();
+// One-time: Console profiles become Discord Activity profiles on Discord-only
+// installs (see discord-migration.js). Never repeats once recorded.
+{
+  const migration = require("./discord-migration").migrateConsoleProfilesToDiscord(state, { features:featureFlags.features });
+  if (migration.ran) {
+    saveState(state);
+    console.log(`[migration] converted ${migration.converted.length} Console profile(s) to Discord Activity profiles (one-time): ${migration.converted.map(c => `${c.login}/${c.name}`).join(", ") || "none"}`);
+  }
+}
 
 function generatePcKey() { return crypto.randomBytes(12).toString("hex"); }
 function defaultOverlayConfig() {
@@ -422,6 +431,9 @@ const DESTINATION_URL_HINT = "a valid rtmp://, rtmps://, or srt:// url is requir
 // on each (re)start, so it always reads the current profile, scene routing,
 // encoder fallback state and program readiness.
 function startDestination(account, dest, _legacyPathName = null, { forceCpu = false } = {}) {
+  // Discord Activity profiles have one output only: the Activity (the public
+  // republish). Never start restream destinations or relay pushes for them.
+  if (activeProfile(account)?.mode === "discord") return;
   const accountId = account.twitchUserId;
   const key = `${accountId}:${dest.id}`;
   if (activeDestinations.has(key) || !dest.enabled || !activeFeedPath.has(accountId)) return;
