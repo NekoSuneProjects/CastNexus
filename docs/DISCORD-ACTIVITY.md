@@ -283,7 +283,18 @@ DISCORD_CLIENT_SECRET=...
 ```
 
 On this server the Studio only offers Discord Activity profiles, and the
-console stream shows up in the Activity as *LIVE · Console*. You still need the
+console stream shows up in the Activity as *LIVE · Console*.
+
+**Existing Console profiles convert once.** The first time CastNexus starts
+with `CASTNEXUS_DISCORD_ACTIVITY=true` and `CASTNEXUS_CONSOLE_STREAMING=false`,
+it turns every existing Console profile into a Discord Activity profile:
+- custom names and colours are kept
+- overlays, scene music and destinations are switched off
+- the log shows `[migration] converted N Console profile(s)…`
+
+The run is recorded in `state.json` (`migrations.consoleToDiscord`), so it
+never happens again. If you later turn console streaming back on and create
+Console profiles, they stay Console profiles. You still need the
 VPS console gateway (`--profile vps-console`) so the console reaches CastNexus.
 
 ## 8. Security and privacy
