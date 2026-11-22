@@ -5,7 +5,7 @@
   "use strict";
 
   const DOCS = "https://github.com/NekoSuneProjects/CastNexus/blob/docker/docs/DISCORD-ACTIVITY.md";
-  const SOURCE_LABELS = { console:"Console", pc:"PC", music:"24/7 Music", rerun:"Rerun" };
+  const SOURCE_LABELS = { console:"Console", discord:"Console", pc:"PC", music:"24/7 Music", rerun:"Rerun" };
 
   // Docker-only: the desktop app has no Discord Activity / Discord account.
   if ((window.CASTNEXUS_BUILD || {}).installType === "electron") return;

@@ -19,7 +19,7 @@ function overlayUrl(path) {
 
 function currentProfileBadge(p) {
   if (!p) return "";
-  const label = p.mode === "music" ? "24/7 MUSIC" : p.mode === "console" ? "CONSOLE" : p.mode === "vod" ? "VOD" : "PC";
+  const label = p.mode === "music" ? "24/7 MUSIC" : p.mode === "console" ? "CONSOLE" : p.mode === "vod" ? "VOD" : p.mode === "discord" ? "DISCORD" : "PC";
   const cls = p.mode === "music" ? "cyan" : p.mode === "vod" ? "yellow" : "purple";
   const layout = p.canvasMode === "vertical" ? "9:16" : "16:9";
   return `<span class="badge ${cls}">${label}</span><span class="badge">${layout}</span>`;
@@ -75,6 +75,7 @@ function sourceLabel() {
   const p = activeProfile();
   if (p?.mode === "music") return "Music engine";
   if (S.status?.activeSource === "console") return "Console";
+  if (S.status?.activeSource === "discord") return "Console → Discord";
   if (S.status?.activeSource === "pc") return "PC / OBS";
   if (S.status?.activeSource === "rerun") {
     const kind = S.status?.rerun?.kind;

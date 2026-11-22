@@ -85,6 +85,7 @@ function sourceForProfile(profile) {
   if (profile?.mode === "music") return "music";
   if (profile?.mode === "console") return "console";
   if (profile?.mode === "vod") return "rerun";
+  if (profile?.mode === "discord") return "discord";
   return "pc";
 }
 

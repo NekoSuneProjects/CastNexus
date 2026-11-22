@@ -30,7 +30,7 @@
     });
   }
   function sourceLabel(source) {
-    return { console:"Console", pc:"PC", music:"24/7 Music", rerun:"Rerun" }[source] || "Live";
+    return { console:"Console", discord:"Console", pc:"PC", music:"24/7 Music", rerun:"Rerun" }[source] || "Live";
   }
   function overlay(text, detail) {
     $("player-overlay").classList.toggle("hidden", !text);

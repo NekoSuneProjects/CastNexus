@@ -1,8 +1,8 @@
 "use strict";
 
 const PROFILE_STORE_SYSTEM = "restreamnode-profile-store-v1";
-const PROFILE_COLORS = { pc: "#7c5cff", console: "#ff4fd8", music: "#38e8ff", vod: "#f7c948" };
-const MODE_LABELS = { pc: "PC Streaming", console: "Console Streaming", music: "24/7 Music", vod: "VOD Reruns" };
+const PROFILE_COLORS = { pc: "#7c5cff", console: "#ff4fd8", music: "#38e8ff", vod: "#f7c948", discord: "#5865f2" };
+const MODE_LABELS = { pc: "PC Streaming", console: "Console Streaming", music: "24/7 Music", vod: "VOD Reruns", discord: "Discord Activity" };
 const LAYOUT_LABELS = { landscape: "16:9 Landscape", vertical: "9:16 Vertical" };
 const PAGE_TITLES = {
   overview: "Overview", sources: "Sources", destinations: "Destinations",
@@ -77,7 +77,8 @@ function activeProfile() {
 }
 
 function modeSource(mode) {
-  return mode === "console" ? "console" : "pc";
+  // Discord Activity profiles capture a console, so they need the stream key too.
+  return mode === "console" || mode === "discord" ? "console" : "pc";
 }
 
 function musicApiUrl(endpoint, profileId = S.activeProfileId) {
@@ -96,7 +97,8 @@ function createProfile(mode, name) {
     sceneMusicEnabled: mode === "music",
     scene: S.scene || null,
     destinationEnabledIds: [],
-    compositorEnabled: mode === "music" ? false : true,
+    // Discord Activity profiles have no overlays: the Activity plays the raw console feed.
+    compositorEnabled: mode === "music" || mode === "discord" ? false : true,
     musicAutostart: mode === "music",
     musicSettings: { ...S.musicSettings },
     musicVisual: {
@@ -169,7 +171,7 @@ async function ensureProfileStore(initialMode) {
   }
 
   const mode = initialMode || (S.status?.sourceMode === "console" ? "console" : "pc");
-  const profile = createProfile(mode, mode === "pc" ? "PC Gaming" : mode === "console" ? "Console Gaming" : mode === "vod" ? "VOD Reruns" : "24/7 Music");
+  const profile = createProfile(mode, mode === "pc" ? "PC Gaming" : mode === "console" ? "Console Gaming" : mode === "vod" ? "VOD Reruns" : mode === "discord" ? "Discord Activity" : "24/7 Music");
   const payload = {
     name: "CastNexus Profiles",
     type: "html",

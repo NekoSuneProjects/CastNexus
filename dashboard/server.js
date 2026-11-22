@@ -584,9 +584,11 @@ function matchAccountForPathRaw(pathName) {
   if (!raw) return null;
   const account = getAccount(raw.twitchUserId);
   const profile = activeProfile(account);
-  if (!profile || profile.mode !== "console") return null;
+  // Console capture (matched by the real Twitch stream key) feeds Console
+  // profiles and Discord Activity profiles; the latter reports source "discord".
+  if (!profile || !["console", "discord"].includes(profile.mode)) return null;
   if (appName !== CONSOLE_APP) console.log(`[dashboard] note: ${account.twitchLogin} stream matched under app "${appName}" (expected "${CONSOLE_APP}") - treating as console`);
-  return { account, profileId:profile.id, source:"console", legacy:true };
+  return { account, profileId:profile.id, source:profile.mode === "discord" ? "discord" : "console", legacy:true };
 }
 function activeSessionFor(accountId) {
   const activePath = activeFeedPath.get(accountId);
@@ -651,7 +653,7 @@ function candidateForProfile(accountId, profile) {
   if (!rows.length) return null;
   if (profile?.mode === "music") return rows.find(([,s]) => s.source === "music") || rows[0];
   if (profile?.mode === "vod") return rows.find(([,s]) => s.source === "rerun") || rows[0];
-  return rows.find(([,s]) => s.source === "pc" || s.source === "console") || rows[0];
+  return rows.find(([,s]) => s.source === "pc" || s.source === "console" || s.source === "discord") || rows[0];
 }
 function reconcileSelectedProfile(account) {
   const selected = activeProfile(account);
@@ -891,7 +893,7 @@ function importTwitchStreamKey(req,result){
 }
 app.get("/auth/twitch/stream-key",(req,res)=>{
   if(!sessionAccount(req))return res.redirect("/login");
-  if(!featureFlags.features.consoleStreaming)return res.status(403).send("Console streaming is switched off on this install (CASTNEXUS_CONSOLE_STREAMING=false).");
+  if(!featureFlags.features.consoleStreaming&&!featureFlags.features.discordActivity)return res.status(403).send("Console capture is switched off on this install (CASTNEXUS_CONSOLE_STREAMING=false, CASTNEXUS_DISCORD_ACTIVITY=false).");
   beginHostedOauth(req,res,"twitch",{purpose:"stream_key"});
 });
 app.get("/auth/hosted/:provider/status",async(req,res)=>{
@@ -986,7 +988,7 @@ app.post("/api/compositor",requireAuth,(req,res)=>{req.account.compositorEnabled
 function configuredPublicBaseUrl(){return PUBLIC_BASE_URL_ENV||normalisePublicBase(state.publicBaseUrl)||"";}
 function publicPlaybackBase(req){return publicBaseUrl(req,{explicitBase:configuredPublicBaseUrl()});}
 function playbackUrlsFor(req,account){if(!activeSourceFor(account.twitchUserId))return null;return playbackTargets({base:publicPlaybackBase(req),safePath:safePathFor(account),mediaHost:PUBLIC_MEDIA_HOST});}
-function sourcesStatusFor(account){const selected=activeProfile(account);const sources={console:{enabled:selected?.mode==="console",live:false},pc:{enabled:selected?.mode==="pc",live:false},music:{enabled:selected?.mode==="music",live:false},rerun:{enabled:selected?.mode==="vod",live:false},vod:{enabled:selected?.mode==="vod",live:false}};const connectedProfiles=[];for(const[pathName,live]of liveSessions.entries()){if(live.accountId!==account.twitchUserId)continue;connectedProfiles.push({profileId:live.profileId,source:live.source,path:pathName,active:activeFeedPath.get(account.twitchUserId)===pathName});if(live.profileId===selected?.id&&sources[live.source])sources[live.source].live=true;}return{sources,activeSource:activeSourceFor(account.twitchUserId),connectedProfiles};}
+function sourcesStatusFor(account){const selected=activeProfile(account);const sources={console:{enabled:selected?.mode==="console",live:false},pc:{enabled:selected?.mode==="pc",live:false},music:{enabled:selected?.mode==="music",live:false},rerun:{enabled:selected?.mode==="vod",live:false},vod:{enabled:selected?.mode==="vod",live:false},discord:{enabled:selected?.mode==="discord",live:false}};const connectedProfiles=[];for(const[pathName,live]of liveSessions.entries()){if(live.accountId!==account.twitchUserId)continue;connectedProfiles.push({profileId:live.profileId,source:live.source,path:pathName,active:activeFeedPath.get(account.twitchUserId)===pathName});if(live.profileId===selected?.id&&sources[live.source])sources[live.source].live=true;}return{sources,activeSource:activeSourceFor(account.twitchUserId),connectedProfiles};}
 app.get("/api/status",requireAuth,(req,res)=>{const account=req.account;ensureAccountProfileKeys(account);const selected=activeProfile(account),rtmp=profileRtmp.profileRtmpInfo(account,MEDIA_HOST,selected?.id);const{sources,activeSource,connectedProfiles}=sourcesStatusFor(account);res.json({features:featureFlags.publicFeatures(),isOwner:String(hostOwner()?.twitchUserId||"")===String(account.twitchUserId),adminAvailable:ADMIN_AVAILABLE,twitchLogin:account.twitchLogin,displayName:account.displayName,profileImageUrl:account.profileImageUrl,needsSourceMode:!account.sourceMode,needsStreamKey:needsStreamKeyFor(account),streamKeyMasked:account.streamKey?maskSecret(account.streamKey):null,streamKeySource:account.streamKey?(account.streamKeySource||"manual"):null,sourceMode:account.sourceMode||null,activeProfileId:selected?.id||null,profileRtmp:rtmp,live:!!activeSource,sources,activeSource,connectedProfiles,rerun:profileVod.publicStatus(account.twitchUserId),recordingEnabled:!!account.recordingEnabled,encoder:gpuEncoder.status(),graceUntil:graceState.get(account.twitchUserId)?.deadline??null,pcServer:rtmp?.server||`rtmp://${MEDIA_HOST}:1935/${PC_APP}`,pcKey:rtmp?.key||account.pcKey,mediaHost:MEDIA_HOST,publicBaseUrl:{value:state.publicBaseUrl||"",effective:publicPlaybackBase(req),lockedByEnv:!!PUBLIC_BASE_URL_ENV},playback:playbackUrlsFor(req,account),destinations:account.destinations.map(d=>({id:d.id,name:d.name,platform:normaliseDestinationPlatform(d.platform),urlMasked:maskUrl(d.url),layout:normaliseLayout(d.layout),output:effectiveOutput(d),outputConfigured:!!d.output,route:planDestination(d,programContext(account)).reason,enabled:d.enabled,active:activeDestinations.has(`${account.twitchUserId}:${d.id}`),health:destinationHealth(account.twitchUserId,d.id)})),programs:programStatusFor(account),music24:music24Status(account),relayPush:{available:!!relayPush.relaystreamBaseUrl(),enabled:!!account.relayPushEnabled,mode:account.relayPushMode,nodeId:account.relayNodeId,active:activeDestinations.has(`${account.twitchUserId}:${relayPush.RELAY_DESTINATION_ID}`),watchUrl:relayPush.cachedRelayDestination(account)?.watchUrl||null}});});
 // Discord Activity settings. Everyone signed in can see what the Activity
 // plays; only the host owner can change it (and only to an account on this

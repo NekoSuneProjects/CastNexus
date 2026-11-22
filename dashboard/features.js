@@ -6,7 +6,9 @@
 //   CASTNEXUS_PC_STREAMING=true|false        PC / OBS RTMP ingest + PC profiles
 //   CASTNEXUS_VOD=true|false                 VOD rerun profiles (uploads, Twitch/YouTube VODs, Twitch HLS relay)
 //   CASTNEXUS_CONSOLE_STREAMING=true|false   Console capture ingest + Console profiles
-//   CASTNEXUS_DISCORD_ACTIVITY=true|false    Discord Activity watch page (/activity)
+//   CASTNEXUS_DISCORD_ACTIVITY=true|false    Discord Activity watch page (/activity) + Discord Activity profiles
+//                                            (console capture whose only output is the Activity; works
+//                                            even with CASTNEXUS_CONSOLE_STREAMING=false)
 //
 // Everything except the Discord Activity defaults to on, so existing installs
 // keep their current behaviour. A switched-off feature is hidden in the
@@ -37,8 +39,10 @@ function readFeatures(env = process.env) {
 }
 
 // Profile mode -> feature flag. VOD profiles produce the "rerun" source.
-const MODE_FEATURE = Object.freeze({ pc:"pcStreaming", console:"consoleStreaming", music:"music24", vod:"vodReruns" });
-const SOURCE_FEATURE = Object.freeze({ pc:"pcStreaming", console:"consoleStreaming", music:"music24", rerun:"vodReruns" });
+// Discord Activity profiles capture a console like Console profiles, but follow
+// the Discord Activity switch, so console streaming can be off.
+const MODE_FEATURE = Object.freeze({ pc:"pcStreaming", console:"consoleStreaming", music:"music24", vod:"vodReruns", discord:"discordActivity" });
+const SOURCE_FEATURE = Object.freeze({ pc:"pcStreaming", console:"consoleStreaming", music:"music24", rerun:"vodReruns", discord:"discordActivity" });
 
 function profileModeAllowed(mode, features) {
   const key = MODE_FEATURE[mode];

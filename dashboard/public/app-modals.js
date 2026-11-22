@@ -232,8 +232,8 @@ function openProfileModal(mode, profile = null) {
   const canvas = profile?.canvasMode || "landscape";
   modalShell(editing ? "Edit profile" : `New ${MODE_LABELS[chosenMode]} profile`, "PROFILE", `
     <div class="form-grid">
-      <div class="full"><label>Name</label><input id="pf-name" value="${esc(profile?.name || (chosenMode === "pc" ? "PC Gaming" : chosenMode === "console" ? "Console Gaming" : chosenMode === "vod" ? "VOD Reruns" : "24/7 Music"))}"></div>
-      <div><label>Mode</label><select id="pf-mode" ${editing ? "disabled" : ""}><option value="pc" ${chosenMode==="pc"?"selected":""}>PC Streaming</option><option value="console" ${chosenMode==="console"?"selected":""}>Console Streaming</option><option value="music" ${chosenMode==="music"?"selected":""}>24/7 Music</option><option value="vod" ${chosenMode==="vod"?"selected":""}>VOD Reruns</option></select></div>
+      <div class="full"><label>Name</label><input id="pf-name" value="${esc(profile?.name || (chosenMode === "pc" ? "PC Gaming" : chosenMode === "console" ? "Console Gaming" : chosenMode === "vod" ? "VOD Reruns" : chosenMode === "discord" ? "Discord Activity" : "24/7 Music"))}"></div>
+      <div><label>Mode</label><select id="pf-mode" ${editing ? "disabled" : ""}><option value="pc" ${chosenMode==="pc"?"selected":""}>PC Streaming</option><option value="console" ${chosenMode==="console"?"selected":""}>Console Streaming</option><option value="music" ${chosenMode==="music"?"selected":""}>24/7 Music</option><option value="vod" ${chosenMode==="vod"?"selected":""}>VOD Reruns</option><option value="discord" ${chosenMode==="discord"?"selected":""}>Discord Activity</option></select></div>
       <div><label>Profile colour</label><input id="pf-color" type="color" value="${esc(profile?.color || PROFILE_COLORS[chosenMode])}"></div>
       <div class="full"><label>Default canvas</label><select id="pf-canvas"><option value="landscape" ${canvas === "landscape" ? "selected" : ""}>16:9 Landscape · desktop / TV</option><option value="vertical" ${canvas === "vertical" ? "selected" : ""}>9:16 Vertical · TikTok / Instagram / Shorts</option></select></div>
       <div class="full" id="pf-key-wrap">${streamKeyChoiceHtml("pf")}</div>
@@ -242,20 +242,20 @@ function openProfileModal(mode, profile = null) {
     <div id="modal-error" class="form-error"></div>`, `<button class="btn btn-ghost" data-modal-close>Cancel</button><button class="btn btn-primary" id="pf-save">Save profile</button>`, true);
   $$('[data-modal-close]').forEach(b=>b.onclick=closeModal);
   const selectedMode = () => editing ? profile.mode : $("#pf-mode").value;
-  const syncKeySection = () => { $("#pf-key-wrap").hidden = selectedMode() !== "console"; };
+  const syncKeySection = () => { $("#pf-key-wrap").hidden = !["console", "discord"].includes(selectedMode()); };
   wireStreamKeyChoice("pf");
   $("#pf-mode").addEventListener("change", syncKeySection);
   syncKeySection();
   $("#pf-save").onclick = async () => {
     const name=$("#pf-name").value.trim(), m=selectedMode(), color=$("#pf-color").value, canvasMode=$("#pf-canvas").value;
     if(!name) return $("#modal-error").textContent="Name is required";
-    if(m==="console" && streamKeyChoice("pf")==="manual" && !$("#pf-key-manual").value.trim()) return $("#modal-error").textContent="Enter the stream key, or choose Import from Twitch";
+    if(["console","discord"].includes(m) && streamKeyChoice("pf")==="manual" && !$("#pf-key-manual").value.trim()) return $("#modal-error").textContent="Enter the stream key, or choose Import from Twitch";
     let saved=profile;
     if(editing){ profile.name=name; profile.color=color; profile.canvasMode=canvasMode; }
     else { saved=createProfile(m,name); saved.color=color; saved.canvasMode=canvasMode; S.profiles.push(saved); }
     try {
       await saveProfileStore();
-      if (saved.mode === "console" && await applyStreamKeyChoice("pf")) return;
+      if (["console", "discord"].includes(saved.mode) && await applyStreamKeyChoice("pf")) return;
       closeModal(); await refreshAndRender(); renderProfileSelect(); toast("Profile saved","success");
     } catch(e){ $("#modal-error").textContent=e.message; }
   };

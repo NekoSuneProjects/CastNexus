@@ -5,7 +5,7 @@
   "use strict";
 
   PAGE_TITLES.admin = "Admin";
-  const SOURCE_LABELS = { console:"Console", pc:"PC / OBS", music:"24/7 Music", rerun:"Rerun" };
+  const SOURCE_LABELS = { console:"Console", discord:"Console → Discord", pc:"PC / OBS", music:"24/7 Music", rerun:"Rerun" };
   const FEATURE_ROWS = [
     ["music24", "Music 24/7 radio", "CASTNEXUS_MUSIC24"],
     ["pcStreaming", "PC / OBS streaming", "CASTNEXUS_PC_STREAMING"],

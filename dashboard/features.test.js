@@ -37,3 +37,14 @@ test("Discord Activity is Docker-only: always off in the desktop app", () => {
   assert.equal(readFeatures({ CASTNEXUS_DISCORD_ACTIVITY:"true", CASTNEXUS_INSTALL_TYPE:"docker" }).discordActivity, true);
   assert.equal(readFeatures({ CASTNEXUS_INSTALL_TYPE:"docker" }).discordActivity, false);
 });
+
+test("Discord Activity profiles follow the Discord switch, not the console switch (Docker only)", () => {
+  const docker = { CASTNEXUS_INSTALL_TYPE:"docker" };
+  const consoleOff = readFeatures({ ...docker, CASTNEXUS_CONSOLE_STREAMING:"false", CASTNEXUS_DISCORD_ACTIVITY:"true" });
+  assert.equal(_profileModeAllowed("console", consoleOff), false);
+  assert.equal(_profileModeAllowed("discord", consoleOff), true);
+  assert.equal(_sourceAllowed("discord", consoleOff), true, "console capture still routes for Discord profiles");
+  assert.equal(_sourceAllowed("console", consoleOff), false);
+  assert.equal(_profileModeAllowed("discord", readFeatures({ ...docker })), false, "off unless CASTNEXUS_DISCORD_ACTIVITY=true");
+  assert.equal(_profileModeAllowed("discord", readFeatures({ CASTNEXUS_INSTALL_TYPE:"electron", CASTNEXUS_DISCORD_ACTIVITY:"true" })), false, "never in the desktop app");
+});

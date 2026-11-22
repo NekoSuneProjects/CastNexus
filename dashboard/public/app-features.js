@@ -6,8 +6,8 @@
   "use strict";
 
   const features = window.CASTNEXUS_FEATURES || {};
-  const MODES = ["pc", "console", "music", "vod"];
-  const ENV_NAMES = { pc:"CASTNEXUS_PC_STREAMING", console:"CASTNEXUS_CONSOLE_STREAMING", music:"CASTNEXUS_MUSIC24", vod:"CASTNEXUS_VOD" };
+  const MODES = ["pc", "console", "music", "vod", "discord"];
+  const ENV_NAMES = { pc:"CASTNEXUS_PC_STREAMING", console:"CASTNEXUS_CONSOLE_STREAMING", music:"CASTNEXUS_MUSIC24", vod:"CASTNEXUS_VOD", discord:"CASTNEXUS_DISCORD_ACTIVITY" };
   const allowedModes = Array.isArray(features.profileModes) ? features.profileModes.filter(m => MODES.includes(m)) : MODES;
   const disabledModes = MODES.filter(m => !allowedModes.includes(m));
   window.castnexusModeAllowed = mode => !MODES.includes(mode) || allowedModes.includes(mode);
@@ -21,7 +21,7 @@
   if (typeof originalCreateProfile === "function") {
     window.createProfile = function(mode, name) {
       if (window.castnexusModeAllowed(mode)) return originalCreateProfile(mode, name);
-      const fallbackName = fallbackMode === "pc" ? "PC Gaming" : fallbackMode === "console" ? "Console Gaming" : fallbackMode === "vod" ? "VOD Reruns" : "24/7 Music";
+      const fallbackName = fallbackMode === "pc" ? "PC Gaming" : fallbackMode === "console" ? "Console Gaming" : fallbackMode === "vod" ? "VOD Reruns" : fallbackMode === "discord" ? "Discord Activity" : "24/7 Music";
       return originalCreateProfile(fallbackMode, fallbackName);
     };
   }
